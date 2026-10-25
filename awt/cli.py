@@ -30,7 +30,7 @@ def doctor():
     db.migrate(engine)
     with engine.connect() as conn:
         settings = service.get_settings(conn)
-    typer.echo(json.dumps({'database': str(engine.url), 'git': shutil.which('git'), 'settings': settings.model_dump()}, ensure_ascii=False, indent=2))
+    typer.echo(json.dumps({'database': str(engine.url), 'git': shutil.which('git'), 'settings': settings.model_dump(mode='json')}, ensure_ascii=False, indent=2))
 
 
 @cli.command()
@@ -64,6 +64,26 @@ def report(date: str = typer.Option(...), format: str = 'markdown'):
 def serve(port: int = 8765):
     import uvicorn
     uvicorn.run('awt.app:create_app', factory=True, host='127.0.0.1', port=port)
+
+
+@cli.command()
+def terminal(work_date: str | None = typer.Option(None,'--date'), url: str = 'http://127.0.0.1:8765', no_start: bool = typer.Option(False,'--no-start')):
+    """交互式终端版，无需浏览器；可自动启动本机后台。"""
+    from .terminal import Terminal
+    from .terminal_client import LocalApi,Backend
+    api=None
+    try:
+        if work_date:date.fromisoformat(work_date)
+        api=LocalApi(url)
+        with Backend(api,auto_start=not no_start):
+            Terminal(api,day=work_date).run()
+    except (EOFError,KeyboardInterrupt):
+        typer.echo('\n已退出终端版。')
+    except (ValueError,OSError) as exc:
+        typer.echo('终端版无法完成操作：'+str(exc),err=True)
+        raise typer.Exit(1)
+    finally:
+        if api:api.close()
 
 
 if __name__ == '__main__':

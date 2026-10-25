@@ -77,6 +77,32 @@ cd ..
 
 ## CLI
 
+### 交互式终端版
+
+Windows 双击 `start-terminal.cmd`，或运行：
+
+```powershell
+.\start-terminal.ps1 -Setup
+# 指定工作日期或端口
+.\start-terminal.ps1 -Date 2026-10-24 -Port 8765
+```
+
+终端版只安装 Python 依赖，无需 Node.js、前端构建或浏览器。复用已运行的本机服务；未运行时会启动自己的后台，退出时仅关闭它自己启动的后台，不停止原有网页服务。
+
+也可直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m awt.cli terminal --date 2026-10-24
+# 只连接现有服务，不自动启动
+.\.venv\Scripts\python.exe -m awt.cli terminal --no-start
+```
+
+菜单包含当日对话统计、日志采集、AI 业务归纳、多个人工事项、半小时工时分配、工作项编辑/删除、日报确认与 Markdown 导出、模型/来源配置、历史风格导入、企业项目/标题映射，以及 Gitee 企业工作项预览提交。API Key 和 Token 使用隐藏输入，不在输出中回显。AI 分配保持草稿，日报确认仍需用户明确核对。
+
+企业推送会逐项展示目标项目、类型、描述和预估工时，并在最后要求明确确认；取消不会发出创建请求。终端版不向任何 Gitee 代码仓库执行 Git 提交或推送。
+
+### 命令行子命令
+
 激活虚拟环境后使用 `awt`，或将其替换为 `.venv\Scripts\python.exe -m awt.cli`：
 
 ```text
