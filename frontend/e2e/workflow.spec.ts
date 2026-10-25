@@ -492,3 +492,29 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
       .total_minutes,
   ).toBe(210);
 });
+
+test("enterprise navigation remains visible without daily tasks and opens publishing directly", async ({
+  page,
+}) => {
+  await page.goto("/?date=2026-10-17");
+  await page.getByRole("button", { name: "企业工作项", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "推送到 Gitee 企业工作项", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "预览并推送工作项", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "读取企业列表", exact: true }),
+  ).toBeVisible();
+  await page.request.post('/api/tasks',{data:{date:'2026-10-16',title:'终端入口验证事项'}});
+  await page.getByLabel("工作日期", { exact: true }).fill("2026-10-16");
+  await page
+    .getByRole("button", { name: "预览并推送工作项", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByRole("heading", { name: "创建 Gitee 企业工作项", exact: true }),
+  ).toBeVisible();
+});

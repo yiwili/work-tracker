@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  Building2,
   Check,
   CheckCheck,
   ChevronRight,
@@ -33,6 +34,7 @@ import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal } from "./AllocationModal";
 import { GiteePublishModal } from "./GiteePublishModal";
+import { EnterpriseSettings } from "./EnterpriseSettings";
 
 const statuses: Record<string, string> = {
   requested: "待执行",
@@ -323,6 +325,7 @@ function App() {
             [
               ["daily", "每日日报", FileText],
               ["timeline", "活动时间线", Activity],
+              ["enterprise", "企业工作项", Building2],
               ["settings", "偏好设置", Settings2],
             ] as const
           ).map(([key, label, Icon]) => (
@@ -368,7 +371,9 @@ function App() {
               ? "每日日报"
               : page === "timeline"
                 ? "活动时间线"
-                : "偏好设置"}
+                : page === "enterprise"
+                  ? "企业工作项"
+                  : "偏好设置"}
           </span>
           <span className="private">
             <LockKeyhole size={13} /> 本地 SQLite 存储
@@ -382,24 +387,30 @@ function App() {
                   ? "YOUR DAY, IN FOCUS"
                   : page === "timeline"
                     ? "FOLLOW THE EVIDENCE"
-                    : "MAKE IT YOURS"}
+                    : page === "enterprise"
+                      ? "PUBLISH YOUR WORK"
+                      : "MAKE IT YOURS"}
               </div>
               <h1>
                 {page === "daily"
                   ? "每一份工作，清晰记录。"
                   : page === "timeline"
                     ? "串起今天的工作脉络。"
-                    : "让工具适应你的工作。"}
+                    : page === "enterprise"
+                      ? "把工作项推送到企业项目。"
+                      : "让工具适应你的工作。"}
               </h1>
               <p>
                 {page === "daily"
                   ? "从 AI 对话到线下沟通，把真实投入整理为一份可审核的日报。"
                   : page === "timeline"
                     ? "按时间查看会话、工具执行与 Git 活动，回溯任务的每一条依据。"
-                    : "配置本地数据来源、项目归属与分析方式。"}
+                    : page === "enterprise"
+                      ? "先设置企业与标题映射，再核对工作内容并推送到 Gitee 企业工作项。"
+                      : "配置本地数据来源、项目归属与分析方式。"}
               </p>
             </div>
-            {page !== "settings" && (
+            {(page === "daily" || page === "timeline") && (
               <button className="primary" disabled={!!busy} onClick={collect}>
                 {busy ? (
                   <LoaderCircle className="spin" size={17} />
@@ -580,7 +591,14 @@ function App() {
                     <p>审核工作内容，按实际投入确认工时。</p>
                   </div>
                   <div className="actions">
-                    <button className="outline" disabled={!!busy || !report.tasks.length} onClick={() => setGiteeOpen(true)}>提交到 Gitee{selected.length ? `（${selected.length}项）` : ''}</button>
+                    <button
+                      className="outline"
+                      disabled={!!busy || !report.tasks.length}
+                      onClick={() => setGiteeOpen(true)}
+                    >
+                      提交到 Gitee
+                      {selected.length ? `（${selected.length}项）` : ""}
+                    </button>
                     <button
                       className="outline"
                       disabled={
@@ -983,6 +1001,39 @@ function App() {
               </section>
             </>
           )}
+          {page === "enterprise" && settings && report && (
+            <>
+              <section className="settings-section enterprise-publish-entry">
+                <h2>
+                  <Building2 size={20} />
+                  推送到 Gitee 企业工作项
+                </h2>
+                <p>
+                  当前日期 {day}，共 {report.tasks.length}{" "}
+                  个本地工作项。可先在日报中勾选需要推送的项；没有勾选时预览当天全部工作项。
+                </p>
+                <ol>
+                  <li>配置企业版 Token，读取企业和项目。</li>
+                  <li>保存标题或项目前缀对应的项目映射。</li>
+                  <li>预览目标项目、标题和预估工时，明确确认后创建。</li>
+                </ol>
+                <button
+                  className="primary"
+                  disabled={!!busy || !report.tasks.length}
+                  onClick={() => setGiteeOpen(true)}
+                >
+                  预览并推送工作项
+                  {selected.length ? `（${selected.length}项）` : ""}
+                </button>
+                {!report.tasks.length && (
+                  <p>
+                    当天暂无工作项，请切换日期，或先到每日日报生成、添加事项。
+                  </p>
+                )}
+              </section>
+              <EnterpriseSettings settings={settings} onChange={setSettings} />
+            </>
+          )}
           {page === "settings" && settings && (
             <SettingsForm
               initial={settings}
@@ -1008,8 +1059,28 @@ function App() {
           )}
         </div>
       </main>
-      {giteeOpen && <GiteePublishModal day={day} taskIds={selected} onClose={() => setGiteeOpen(false)} onSettings={() => {setGiteeOpen(false);setPage('settings');}} onApplied={refresh} />}
-      {allocationOpen && report && <AllocationModal report={report} onClose={() => setAllocationOpen(false)} onApplied={async message => { await refresh();setNotice(message); }} />}
+      {giteeOpen && (
+        <GiteePublishModal
+          day={day}
+          taskIds={selected}
+          onClose={() => setGiteeOpen(false)}
+          onSettings={() => {
+            setGiteeOpen(false);
+            setPage("enterprise");
+          }}
+          onApplied={refresh}
+        />
+      )}
+      {allocationOpen && report && (
+        <AllocationModal
+          report={report}
+          onClose={() => setAllocationOpen(false)}
+          onApplied={async (message) => {
+            await refresh();
+            setNotice(message);
+          }}
+        />
+      )}
       {editor && (
         <TaskEditor
           editor={editor}

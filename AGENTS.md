@@ -20,3 +20,5 @@ Implementation boundaries:
 - `gitee_enterprise.py`: enterprise project discovery and user-configured title/prefix mapping; creates work items only after a saved preview and explicit confirmation. Do not create real company work items during automated verification. Persist links to skip duplicates; uncertain writes must not be automatically retried. Enterprise credentials are separate from V5 history credentials.
 
 Preserve manual entries, pinned minutes, reviewed titles, delete decisions, original logs and repositories. Network model waits must not hold a SQLite writer lock. Re-read current state before applying AI output so concurrent human edits are not overwritten. Run focused pytest cases and the affected browser workflow when changing these boundaries.
+
+Commit each feature separately using standard Conventional Commit messages (for example `feat: ...`, `fix: ...`); do not copy the user's Gitee double-tag commit naming. Before a user-authorized push, verify the destination host is GitHub. GitHub push authorization does not authorize pushes to any Gitee repository or automatic company work-item creation.
