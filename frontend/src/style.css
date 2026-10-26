@@ -227,6 +227,11 @@
 .model-status button {
   flex-shrink: 0;
 }
+.model-test-feedback {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 760px) {
   .conversation-sources {
     gap: 17px;
@@ -1222,6 +1227,12 @@ code {
 }
 .settings-form {
   max-width: 900px;
+}
+.settings-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
 }
 .settings-section {
   background: white;

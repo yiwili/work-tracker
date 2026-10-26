@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LockKeyhole, PlugZap } from "lucide-react";
+import { LockKeyhole, PlugZap, LoaderCircle } from "lucide-react";
 import type { Settings } from "./types";
 type Status = {
   configured: boolean;
@@ -33,6 +33,7 @@ export function ModelSettings({
   onKeyChange,
   busy,
   saved,
+  feedback,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
@@ -40,6 +41,11 @@ export function ModelSettings({
   onKeyChange: (s: string) => void;
   busy: boolean;
   saved: Settings;
+  feedback: {
+    state: "running" | "success" | "error";
+    message: string;
+    test?: boolean;
+  } | null;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   useEffect(() => {
@@ -182,10 +188,29 @@ export function ModelSettings({
           name="test_connection"
           className="outline"
           disabled={busy}
+          aria-busy={feedback?.state === "running" && feedback.test}
         >
-          保存并测试连接
+          {feedback?.state === "running" && feedback.test && (
+            <LoaderCircle size={16} className="spin" />
+          )}
+          {feedback?.state === "running" && feedback.test
+            ? "正在保存与测试…"
+            : "保存并测试连接"}
         </button>
       </div>
+      {feedback && (
+        <div
+          className={
+            "alert model-test-feedback" +
+            (feedback.state === "error" ? " error" : "")
+          }
+          role={feedback.state === "error" ? "alert" : "status"}
+          aria-label="模型连接反馈"
+          aria-live={feedback.state === "error" ? "assertive" : "polite"}
+        >
+          {feedback.message}
+        </div>
+      )}
       <p className="muted">
         测试只发送简短探测消息，不发送工作对话。正式分析会发送所选日期脱敏后的用户消息、AI
         回复和工具类型/验证状态；不发送原始工具输出、原始路径引用、环境变量或密钥。

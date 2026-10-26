@@ -94,7 +94,9 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
   ).toBeChecked();
   await page.getByRole("button", { name: "保存设置" }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "设置已保存" }),
+    page
+      .getByRole("status", { name: "模型连接反馈" })
+      .filter({ hasText: "设置已保存" }),
   ).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -150,7 +152,9 @@ test("provider presets, encrypted key input, test connection and CCSwitch option
     .fill("ui-test-key-for-storage");
   await page.getByRole("button", { name: "保存并测试连接" }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "真实模型连接测试成功" }),
+    page
+      .getByRole("status", { name: "模型连接反馈" })
+      .filter({ hasText: "真实模型连接测试成功" }),
   ).toBeVisible();
   await expect(page.getByLabel("API Key（留空保留已保存的密钥）")).toHaveValue(
     "",
@@ -167,6 +171,106 @@ test("provider presets, encrypted key input, test connection and CCSwitch option
     0,
   );
 });
+
+test("connection feedback stays beside button during failure and successful retry", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByLabel("AI 分析供应商").selectOption("deepseek");
+  await page
+    .getByLabel("API Key（留空保留已保存的密钥）")
+    .fill("inline-test-fixture-key");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requests = 0;
+  await page.route("**/api/model/test", async (route) => {
+    requests++;
+    if (requests === 1) {
+      await gate;
+      await route.fulfill({
+        status: 503,
+        json: { detail: "模型接口暂时不可用，请稍后重试" },
+      });
+    } else {
+      await route.fulfill({ json: { ok: true, message: "连接成功" } });
+    }
+  });
+  await page.getByRole("button", { name: "保存并测试连接" }).click();
+  const progress = page.getByRole("status", { name: "模型连接反馈" });
+  await expect(progress).toContainText("正在保存并测试模型连接");
+  await expect(progress).toBeInViewport();
+  await expect(
+    page.getByRole("button", { name: "正在保存与测试…" }),
+  ).toBeDisabled();
+  await expect(page.getByLabel("完整 API 接口 URL")).toBeDisabled();
+  release();
+  const failure = page.getByRole("alert", { name: "模型连接反馈" });
+  await expect(failure).toContainText(
+    "设置已保存，连接测试失败：模型接口暂时不可用",
+  );
+  await expect(failure).toBeInViewport();
+  await expect(page.getByLabel("API Key（留空保留已保存的密钥）")).toHaveValue(
+    "",
+  );
+  await page.getByRole("button", { name: "保存并测试连接" }).click();
+  await expect(progress).toContainText("真实模型连接测试成功");
+  expect(requests).toBe(2);
+});
+
+test("settings save failure shows local reason and does not test the unsaved connection", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByLabel("AI 分析供应商").selectOption("deepseek");
+  const key = page.getByLabel("API Key（留空保留已保存的密钥）");
+  await key.fill("unsaved-fixture-key");
+  let tested = false;
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "PUT")
+      await route.fulfill({
+        status: 400,
+        json: { detail: "设置保存遇到错误" },
+      });
+    else await route.continue();
+  });
+  await page.route("**/api/model/test", async (route) => {
+    tested = true;
+    await route.abort();
+  });
+  await page.getByRole("button", { name: "保存并测试连接" }).click();
+  await expect(page.getByRole("alert", { name: "模型连接反馈" })).toContainText(
+    "设置保存未完成，尚未测试连接：设置保存遇到错误",
+  );
+  await expect(key).toHaveValue("unsaved-fixture-key");
+  expect(tested).toBe(false);
+});
+
+for (const invalid of ["url", "mapping"] as const) {
+  test(`invalid ${invalid} settings explain why connection testing did not start`, async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "偏好设置" }).click();
+    await page.getByLabel("AI 分析供应商").selectOption("deepseek");
+    if (invalid === "url")
+      await page.getByLabel("完整 API 接口 URL").fill("invalid-url");
+    else await page.getByLabel("目录到项目名称映射（JSON）").fill("[]");
+    let writes = 0;
+    page.on("request", (request) => {
+      if (request.method() !== "GET") writes++;
+    });
+    await page.getByRole("button", { name: "保存并测试连接" }).click();
+    const feedback = page.getByRole("alert", { name: "模型连接反馈" });
+    await expect(feedback).toContainText(
+      invalid === "url" ? "无效字段" : "项目映射需为路径到名称",
+    );
+    expect(writes).toBe(0);
+  });
+}
 
 test("AI time allocation preserves pinned communication and remains a draft", async ({
   page,
@@ -225,7 +329,7 @@ test("AI time allocation preserves pinned communication and remains a draft", as
     .fill("标题按业务功能概括，技术原因放入详情");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "设置已保存" }),
+    page.getByRole("status", { name: "模型连接反馈" }).filter({ hasText: "设置已保存" }),
   ).toBeVisible();
 });
 
@@ -507,7 +611,9 @@ test("enterprise navigation remains visible without daily tasks and opens publis
   await expect(
     page.getByRole("button", { name: "读取企业列表", exact: true }),
   ).toBeVisible();
-  await page.request.post('/api/tasks',{data:{date:'2026-10-16',title:'终端入口验证事项'}});
+  await page.request.post("/api/tasks", {
+    data: { date: "2026-10-16", title: "终端入口验证事项" },
+  });
   await page.getByLabel("工作日期", { exact: true }).fill("2026-10-16");
   await page
     .getByRole("button", { name: "预览并推送工作项", exact: true })

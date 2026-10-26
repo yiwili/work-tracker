@@ -1041,20 +1041,51 @@ function App() {
               onImported={() => {
                 void refresh();
               }}
-              onSave={(s, apiKey, test) =>
-                run("正在保存设置", async () => {
+              onSave={async (s, apiKey, test) => {
+                setBusy(test ? "正在保存并测试模型连接" : "正在保存设置");
+                setError("");
+                setNotice("");
+                let saved = false;
+                try {
                   await api("/settings", "PUT", s);
                   if (apiKey.trim())
                     await api("/model/key", "POST", { api_key: apiKey.trim() });
-                  if (test) await api("/model/test", "POST", {});
-                  await refresh();
-                  setNotice(
-                    test
-                      ? "设置已保存，真实模型连接测试成功；未发送工作对话。"
-                      : "设置已保存。排除规则影响后续采集和分析，已有本地记录仍保留。",
-                  );
-                })
-              }
+                  saved = true;
+                  if (test) {
+                    setBusy("正在测试模型连接");
+                    const result = await api<{ ok: boolean; message?: string }>(
+                      "/model/test",
+                      "POST",
+                      {},
+                    );
+                    if (!result.ok)
+                      throw new Error(
+                        result.message || "模型未返回连接成功结果",
+                      );
+                  }
+                  let message = test
+                    ? "设置已保存，真实模型连接测试成功；未发送工作对话。"
+                    : "设置已保存。排除规则影响后续采集和分析，已有本地记录仍保留。";
+                  try {
+                    await refresh();
+                  } catch {
+                    message += " 页面数据刷新失败，请刷新页面查看已保存设置。";
+                  }
+                  setNotice(message);
+                  return { ok: true, saved: true, message };
+                } catch (e) {
+                  const message =
+                    (test
+                      ? saved
+                        ? "设置已保存，连接测试失败："
+                        : "设置保存未完成，尚未测试连接："
+                      : "设置保存未完成：") + (e as Error).message;
+                  setError(message);
+                  return { ok: false, saved, message };
+                } finally {
+                  setBusy("");
+                }
+              }}
             />
           )}
         </div>
@@ -1423,9 +1454,18 @@ function SettingsForm({
   onImported: () => void;
   initial: Settings;
   busy: boolean;
-  onSave: (s: Settings, apiKey: string, test: boolean) => Promise<boolean>;
+  onSave: (
+    s: Settings,
+    apiKey: string,
+    test: boolean,
+  ) => Promise<{ ok: boolean; saved: boolean; message: string }>;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const [feedback, setFeedback] = useState<{
+    state: "running" | "success" | "error";
+    message: string;
+    test?: boolean;
+  } | null>(null);
   const [s, setS] = useState(initial),
     [mapping, setMapping] = useState(
       JSON.stringify(initial.project_mappings, null, 2),
@@ -1439,11 +1479,28 @@ function SettingsForm({
   return (
     <form
       className="settings-form"
+      onInvalidCapture={(e) => {
+        const field = e.target as HTMLInputElement;
+        setFeedback({
+          state: "error",
+          message:
+            "尚未保存或测试，请检查设置中的无效字段：" +
+            field.validationMessage,
+        });
+      }}
       onSubmit={async (e) => {
         e.preventDefault();
+        if (busy) return;
         const test =
           (e.nativeEvent as SubmitEvent).submitter?.getAttribute("name") ===
           "test_connection";
+        setFeedback({
+          state: "running",
+          message: test
+            ? "正在保存并测试模型连接，请稍候；本次不发送工作对话。"
+            : "正在保存设置…",
+          test,
+        });
         try {
           const m = JSON.parse(mapping);
           if (
@@ -1454,7 +1511,7 @@ function SettingsForm({
           )
             throw new Error("项目映射需为路径到名称的 JSON 对象");
           setError("");
-          const saved = await onSave(
+          const result = await onSave(
             {
               ...s,
               project_mappings: m,
@@ -1470,164 +1527,185 @@ function SettingsForm({
             apiKey,
             test,
           );
-          if (saved) setApiKey("");
+          if (result.saved) setApiKey("");
+          setFeedback({
+            state: result.ok ? "success" : "error",
+            message: result.message,
+          });
         } catch (e) {
           setError((e as Error).message);
+          setFeedback({
+            state: "error",
+            message: "尚未完成保存或测试：" + (e as Error).message,
+          });
         }
       }}
     >
-      <section className="settings-section">
-        <h2>
-          <FolderGit2 size={19} /> 本地数据来源
-        </h2>
-        <p>
-          只读扫描 JSONL
-          会话文件。路径位于运行本服务的电脑上，每行填写一个路径。
-        </p>
-        {(["claude_code", "codex"] as const).map((key) => (
-          <div className="source-setting" key={key}>
-            <label className="check-label">
-              <input
-                type="checkbox"
-                checked={s[key].enabled}
+      <fieldset disabled={busy} className="settings-fields">
+        <section className="settings-section">
+          <h2>
+            <FolderGit2 size={19} /> 本地数据来源
+          </h2>
+          <p>
+            只读扫描 JSONL
+            会话文件。路径位于运行本服务的电脑上，每行填写一个路径。
+          </p>
+          {(["claude_code", "codex"] as const).map((key) => (
+            <div className="source-setting" key={key}>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={s[key].enabled}
+                  onChange={(e) =>
+                    setS({
+                      ...s,
+                      [key]: { ...s[key], enabled: e.target.checked },
+                    })
+                  }
+                />
+                {sources[key]}
+              </label>
+              <textarea
+                aria-label={sources[key] + " 路径"}
+                rows={3}
+                value={s[key].paths.join("\n")}
                 onChange={(e) =>
                   setS({
                     ...s,
-                    [key]: { ...s[key], enabled: e.target.checked },
+                    [key]: { ...s[key], paths: e.target.value.split("\n") },
                   })
                 }
               />
-              {sources[key]}
-            </label>
+            </div>
+          ))}
+          <label>
+            Git 仓库根目录（每行一个）
             <textarea
-              aria-label={sources[key] + " 路径"}
-              rows={3}
-              value={s[key].paths.join("\n")}
+              value={s.git_roots.join("\n")}
               onChange={(e) =>
-                setS({
-                  ...s,
-                  [key]: { ...s[key], paths: e.target.value.split("\n") },
-                })
+                setS({ ...s, git_roots: e.target.value.split("\n") })
               }
             />
+          </label>
+          <label>
+            目录到项目名称映射（JSON）
+            <textarea
+              rows={4}
+              value={mapping}
+              onChange={(e) => setMapping(e.target.value)}
+            />
+          </label>
+        </section>
+        <section className="settings-section">
+          <h2>
+            <Clock3 size={19} /> 工时与日期
+          </h2>
+          <div className="form-grid">
+            <label>
+              展示时区
+              <input
+                value={s.timezone}
+                onChange={(e) => setS({ ...s, timezone: e.target.value })}
+              />
+            </label>
+            <label>
+              每日目标（分钟）
+              <input
+                required
+                min="1"
+                max="1440"
+                type="number"
+                value={s.target_minutes}
+                onChange={(e) =>
+                  setS({ ...s, target_minutes: Number(e.target.value) })
+                }
+              />
+            </label>
+            <label>
+              增减步长（分钟）
+              <input
+                required
+                min="1"
+                max="120"
+                type="number"
+                value={s.step_minutes}
+                onChange={(e) =>
+                  setS({ ...s, step_minutes: Number(e.target.value) })
+                }
+              />
+            </label>
           </div>
-        ))}
-        <label>
-          Git 仓库根目录（每行一个）
-          <textarea
-            value={s.git_roots.join("\n")}
-            onChange={(e) =>
-              setS({ ...s, git_roots: e.target.value.split("\n") })
-            }
-          />
-        </label>
-        <label>
-          目录到项目名称映射（JSON）
-          <textarea
-            rows={4}
-            value={mapping}
-            onChange={(e) => setMapping(e.target.value)}
-          />
-        </label>
-      </section>
-      <section className="settings-section">
-        <h2>
-          <Clock3 size={19} /> 工时与日期
-        </h2>
-        <div className="form-grid">
-          <label>
-            展示时区
-            <input
-              value={s.timezone}
-              onChange={(e) => setS({ ...s, timezone: e.target.value })}
-            />
-          </label>
-          <label>
-            每日目标（分钟）
-            <input
-              required
-              min="1"
-              max="1440"
-              type="number"
-              value={s.target_minutes}
-              onChange={(e) =>
-                setS({ ...s, target_minutes: Number(e.target.value) })
-              }
-            />
-          </label>
-          <label>
-            增减步长（分钟）
-            <input
-              required
-              min="1"
-              max="120"
-              type="number"
-              value={s.step_minutes}
-              onChange={(e) =>
-                setS({ ...s, step_minutes: Number(e.target.value) })
-              }
-            />
-          </label>
-        </div>
-        <p>
-          默认目标为 480
-          分钟（8h）；修改目标或时区会撤销已有日报确认，需重新审核。
-        </p>
-      </section>
-      <section className="settings-section">
-        <h2>
-          <ShieldCheck size={19} /> 隐私与可选模型
-        </h2>
-        <label>
-          排除的敏感目录（每行一个）
-          <textarea
-            value={s.excluded_paths.join("\n")}
-            onChange={(e) =>
-              setS({ ...s, excluded_paths: e.target.value.split("\n") })
-            }
-          />
-        </label>
-        <label>
-          附加脱敏正则（每行一条）
-          <textarea
-            value={s.redact_patterns.join("\n")}
-            onChange={(e) =>
-              setS({ ...s, redact_patterns: e.target.value.split("\n") })
-            }
-          />
-        </label>
-        <div className="privacy-info">
-          <LockKeyhole size={19} />
           <p>
-            本地先统计每日会话和消息。开启 AI
-            后，按实际工作目标归纳全天对话，追问、修改、测试合并处理，不自动凑满工时。
+            默认目标为 480
+            分钟（8h）；修改目标或时区会撤销已有日报确认，需重新审核。
           </p>
-        </div>
-        <label className="check-label">
-          <input
-            type="checkbox"
-            checked={s.llm_enabled}
-            onChange={(e) => setS({ ...s, llm_enabled: e.target.checked })}
+        </section>
+        <section className="settings-section">
+          <h2>
+            <ShieldCheck size={19} /> 隐私与可选模型
+          </h2>
+          <label>
+            排除的敏感目录（每行一个）
+            <textarea
+              value={s.excluded_paths.join("\n")}
+              onChange={(e) =>
+                setS({ ...s, excluded_paths: e.target.value.split("\n") })
+              }
+            />
+          </label>
+          <label>
+            附加脱敏正则（每行一条）
+            <textarea
+              value={s.redact_patterns.join("\n")}
+              onChange={(e) =>
+                setS({ ...s, redact_patterns: e.target.value.split("\n") })
+              }
+            />
+          </label>
+          <div className="privacy-info">
+            <LockKeyhole size={19} />
+            <p>
+              本地先统计每日会话和消息。开启 AI
+              后，按实际工作目标归纳全天对话，追问、修改、测试合并处理，不自动凑满工时。
+            </p>
+          </div>
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={s.llm_enabled}
+              onChange={(e) => setS({ ...s, llm_enabled: e.target.checked })}
+            />
+            我了解发送范围，显式开启模型分析
+          </label>
+          <ModelSettings
+            settings={s}
+            onChange={(next) => {
+              setS(next);
+              setFeedback(null);
+            }}
+            apiKey={apiKey}
+            onKeyChange={(value) => {
+              setApiKey(value);
+              setFeedback(null);
+            }}
+            busy={busy}
+            saved={initial}
+            feedback={feedback}
           />
-          我了解发送范围，显式开启模型分析
-        </label>
-        <ModelSettings
+        </section>
+        <WorkflowSettings
           settings={s}
           onChange={setS}
-          apiKey={apiKey}
-          onKeyChange={setApiKey}
-          busy={busy}
-          saved={initial}
+          onImported={onImported}
         />
-      </section>
-      <WorkflowSettings settings={s} onChange={setS} onImported={onImported} />
-      {error && <div className="alert error">{error}</div>}
-      <div className="settings-actions">
-        <button className="primary" disabled={busy} type="submit">
-          <Check size={16} />
-          保存设置
-        </button>
-      </div>
+        {error && <div className="alert error">{error}</div>}
+        <div className="settings-actions">
+          <button className="primary" disabled={busy} type="submit">
+            <Check size={16} />
+            保存设置
+          </button>
+        </div>
+      </fieldset>
     </form>
   );
 }
