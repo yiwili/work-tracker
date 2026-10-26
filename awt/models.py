@@ -80,7 +80,7 @@ class Settings(BaseModel):
     llm_endpoint: str = "https://api.openai.com/v1/chat/completions"
     llm_model: str = ""
     llm_key_env: str = "AWT_LLM_API_KEY"
-    llm_provider: Literal['deepseek', 'glm', 'ccswitch', 'custom'] = 'custom'
+    llm_provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
     llm_protocol: Literal['openai', 'anthropic'] = 'openai'
     ccswitch_config_path: str = ''
     analysis_sources: list[Literal['codex', 'claude_code', 'git']] = Field(default_factory=lambda: ['codex'])

@@ -10,7 +10,7 @@ def filter_work(records, refs, segments, settings):
     if not roots:
         return [],{}, {'work_refs':[],'excluded':[],'uncertain_refs':[],'work_event_ids':[]},0
     chunks,current,size=[],[],0
-    limit=120000 if settings.llm_provider in ('deepseek','glm','ccswitch') else 65000
+    limit=120000 if settings.llm_provider in ('deepseek','glm','glm-coding','ccswitch') else 65000
     for record in records:
         length=len(json.dumps(record,ensure_ascii=False))
         if current and size+length>limit:

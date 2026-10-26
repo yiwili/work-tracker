@@ -88,7 +88,7 @@ export type Settings = {
   llm_endpoint: string;
   llm_model: string;
   llm_key_env: string;
-  llm_provider: "deepseek" | "glm" | "ccswitch" | "custom";
+  llm_provider: "deepseek" | "glm" | "glm-coding" | "ccswitch" | "custom";
   llm_protocol: "openai" | "anthropic";
   ccswitch_config_path: string;
   analysis_sources: string[];

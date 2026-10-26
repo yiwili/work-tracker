@@ -12,16 +12,65 @@ from . import db
 from .collectors import stable
 from .models import Settings
 
+GLM_MODELS = [
+    {'id': 'glm-5.3-flash', 'label': 'GLM-5.3-Flash'},
+    {'id': 'glm-5.3-flashx', 'label': 'GLM-5.3-FlashX'},
+    {'id': 'glm-5.3', 'label': 'GLM-5.3'},
+    {'id': 'glm-5.2', 'label': 'GLM-5.2'},
+    {'id': 'glm-5.1', 'label': 'GLM-5.1'},
+    {'id': 'glm-5', 'label': 'GLM-5'},
+    {'id': 'glm-5-turbo', 'label': 'GLM-5-Turbo'},
+    {'id': 'glm-4.7', 'label': 'GLM-4.7'},
+    {'id': 'glm-4.6', 'label': 'GLM-4.6'},
+    {'id': 'glm-4.5', 'label': 'GLM-4.5'},
+    {'id': 'glm-4.5-air', 'label': 'GLM-4.5-Air'},
+    {'id': 'glm-4.5-flash', 'label': 'GLM-4.5-Flash（免费）'},
+]
+
 PRESETS = {
-    'deepseek': {'label': 'DeepSeek', 'endpoint': 'https://api.deepseek.com/chat/completions', 'model': 'deepseek-flash', 'protocol': 'openai'},
-    'glm': {'label': '智谱 GLM', 'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions', 'model': 'glm-5.3', 'protocol': 'openai'},
-    'ccswitch': {'label': 'CCSwitch / Claude Code 当前接口', 'endpoint': '', 'model': '', 'protocol': 'anthropic'},
-    'custom': {'label': '自定义兼容接口', 'endpoint': '', 'model': '', 'protocol': 'openai'},
+    'deepseek': {
+        'label': 'DeepSeek',
+        'endpoint': 'https://api.deepseek.com/chat/completions',
+        'model': 'deepseek-chat',
+        'protocol': 'openai',
+        'models': [
+            {'id': 'deepseek-chat', 'label': 'DeepSeek Chat'},
+            {'id': 'deepseek-reasoner', 'label': 'DeepSeek Reasoner'},
+        ],
+    },
+    'glm': {
+        'label': '智谱 GLM（标准 API）',
+        'endpoint': 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+        'model': 'glm-5.3-flash',
+        'protocol': 'openai',
+        'models': GLM_MODELS,
+    },
+    'glm-coding': {
+        'label': '智谱 GLM Coding Plan',
+        'endpoint': 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions',
+        'model': 'glm-5.3-flash',
+        'protocol': 'openai',
+        'models': [item for item in GLM_MODELS if item['id'] != 'glm-4.5-flash'],
+    },
+    'ccswitch': {'label': 'CCSwitch / Claude Code 当前接口', 'endpoint': '', 'model': '', 'protocol': 'anthropic', 'models': []},
+    'custom': {'label': '自定义兼容接口', 'endpoint': '', 'model': '', 'protocol': 'openai', 'models': []},
 }
 
 
 class ModelError(ValueError):
     pass
+
+
+def official_model(provider, model):
+    for item in PRESETS.get(provider, {}).get('models', []):
+        if model.strip().lower() == item['id'].lower():
+            return item['id']
+    return model.strip()
+
+
+def normalize(settings):
+    settings.llm_model = official_model(settings.llm_provider, settings.llm_model)
+    return settings
 
 
 def _crypt(data: bytes, decrypt=False):
@@ -122,9 +171,10 @@ def connection(settings):
     key = _saved_key(settings) or os.environ.get(settings.llm_key_env, '')
     if not key:
         raise ModelError('请先保存 API Key，或配置对应的服务端环境变量')
-    if not settings.llm_model.strip():
+    model = official_model(settings.llm_provider, settings.llm_model)
+    if not model:
         raise ModelError('请填写模型名称')
-    return {'endpoint': settings.llm_endpoint, 'model': settings.llm_model.strip(), 'key': key, 'protocol': settings.llm_protocol, 'auth': 'api_key'}
+    return {'endpoint': settings.llm_endpoint, 'model': model, 'key': key, 'protocol': settings.llm_protocol, 'auth': 'api_key'}
 
 
 def status(settings):
@@ -135,7 +185,22 @@ def status(settings):
         return {'configured': False, 'provider': settings.llm_provider, 'endpoint': settings.llm_endpoint if settings.llm_provider != 'ccswitch' else '', 'model': settings.llm_model, 'error': str(exc)}
 
 
-def complete(settings, system, text, *, max_tokens=12000):
+def _provider_message(response):
+    try:
+        value = response.json()
+    except ValueError:
+        return ''
+    error = value.get('error') if isinstance(value, dict) else None
+    if isinstance(error, dict):
+        text = error.get('message') or error.get('msg') or ''
+    elif isinstance(error, str):
+        text = error
+    else:
+        text = ''
+    return str(text).strip()[:200]
+
+
+def complete(settings, system, text, *, max_tokens=12000, require_text=True):
     c = connection(settings)
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
@@ -152,28 +217,29 @@ def complete(settings, system, text, *, max_tokens=12000):
             result.raise_for_status()
             value = result.json()
         if c['protocol'] == 'anthropic':
-            if value.get('stop_reason') == 'max_tokens':
+            if require_text and value.get('stop_reason') == 'max_tokens':
                 raise ModelError('模型输出被截断；原任务已保留，请调整模型后重试')
             text = '\n'.join(block['text'] for block in value.get('content', []) if block.get('type') == 'text')
         else:
-            if value['choices'][0].get('finish_reason') == 'length':
+            if require_text and value['choices'][0].get('finish_reason') == 'length':
                 raise ModelError('模型输出被截断；原任务已保留，请调整模型后重试')
-            text = value['choices'][0]['message']['content']
-        if not isinstance(text, str) or not text.strip():
+            text = value['choices'][0]['message'].get('content') or ''
+        if require_text and (not isinstance(text, str) or not text.strip()):
             raise ModelError('模型未返回可用文本；原任务已保留')
         return text
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         descriptions = {401:'密钥无效或已过期',403:'供应商拒绝访问或该套餐不支持此接口',404:'接口地址或模型名称不存在',429:'请求限流或额度不足'}
-        raise ModelError(f"模型请求失败（HTTP {code}）：{descriptions.get(code, '请检查供应商服务状态')}；原任务已保留") from None
+        detail = (_provider_message(exc.response) or descriptions.get(code, '请检查供应商服务状态')).rstrip('。.；; ')
+        raise ModelError(f'模型请求失败（HTTP {code}）：{detail}；原任务已保留') from None
     except httpx.HTTPError:
         raise ModelError('模型连接超时或网络不可用；原任务已保留，可稍后重试') from None
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
         if isinstance(exc, ModelError):
             raise
         raise ModelError('模型响应格式不兼容；原任务已保留') from None
 
 
 def test_connection(settings):
-    complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=64)
+    complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=128, require_text=False)
     return {**status(settings), 'ok': True, 'message': '已完成真实模型请求，连接成功；未发送工作对话。'}
