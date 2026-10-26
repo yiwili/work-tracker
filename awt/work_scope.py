@@ -24,7 +24,7 @@ def filter_work(records, refs, segments, settings):
     for chunk in chunks:
         required={r['ref'] for r in chunk if r['ref'] in roots}
         if not required:continue
-        text=model_provider.complete(settings,prompts.prompt(settings,'scope_filter'),json.dumps({'required_refs':sorted(required),'conversations':chunk},ensure_ascii=False),max_tokens=6000)
+        text=model_provider.complete(settings,prompts.prompt(settings,'scope_filter'),json.dumps({'required_refs':sorted(required),'conversations':chunk},ensure_ascii=False),max_tokens=6000,purpose='scope_filter')
         requests+=1
         try:
             data=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',text.strip()))

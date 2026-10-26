@@ -155,19 +155,19 @@ def infer_day(records, refs, settings, reviewed, day):
     system=prompts.prompt(settings,'task_writer')
     common = {'date': str(day), 'timezone': settings.timezone, 'reviewed': reviewed, 'style_examples':settings.title_examples}
     if len(chunks) == 1:
-        text = model_provider.complete(settings, system, json.dumps({**common, 'conversations': chunks[0]}, ensure_ascii=False))
+        text = model_provider.complete(settings, system, json.dumps({**common, 'conversations': chunks[0]}, ensure_ascii=False),purpose='task_writer')
         return parse_result(text, refs), 1
     if len(chunks) > 30:
         raise model_provider.ModelError('当天记录过多，请缩小对话来源或排除无关目录；未发送不完整的全天分析')
     partials = []
     for i, chunk in enumerate(chunks):
-        text = model_provider.complete(settings, system + '\n这是全天连续片段，保留工作目标与refs，最后还会统一合并。', json.dumps({**common, 'part': i+1, 'parts': len(chunks), 'conversations': chunk}, ensure_ascii=False))
+        text = model_provider.complete(settings, system + '\n这是全天连续片段，保留工作目标与refs，最后还会统一合并。', json.dumps({**common, 'part': i+1, 'parts': len(chunks), 'conversations': chunk}, ensure_ascii=False),purpose='task_writer')
         chunk_refs = {r['ref']: refs[r['ref']] for r in chunk}
         for record in chunk:
             for activity in record.get('activities', []):
                 chunk_refs.update({ref: refs[ref] for ref in activity['refs']})
         partials.append(parse_result(text, chunk_refs))
-    text = model_provider.complete(settings, system + '\n请将这些连续片段的候选任务按全天实际目标再次合并去重，尤其合并同一目标的跨片段追问。refs只能使用片段已有引用。', json.dumps({**common, 'daily_parts': partials}, ensure_ascii=False))
+    text = model_provider.complete(settings, system + '\n请将这些连续片段的候选任务按全天实际目标再次合并去重，尤其合并同一目标的跨片段追问。refs只能使用片段已有引用。', json.dumps({**common, 'daily_parts': partials}, ensure_ascii=False),purpose='task_writer')
     return parse_result(text, refs), len(chunks)+1
 
 

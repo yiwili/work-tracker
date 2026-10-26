@@ -287,6 +287,9 @@ def create_app(engine=None):
                 result = service.analyze(conn, date)
                 conn.commit()
                 return result
+        except model_provider.ModelError as exc:
+            logging.getLogger('awt.analysis').warning('全天分析失败 date=%s reason=%s',date,str(exc))
+            raise
         finally:
             lock.release()
 

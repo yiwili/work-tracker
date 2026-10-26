@@ -2,6 +2,7 @@
 import base64
 import ctypes
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -22,6 +23,67 @@ PRESETS = {
 
 class ModelError(ValueError):
     pass
+
+
+def daily_reasoning_model(model, purpose):
+    name=model.lower().rsplit('/',1)[-1]
+    return purpose in ('scope_filter','task_writer') and bool(re.match(r'^glm-5\.3(?:$|[-\[])',name))
+
+
+def output_budget(model, requested, purpose):
+    # GLM-5.3 always reasons; its thinking and final JSON share max_tokens.
+    # Only daily analysis reserves more room. Connection probes stay tiny,
+    # other providers retain their caller's cap, and we never retry a paid call.
+    if daily_reasoning_model(model,purpose):
+        return max(requested,32768)
+    return requested
+
+
+def truncated(purpose, budget):
+    stage={'scope_filter':'工作相关性筛选','task_writer':'工作项归并'}.get(purpose,'模型')
+    logging.getLogger('awt.model').warning('模型输出被截断 stage=%s max_tokens=%d',purpose or 'general',budget)
+    return ModelError(f'{stage}输出被截断（本次输出预算{budget} tokens，包含模型思考）；原任务已保留。可减少单次分析范围后重新分析，不会自动重复请求。')
+
+
+def stream_text(lines, protocol, purpose, budget):
+    """Read complete SSE messages; discard thinking and reject partial streams."""
+    parts=[];data=[];reason=None;done=False
+    def events():
+        for line in lines:
+            if not line:
+                if data:yield '\n'.join(data);data.clear()
+            elif line.startswith('data:'):
+                data.append(line[5:].lstrip())
+        if data:yield '\n'.join(data)
+    try:
+        for payload in events():
+            if payload=='[DONE]':done=True;continue
+            value=json.loads(payload)
+            if value.get('type')=='error' or 'error' in value:
+                raise ModelError('模型流式响应发生错误；原任务已保留，不会自动重复请求')
+            if protocol=='anthropic':
+                kind=value.get('type')
+                if kind=='content_block_start' and value.get('content_block',{}).get('type')=='text':
+                    parts.append(value['content_block'].get('text',''))
+                elif kind=='content_block_delta' and value.get('delta',{}).get('type')=='text_delta':
+                    parts.append(value['delta']['text'])
+                elif kind=='message_delta':reason=value.get('delta',{}).get('stop_reason',reason)
+                elif kind=='message_stop':done=True
+                if reason=='max_tokens':raise truncated(purpose,budget)
+            else:
+                for choice in value.get('choices',[]):
+                    content=choice.get('delta',{}).get('content')
+                    if content is not None:parts.append(content)
+                    if choice.get('finish_reason') is not None:reason=choice['finish_reason']
+                    if reason=='length':raise truncated(purpose,budget)
+        if not done or reason not in ('end_turn','stop_sequence','stop'):
+            raise ModelError('模型流式输出未完整结束；原任务已保留，请稍后重新分析')
+        text=''.join(parts)
+        if not text.strip():raise ModelError('模型未返回可用文本；原任务已保留')
+        return text
+    except (ValueError,KeyError,TypeError,AttributeError) as exc:
+        if isinstance(exc,ModelError):raise
+        raise ModelError('模型流式响应格式不兼容；原任务已保留') from None
 
 
 def _crypt(data: bytes, decrypt=False):
@@ -135,8 +197,9 @@ def status(settings):
         return {'configured': False, 'provider': settings.llm_provider, 'endpoint': settings.llm_endpoint if settings.llm_provider != 'ccswitch' else '', 'model': settings.llm_model, 'error': str(exc)}
 
 
-def complete(settings, system, text, *, max_tokens=12000):
+def complete(settings, system, text, *, max_tokens=12000, purpose=''):
     c = connection(settings)
+    max_tokens=output_budget(c['model'],max_tokens,purpose)
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'
@@ -145,19 +208,26 @@ def complete(settings, system, text, *, max_tokens=12000):
     else:
         headers['Authorization'] = 'Bearer ' + c['key']
         body = {'model': c['model'], 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}], 'max_tokens': max_tokens, 'stream': False}
+    if daily_reasoning_model(c['model'],purpose):
+        # GLM defaults to maximum reasoning. Classifying and summarizing logs
+        # uses its supported light effort without disabling forced thinking.
+        body['reasoning_effort']='low'
+        body['stream']=True
     # Slow reasoning providers may not emit a non-stream response for a while. No automatic paid retry.
     try:
         with httpx.Client(timeout=httpx.Timeout(300, connect=15), follow_redirects=False, trust_env=False) as client:
             result = client.post(c['endpoint'], headers=headers, json=body)
             result.raise_for_status()
+            if body['stream'] and result.headers.get('content-type','').startswith('text/event-stream'):
+                return stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
             value = result.json()
         if c['protocol'] == 'anthropic':
             if value.get('stop_reason') == 'max_tokens':
-                raise ModelError('模型输出被截断；原任务已保留，请调整模型后重试')
+                raise truncated(purpose,max_tokens)
             text = '\n'.join(block['text'] for block in value.get('content', []) if block.get('type') == 'text')
         else:
             if value['choices'][0].get('finish_reason') == 'length':
-                raise ModelError('模型输出被截断；原任务已保留，请调整模型后重试')
+                raise truncated(purpose,max_tokens)
             text = value['choices'][0]['message']['content']
         if not isinstance(text, str) or not text.strip():
             raise ModelError('模型未返回可用文本；原任务已保留')

@@ -3,6 +3,7 @@ import os
 from datetime import date
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import insert, select, update
 
@@ -223,3 +224,100 @@ def scope_model(answer):
             return json.dumps({'work_refs':payload['required_refs'],'excluded':[],'uncertain_refs':[]})
         return answer(settings,system,text,**kwargs)
     return respond
+
+
+@pytest.mark.parametrize(('model','purpose','requested','expected'),[
+    ('glm-5.3','scope_filter',6000,32768),
+    ('GLM-5.3-Flash','task_writer',12000,32768),
+    ('z-ai/glm-5.3','task_writer',65536,65536),
+    ('glm-5.3','',64,64),
+    ('glm-5.3','manual_writer',4000,4000),
+    ('glm-4.7','task_writer',12000,12000),
+    ('claude-sonnet','scope_filter',6000,6000),
+    ('glm-5.30','task_writer',12000,12000),
+])
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_models(monkeypatch,model,purpose,requested,expected,protocol):
+    captured=[]
+    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            captured.append(kw['json'])
+            value={'content':[{'type':'text','text':'OK'}],'stop_reason':'end_turn'} if protocol=='anthropic' else {'choices':[{'message':{'content':'OK'},'finish_reason':'stop'}]}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    assert model_provider.complete(Settings(),'rules','input',max_tokens=requested,purpose=purpose)=='OK'
+    assert len(captured)==1 and captured[0]['max_tokens']==expected
+    assert 'thinking' not in captured[0]  # Forced-thinking models must not be disabled.
+    if model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash') and purpose in ('scope_filter','task_writer'):
+        assert captured[0]['reasoning_effort']=='low' and captured[0]['stream']
+    else:assert 'reasoning_effort' not in captured[0] and not captured[0]['stream']
+
+
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+@pytest.mark.parametrize('stage',['scope_filter','task_writer'])
+def test_truncation_reports_stage_keeps_original_tasks_and_does_not_retry(app_client,monkeypatch,caplog,protocol,stage):
+    client,engine=app_client;add_events(engine,1)
+    manual=client.post('/api/tasks',json={'date':'2026-10-24','title':'人工沟通','confirmed_minutes':60}).json()['id']
+    draft=client.post('/api/tasks',json={'date':'2026-10-24','title':'原有待审核草稿'}).json()['id']
+    with engine.begin() as conn:conn.execute(update(db.tasks).where(db.tasks.c.id==draft).values(origin='auto',edited=False))
+    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'never-log-this-secret'})
+    captured=[]
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            body=kw['json'];captured.append(body)
+            data=json.loads(body['messages'][-1]['content'])
+            current='scope_filter' if 'required_refs' in data else 'task_writer'
+            text=json.dumps({'work_refs':['e1'],'learning_groups':[],'excluded':[],'uncertain_refs':[]}) if current=='scope_filter' else result()
+            stop=current==stage
+            value={'content':[{'type':'text','text':text}],'stop_reason':'max_tokens' if stop else 'end_turn'} if protocol=='anthropic' else {'choices':[{'message':{'content':text},'finish_reason':'length' if stop else 'stop'}]}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    response=client.post('/api/analyze?date=2026-10-24',json={})
+    assert response.status_code==400 and '输出被截断' in response.json()['detail']
+    assert ('工作相关性筛选' if stage=='scope_filter' else '工作项归并') in response.json()['detail']
+    assert '32768' in response.json()['detail']
+    assert len(captured)==(1 if stage=='scope_filter' else 2)
+    tasks=client.get('/api/tasks?date=2026-10-24').json()
+    assert {t['id'] for t in tasks}=={manual,draft} and sum(t['confirmed_minutes'] for t in tasks)==60
+    assert not client.get('/api/conversations?date=2026-10-24').json()['running']
+    assert '2026-10-24' in caplog.text and 'max_tokens=32768' in caplog.text
+    assert 'never-log-this-secret' not in caplog.text
+
+
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+@pytest.mark.parametrize('mode',['complete','truncated','incomplete','error'])
+def test_daily_stream_requires_complete_end_discards_thinking_and_never_retries(monkeypatch,protocol,mode):
+    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    if protocol=='anthropic':
+        events=[{'type':'message_start','message':{}},
+                {'type':'content_block_start','content_block':{'type':'thinking','thinking':'private reasoning'}},
+                {'type':'content_block_delta','delta':{'type':'thinking_delta','thinking':'must not become task text'}},
+                {'type':'content_block_start','content_block':{'type':'text','text':''}},
+                {'type':'content_block_delta','delta':{'type':'text_delta','text':'{"tasks":[]}'}}]
+        if mode!='incomplete':events.extend([{'type':'message_delta','delta':{'stop_reason':'max_tokens' if mode=='truncated' else 'end_turn'}},{'type':'message_stop'}])
+        if mode=='error':events.insert(-1,{'type':'error','error':{'message':'must not echo upstream body'}})
+    else:
+        events=[{'choices':[{'delta':{'reasoning_content':'private reasoning'},'finish_reason':None}]},
+                {'choices':[{'delta':{'content':'{"tasks":[]}'},'finish_reason':None}]}]
+        if mode!='incomplete':events.append({'choices':[{'delta':{},'finish_reason':'length' if mode=='truncated' else 'stop'}]})
+        if mode=='error':events.append({'error':{'message':'must not echo upstream body'}})
+    body=': keepalive\n\n'+''.join('data: '+json.dumps(e)+'\n\n' for e in events)
+    if protocol=='openai' and mode!='incomplete':body+='data: [DONE]\n\n'
+    sent=[]
+    def respond(req):
+        sent.append(json.loads(req.content))
+        return httpx.Response(200,text=body,headers={'content-type':'text/event-stream; charset=utf-8'})
+    base_client=httpx.Client
+    monkeypatch.setattr(model_provider.httpx,'Client',lambda **kw:base_client(transport=httpx.MockTransport(respond),**kw))
+    if mode=='complete':assert model_provider.complete(Settings(),'rules','input',purpose='task_writer')=='{"tasks":[]}'
+    else:
+        with pytest.raises(model_provider.ModelError) as exc:model_provider.complete(Settings(),'rules','input',purpose='task_writer')
+        assert '原任务已保留' in str(exc.value) and 'must not echo' not in str(exc.value)
+    assert len(sent)==1 and sent[0]['stream'] and sent[0]['max_tokens']==32768
