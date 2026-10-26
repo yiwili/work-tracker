@@ -13,7 +13,7 @@ from .git_tools import excluded
 from .privacy import redact
 
 from . import activity_time, prompts
-from .work_scope import filter_work
+from .work_scope import filter_work, POLICY_VERSION
 
 
 def day_rows(conn, day, settings):
@@ -66,7 +66,7 @@ def overview(conn, day, settings):
 
 
 def input_hash(rows, settings):
-    return stable(settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, settings.activity_gap_minutes, settings.redact_patterns, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
+    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, settings.activity_gap_minutes, settings.redact_patterns, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
 
 
 def transcript(rows, settings):
@@ -193,7 +193,7 @@ def analyze(conn, day):
     if records:
         result, requests = infer_day(records, refs, settings, reviewed, day)
     else:
-        result, requests = {'summary':'当天没有可自动计入的工作相关对话；私人及无关内容已排除。','tasks':[]},0
+        result, requests = {'summary':'当天没有可自动计入的实际工作；私人、无关及不足时长的知识梳理已排除。','tasks':[]},0
     requests+=filter_requests
     # Model latency must never hold the database's writer lock. Re-read human edits atomically
     # after inference, and refuse stale input if collection/source selection changed meanwhile.
