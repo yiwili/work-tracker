@@ -130,6 +130,29 @@ def test_terminal_model_key_is_hidden_and_not_printed(context,monkeypatch):
     assert secret not in output.getvalue()
 
 
+def test_terminal_custom_git_user_is_saved_without_changing_model(context):
+    before=context[0].get('/api/settings').json()
+    app,output=terminal(context,Script(['Git用户','统一自定义','提交用户','person@example.invalid']))
+    app.settings()
+    saved=context[0].get('/api/settings').json()
+    assert saved['git_author']=={'name':'提交用户','email':'person@example.invalid'}
+    assert saved['llm_model']==before['llm_model'] and 'Git用户已保存' in output.getvalue()
+
+
+def test_terminal_selects_author_for_one_repository(context):
+    app,_=terminal(context,Script(['Git用户','按仓库','1','2']))
+    original=app.post
+    def post(path,body):
+        if path=='/git/identities':return [{'root':'D:/fixture-repo','project':'fixture','override_key':None,
+            'detected':{'name':'Wrong','email':'wrong@example.invalid'},'selected':{'name':'Wrong','email':'wrong@example.invalid'},
+            'authors':[{'name':'Chosen','email':'chosen@example.invalid'}]}]
+        return original(path,body)
+    app.post=post;app.settings()
+    saved=context[0].get('/api/settings').json()
+    assert saved['git_author'] is None
+    assert saved['git_author_overrides']=={'D:/fixture-repo':{'name':'Chosen','email':'chosen@example.invalid'}}
+
+
 def test_terminal_menu_catches_validation_error_and_can_exit(context):
     app,output=terminal(context,Script(['12','bad-date','0']))
     app.run()

@@ -35,6 +35,7 @@ import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal } from "./AllocationModal";
 import { GiteePublishModal } from "./GiteePublishModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
+import { GitSettings } from "./GitSettings";
 
 const statuses: Record<string, string> = {
   requested: "待执行",
@@ -1587,6 +1588,7 @@ function SettingsForm({
               }
             />
           </label>
+          <GitSettings settings={s} onChange={setS} />
           <label>
             目录到项目名称映射（JSON）
             <textarea

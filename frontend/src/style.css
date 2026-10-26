@@ -1234,6 +1234,28 @@ code {
   margin: 0;
   min-width: 0;
 }
+.git-user-settings {
+  margin: 22px 0;
+  padding: 18px;
+  border: 1px solid #dfe7db;
+  border-radius: 6px;
+}
+.git-user-settings p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #64725d;
+}
+.git-repo-user {
+  margin-top: 18px;
+  padding-top: 15px;
+  border-top: 1px solid #dfe7db;
+}
+.git-repo-user code {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
 .settings-section {
   background: white;
   border: 1px solid #dfe7db;

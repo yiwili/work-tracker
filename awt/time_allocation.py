@@ -13,6 +13,7 @@ ALLOCATION_STEP = 30
 
 def state_hash(tasks, settings):
     return stable(ALLOCATION_STEP,settings.target_minutes,settings.step_minutes,settings.analysis_sources,
+                  settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()},
                   settings.llm_enabled,settings.llm_provider,settings.llm_model,settings.llm_endpoint,settings.llm_protocol,
                   sorted((t['id'],t['title'],t['details'],t['project'],t['category'],t['status'],t['started_at'],t['ended_at'],t['confirmed_minutes'],t['time_locked'],t['time_source'],sorted(e['id'] for e in t['evidence'])) for t in tasks))
 

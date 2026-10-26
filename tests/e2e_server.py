@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -10,6 +11,7 @@ from awt import db, service, model_provider, gitee
 from awt import gitee_enterprise
 from awt.models import Settings, SourceConfig
 from awt.app import create_app
+from awt.git_tools import resolve_project
 import uvicorn
 
 data = Path(tempfile.mkdtemp(prefix='awt-e2e-', dir=os.environ.get('AWT_TEST_TEMP')))
@@ -26,6 +28,16 @@ engine = db.make_engine()
 db.migrate(engine)
 with engine.begin() as conn:
     service.save_settings(conn, Settings(codex=SourceConfig(paths=[str(log)]),claude_code=SourceConfig(paths=[]),llm_enabled=True,llm_model='browser-test-model'))
+
+# A real, isolated two-author repository for the Git user selection workflow.
+git_repo=data/'git-user-project';git_repo.mkdir()
+def fixture_git(*args,env=None):
+    subprocess.run(['git','-C',str(git_repo),*args],check=True,capture_output=True,env=env,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+fixture_git('init');fixture_git('config','user.name','Local User');fixture_git('config','user.email','local@example.invalid')
+for i,(name,email) in enumerate([('Local User','local@example.invalid'),('Colleague','coworker@example.invalid')]):
+    (git_repo/'work.txt').write_text(str(i),encoding='utf-8');fixture_git('add','work.txt')
+    fixture_git('commit','--author',f'{name} <{email}>','-m',f'{name} fixture work',env={**os.environ,'GIT_AUTHOR_DATE':f'2026-10-24T01:2{i}:00Z','GIT_COMMITTER_DATE':f'2026-10-24T01:2{i}:00Z'})
+with engine.begin() as conn:service.upsert(conn,db.repositories,resolve_project(str(git_repo),Settings())[1],'id')
 
 
 def fake_model(settings, system, text, **kwargs):

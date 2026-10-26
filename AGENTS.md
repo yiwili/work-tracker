@@ -14,6 +14,7 @@ Implementation boundaries:
 - `work_scope.py`: classify work vs personal/unrelated/uncertain turns before task generation or work timing.
 - `daily_analysis.py`: consolidate actual business goals; historical examples are style references, never today's evidence.
 - `activity_time.py`: log-based spans and active-interval proxies; never equate them with exact human effort.
+- `git_tools.py`: collect only the selected commit author (repository override > custom default > local/inherited Git identity). Match email exactly when present, otherwise the full name; unknown identity never falls back to every author. Apply the same filter to legacy events, AI input and Git naming references while preserving reviewed tasks and human time.
 - `time_allocation.py`: independent difficulty estimates and exact integer target apportionment; may add only user-supplied quick manual activities, preserving their minutes atomically. No automatic report confirmation.
 - `style_reference.py`: JSON/CSV/Excel history in SQLite, deduplication and reusable naming template generation. History never becomes today's evidence.
 - `gitee.py`: read-only V5 Issues imports with optional periodic synchronization while the service runs. Use only explicitly supplied Gitee credentials.

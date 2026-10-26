@@ -14,7 +14,8 @@ from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput
-from .models import AllocationInput, GiteeConfig
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery
+from .git_tools import identity_options
 from . import gitee
 from . import gitee_enterprise
 from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,GiteeResolveInput
@@ -100,6 +101,13 @@ def create_app(engine=None):
     def put_settings(payload: Settings):
         with transaction() as conn:
             return service.save_settings(conn, payload)
+
+    @app.post('/api/git/identities')
+    def git_identities(payload:GitIdentityQuery):
+        with engine.connect() as conn:
+            settings=service.get_settings(conn)
+            roots=[*payload.roots,*settings.git_roots,*conn.execute(select(db.repositories.c.root)).scalars()]
+            return identity_options(roots,settings)
 
     @app.get('/api/doctor')
     def doctor():
@@ -296,7 +304,7 @@ def create_app(engine=None):
     @app.get('/api/events')
     def events(date: date):
         with engine.connect() as conn:
-            return [dict(e) for e in conn.execute(service.event_query(date, service.get_settings(conn))).mappings()]
+            return service.visible_events(conn,date,service.get_settings(conn))
 
     @app.get('/api/repositories')
     def repositories():

@@ -74,6 +74,15 @@ export type GiteeEnterpriseConfig = {
   include_details: boolean;
 };
 export type GiteeProgram = { id: number; name: string; ident: string };
+export type GitAuthor = { name: string; email: string };
+export type GitIdentity = {
+  root: string;
+  override_key: string | null;
+  project: string;
+  detected: GitAuthor & { source: string };
+  selected: GitAuthor & { source: string };
+  authors: (GitAuthor & { commits: number })[];
+};
 export type Settings = {
   timezone: string;
   target_minutes: number;
@@ -81,6 +90,8 @@ export type Settings = {
   claude_code: SourceConfig;
   codex: SourceConfig;
   git_roots: string[];
+  git_author: GitAuthor | null;
+  git_author_overrides: Record<string, GitAuthor>;
   project_mappings: Record<string, string>;
   excluded_paths: string[];
   redact_patterns: string[];

@@ -17,14 +17,14 @@ from .work_scope import filter_work, POLICY_VERSION
 
 
 def day_rows(conn, day, settings):
-    from .service import event_query
-    return [dict(e) for e in conn.execute(event_query(day, settings)).mappings()
+    from .service import visible_events
+    return [e for e in visible_events(conn,day,settings)
             if e['source'] in settings.analysis_sources and not excluded(e['cwd'], settings)]
 
 
 def overview(conn, day, settings):
-    from .service import event_query
-    all_rows = [dict(e) for e in conn.execute(event_query(day, settings)).mappings() if not excluded(e['cwd'], settings)]
+    from .service import visible_events
+    all_rows = [e for e in visible_events(conn,day,settings) if not excluded(e['cwd'], settings)]
     sessions = {}
     for e in all_rows:
         if e['source'] == 'git':
@@ -66,7 +66,7 @@ def overview(conn, day, settings):
 
 
 def input_hash(rows, settings):
-    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, settings.activity_gap_minutes, settings.redact_patterns, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
+    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, settings.activity_gap_minutes, settings.redact_patterns, settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()}, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
 
 
 def transcript(rows, settings):

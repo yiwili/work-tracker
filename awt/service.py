@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db
 from .collectors import ClaudeAdapter, CodexAdapter, CollectionCursor, stable
-from .git_tools import collect_commits, day_bounds, excluded, resolve_project
+from .git_tools import collect_commits, day_bounds, excluded, resolve_project, filter_git_events
 from .models import Settings, TaskInput
 from .privacy import redact
 
@@ -55,6 +55,10 @@ def invalidate(conn, day):
 def event_query(day, settings):
     start, end = day_bounds(day, settings.timezone)
     return select(db.events).where(and_(db.events.c.occurred_at >= start, db.events.c.occurred_at < end)).order_by(db.events.c.occurred_at, db.events.c.id)
+
+
+def visible_events(conn, day, settings):
+    return filter_git_events([dict(e) for e in conn.execute(event_query(day,settings)).mappings()],settings)
 
 
 def attribute_events(item, settings):
@@ -143,14 +147,16 @@ def collect(conn, day):
         if excluded(repo['root'], settings):
             continue
         upsert(conn, db.repositories, repo, "id")
-        for commit in collect_commits(repo, day, settings):
-            upsert(conn, db.commits, commit, "id")
+        for commit in collect_commits(repo, day, settings,warnings):
+            upsert(conn, db.commits, {k:v for k,v in commit.items() if k not in ('author_name','author_email')}, "id")
             values = {"id": stable("git", commit['id']), "source": "git", "session_id": repo['id'],
                       "occurred_at": commit['committed_at'], "kind": "git_commit", "summary": commit['subject'],
                       "cwd": repo['root'], "project": repo['project'], "repo_id": repo['id'],
                       "raw_ref": f"{repo['root']}@{commit['sha']}",
-                      "metadata": {"sha": commit['sha'], "changes": commit['changes'], "authored_at": commit['authored_at']}}
+                      "metadata": {"sha": commit['sha'], "changes": commit['changes'], "authored_at": commit['authored_at'],
+                                   'author_name':commit['author_name'],'author_email':commit['author_email']}}
             git_added += conn.execute(sqlite_insert(db.events).values(**values).on_conflict_do_nothing()).rowcount
+            conn.execute(update(db.events).where(db.events.c.id==values['id']).values(metadata=values['metadata']))
     return {"new_events": added + git_added, "git_events": git_added, "sources": health, "warnings": warnings[:60], "date": str(day)}
 
 
@@ -311,7 +317,7 @@ def report(conn, day):
         warnings.append(suggestion['reason'])
     from .daily_analysis import overview
     conversations = overview(conn, day, settings)
-    timeline=[dict(e) for e in conn.execute(event_query(day,settings)).mappings()]
+    timeline=visible_events(conn,day,settings)
     from .activity_time import profile
     for task in tasks:
         task['timing']=profile(task['evidence'],timeline,settings.activity_gap_minutes)

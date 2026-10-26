@@ -126,7 +126,9 @@ class Terminal:
 
     def settings(self):
         settings=self.get('/settings')
-        mode=self.ask('设置：模型 / 来源','模型')
+        mode=self.ask('设置：模型 / 来源 / Git用户','模型')
+        if mode=='Git用户':
+            self.git_users(settings);return
         if mode=='来源':
             for key in ('codex','claude_code'):
                 settings[key]['enabled']=self.confirm('启用 '+key+' 采集？',settings[key]['enabled'])
@@ -157,6 +159,34 @@ class Terminal:
         if key:self.post('/model/key',{'api_key':key})
         if self.confirm('发送简短消息测试模型连接？'):self.post('/model/test',{})
         self.console.print('模型设置已保存；密钥不会在终端回显。')
+
+    def git_users(self,settings):
+        repos=self.post('/git/identities',{'roots':settings['git_roots']})
+        self.table('Git提交作者（邮箱优先精确匹配）',['仓库','检测身份','当前采集身份'],
+            [(r['project'],r['detected']['name']+' <'+r['detected']['email']+'>',r['selected']['name']+' <'+r['selected']['email']+'>') for r in repos])
+        action=self.ask('Git用户：自动 / 统一自定义 / 按仓库','自动')
+        if action=='自动':settings['git_author']=None
+        elif action=='统一自定义':
+            current=settings.get('git_author') or {}
+            settings['git_author']={'name':self.ask('作者姓名（可留空）',current.get('name','')),
+                                    'email':self.ask('作者邮箱（优先匹配，可留空）',current.get('email',''))}
+        elif action=='按仓库':
+            repo=self.choose('选择Git仓库',repos,lambda r:r['project']+' · '+r['root'])
+            if not repo:return
+            options=[{'name':'继承默认用户','action':'inherit'},
+                     *[{'name':a['name']+' <'+a['email']+'>','author':{'name':a['name'],'email':a['email']}} for a in repo['authors']],
+                     {'name':'自定义姓名或邮箱','action':'custom'}]
+            chosen=self.choose('选择提交作者',options)
+            if not chosen:return
+            overrides=settings['git_author_overrides']
+            overrides.pop(repo.get('override_key'),None)
+            if chosen.get('action')=='inherit':overrides.pop(repo['root'],None)
+            elif chosen.get('action')=='custom':
+                overrides[repo['root']]={'name':self.ask('作者姓名（可留空）'),'email':self.ask('作者邮箱（优先匹配，可留空）')}
+            else:overrides[repo['root']]=chosen['author']
+        else:raise ValueError('请选择自动、统一自定义或按仓库')
+        self.put('/settings',settings)
+        self.console.print('Git用户已保存。仓库单独设置优先；旧提交也按新身份过滤，已审核工作项与人工工时保留。')
 
     def history(self):
         path=self.ask('历史文件路径（JSON/CSV/XLSX/XLS）')
@@ -239,7 +269,7 @@ class Terminal:
                  '8':self.settings,'9':self.history,'10':self.enterprise_settings,'11':self.publish,'12':self.change_date}
         while True:
             self.console.print(f'\nWork Tracker · 终端版 · {self.day}')
-            self.console.print('1 工作项与对话统计  2 采集日志  3 AI归纳工作项  4 添加人工事项\n5 AI分配工时  6 编辑/删除  7 确认与导出  8 模型/来源设置\n9 导入历史风格  10 企业与标题映射  11 预览推送企业工作项  12 切换日期  0 退出')
+            self.console.print('1 工作项与对话统计  2 采集日志  3 AI归纳工作项  4 添加人工事项\n5 AI分配工时  6 编辑/删除  7 确认与导出  8 模型/来源/Git用户设置\n9 导入历史风格  10 企业与标题映射  11 预览推送企业工作项  12 切换日期  0 退出')
             try:
                 choice=self.ask('选择功能','1')
                 if choice=='0':return

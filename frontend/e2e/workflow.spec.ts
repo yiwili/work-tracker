@@ -329,7 +329,9 @@ test("AI time allocation preserves pinned communication and remains a draft", as
     .fill("标题按业务功能概括，技术原因放入详情");
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
-    page.getByRole("status", { name: "模型连接反馈" }).filter({ hasText: "设置已保存" }),
+    page
+      .getByRole("status", { name: "模型连接反馈" })
+      .filter({ hasText: "设置已保存" }),
   ).toBeVisible();
 });
 
@@ -623,4 +625,94 @@ test("enterprise navigation remains visible without daily tasks and opens publis
       .getByRole("dialog")
       .getByRole("heading", { name: "创建 Gitee 企业工作项", exact: true }),
   ).toBeVisible();
+});
+
+test("Git author selection overrides wrong config and filters previously collected coworkers", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  const repositories = await (
+    await page.request.get("/api/repositories")
+  ).json();
+  const repo = repositories.find(
+    (r: { project: string }) => r.project === "git-user-project",
+  );
+  expect(repo).toBeTruthy();
+  const settings = await (await page.request.get("/api/settings")).json();
+  await page.request.put("/api/settings", {
+    data: {
+      ...settings,
+      git_roots: [repo.root],
+      git_author: null,
+      git_author_overrides: {},
+    },
+  });
+  await page.goto("/?date=2026-10-24");
+  await page.getByRole("button", { name: "偏好设置" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Git 提交用户" }),
+  ).toBeVisible();
+  const author = page.getByLabel(`Git 提交作者 ${repo.root}`, { exact: true });
+  await expect(author).toHaveValue("inherit");
+  const save = async () => {
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(
+      page.getByRole("status", { name: "模型连接反馈" }),
+    ).toContainText("设置已保存");
+    await expect(
+      page.getByRole("button", { name: "保存设置", exact: true }),
+    ).toBeEnabled();
+  };
+  await author.selectOption("custom");
+  await page.getByLabel("git-user-project 作者姓名").fill("Unlisted User");
+  await page
+    .getByLabel("git-user-project 作者邮箱")
+    .fill("wrong@example.invalid");
+  await save();
+  await page.reload();
+  await page.getByRole("button", { name: "偏好设置" }).click();
+  await expect(author).toHaveValue("custom");
+  await expect(page.getByLabel("git-user-project 作者邮箱")).toHaveValue(
+    "wrong@example.invalid",
+  );
+  let result = await (
+    await page.request.post("/api/collect?date=2026-10-24", { data: {} })
+  ).json();
+  expect(result.git_events).toBe(0);
+  expect(result.warnings.join(" ")).toContain("未匹配所选Git用户");
+  await author.selectOption({
+    label: "Colleague <coworker@example.invalid> · 1条提交",
+  });
+  await page.getByLabel("Git 默认用户策略").selectOption("custom");
+  await page
+    .getByLabel("默认 Git 用户邮箱")
+    .fill("another-wrong@example.invalid");
+  await save();
+  const stored = await (await page.request.get("/api/settings")).json();
+  expect(stored.git_author_overrides[repo.root].email).toBe(
+    "coworker@example.invalid",
+  );
+  result = await (
+    await page.request.post("/api/collect?date=2026-10-24", { data: {} })
+  ).json();
+  expect(result.git_events).toBe(1);
+  let events = await (
+    await page.request.get("/api/events?date=2026-10-24")
+  ).json();
+  expect(
+    events
+      .filter((e: { source: string }) => e.source === "git")
+      .map((e: { summary: string }) => e.summary),
+  ).toEqual(["Colleague fixture work"]);
+  await author.selectOption("inherit");
+  await page.getByLabel("Git 默认用户策略").selectOption("auto");
+  await save();
+  await page.request.post("/api/collect?date=2026-10-24", { data: {} });
+  events = await (await page.request.get("/api/events?date=2026-10-24")).json();
+  expect(
+    events
+      .filter((e: { source: string }) => e.source === "git")
+      .map((e: { summary: string }) => e.summary),
+  ).toEqual(["Local User fixture work"]);
+  await page.request.put("/api/settings", { data: settings });
 });

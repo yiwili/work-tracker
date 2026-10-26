@@ -133,12 +133,18 @@ def ingest(conn, rows, since, source='file', label='', include_git=False):
     examples = list(dict.fromkeys(r['title'] for r in selected))[-55:]
     git_titles=[]
     if include_git:
+        from .git_tools import selected_author,author_matches,excluded
         roots=list(dict.fromkeys(settings.git_roots+list(conn.execute(select(db.repositories.c.root)).scalars())))
         for root in roots[:10]:
-            for line in git(root,'log',f'--since={since}','--no-merges','--format=%s','-40').splitlines():
-                title=redact(line.strip(),settings.redact_patterns)[:200]
+            if excluded(root,settings):continue
+            author=selected_author(root,settings)
+            for line in git(root,'log',f'--since={since}','--no-merges','--format=%an%x1f%ae%x1f%s','-1000').splitlines():
+                fields=line.split('\x1f',2)
+                if len(fields)!=3 or not author_matches(author,fields[0],fields[1]):continue
+                title=redact(fields[2].strip(),settings.redact_patterns)[:200]
                 if title and title not in git_titles:
                     git_titles.append(title)
+                if len(git_titles)>=25:break
     settings.title_examples=list(dict.fromkeys(examples+git_titles[:25]))[:80]
     result={'file':label,'since':str(since),'records':len(rows),'selected_records':len(selected),
             'stored_records':conn.execute(select(func.count()).select_from(db.history)).scalar_one(),

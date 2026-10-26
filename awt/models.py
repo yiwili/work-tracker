@@ -66,6 +66,29 @@ class GiteeResolveInput(BaseModel):
     issue_id: int = Field(ge=1, strict=True)
 
 
+class GitAuthor(BaseModel):
+    name: str = Field(default='', max_length=200)
+    email: str = Field(default='', max_length=320)
+
+    @model_validator(mode='after')
+    def valid_identity(self):
+        self.name=self.name.strip();self.email=self.email.strip()
+        if not (self.name or self.email) or any(ord(c)<32 for c in self.name+self.email):
+            raise ValueError('Git用户需填写姓名或邮箱，且不能包含控制字符')
+        return self
+
+
+class GitIdentityQuery(BaseModel):
+    roots: list[str] = Field(default_factory=list,max_length=50)
+
+    @field_validator('roots')
+    @classmethod
+    def valid_roots(cls,values):
+        if any(len(v)>4096 or any(ord(c)<32 for c in v) for v in values):
+            raise ValueError('Git仓库路径过长或包含控制字符')
+        return values
+
+
 class Settings(BaseModel):
     timezone: str = "Asia/Shanghai"
     target_minutes: int = Field(default=480, ge=1, le=1440)
@@ -73,6 +96,8 @@ class Settings(BaseModel):
     claude_code: SourceConfig = Field(default_factory=SourceConfig)
     codex: SourceConfig = Field(default_factory=SourceConfig)
     git_roots: list[str] = Field(default_factory=list)
+    git_author: GitAuthor | None = None
+    git_author_overrides: dict[str,GitAuthor] = Field(default_factory=dict,max_length=100)
     project_mappings: dict[str, str] = Field(default_factory=dict)
     excluded_paths: list[str] = Field(default_factory=list)
     redact_patterns: list[str] = Field(default_factory=list)
@@ -91,6 +116,13 @@ class Settings(BaseModel):
     gitee: GiteeConfig = Field(default_factory=GiteeConfig)
     gitee_enterprise: GiteeEnterpriseConfig = Field(default_factory=GiteeEnterpriseConfig)
     activity_gap_minutes: int = Field(default=5, ge=1, le=30)
+
+    @field_validator('git_author_overrides')
+    @classmethod
+    def valid_git_overrides(cls,values):
+        if any(not v.strip() or len(v)>4096 or any(ord(c)<32 for c in v) for v in values):
+            raise ValueError('Git用户覆盖的仓库路径无效')
+        return values
 
     @field_validator('agent_prompts')
     @classmethod
