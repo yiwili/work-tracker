@@ -142,7 +142,7 @@ def infer_day(records, refs, settings, reviewed, day):
     # Every stored conversation message is included. Large days use contiguous chronological batches,
     # followed by a final all-day semantic consolidation; no per-message task generation.
     chunks, current, size = [], [], 0
-    chunk_limit = 120000 if settings.llm_provider in ('deepseek', 'glm', 'glm-coding', 'ccswitch') else 65000
+    chunk_limit = 120000 if settings.llm_provider in ('deepseek', 'glm', 'ccswitch') else 65000
     for record in records:
         length = len(json.dumps(record, ensure_ascii=False))
         if current and size + length > chunk_limit:

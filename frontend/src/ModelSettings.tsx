@@ -8,130 +8,24 @@ type Status = {
   model: string;
   error: string;
 };
-const glmModels = [
-  { id: "glm-5.3-flash", label: "GLM-5.3-Flash" },
-  { id: "glm-5.3-flashx", label: "GLM-5.3-FlashX" },
-  { id: "glm-5.3", label: "GLM-5.3" },
-  { id: "glm-5.2", label: "GLM-5.2" },
-  { id: "glm-5.1", label: "GLM-5.1" },
-  { id: "glm-5", label: "GLM-5" },
-  { id: "glm-5-turbo", label: "GLM-5-Turbo" },
-  { id: "glm-4.7", label: "GLM-4.7" },
-  { id: "glm-4.6", label: "GLM-4.6" },
-  { id: "glm-4.5", label: "GLM-4.5" },
-  { id: "glm-4.5-air", label: "GLM-4.5-Air" },
-  { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）" },
-];
-export const presets: Record<
-  Settings["llm_provider"],
-  {
-    endpoint: string;
-    model: string;
-    protocol: Settings["llm_protocol"];
-    models: { id: string; label: string }[];
-  }
-> = {
+const presets = {
   deepseek: {
     endpoint: "https://api.deepseek.com/chat/completions",
-    model: "deepseek-chat",
+    model: "deepseek-flash",
     protocol: "openai" as const,
-    models: [
-      { id: "deepseek-chat", label: "DeepSeek Chat" },
-      { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
-    ],
   },
   glm: {
     endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    model: "glm-5.3-flash",
+    model: "glm-5.3",
     protocol: "openai" as const,
-    models: glmModels,
-  },
-  "glm-coding": {
-    endpoint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-    model: "glm-5.3-flash",
-    protocol: "openai" as const,
-    models: glmModels.filter((item) => item.id !== "glm-4.5-flash"),
   },
   ccswitch: {
     endpoint: "https://api.anthropic.com/v1/messages",
     model: "",
     protocol: "anthropic" as const,
-    models: [],
   },
-  custom: {
-    endpoint: "",
-    model: "",
-    protocol: "openai" as const,
-    models: [],
-  },
+  custom: { endpoint: "", model: "", protocol: "openai" as const },
 };
-
-export function ModelSelect({
-  provider,
-  value,
-  onChange,
-  label = "模型名称",
-}: {
-  provider: Settings["llm_provider"];
-  value: string;
-  onChange: (model: string) => void;
-  label?: string;
-}) {
-  const models = presets[provider].models;
-  const matched = models.find(
-    (item) => item.id.toLowerCase() === value.trim().toLowerCase(),
-  );
-  const [custom, setCustom] = useState(!matched);
-  if (!models.length)
-    return (
-      <label>
-        {label}
-        <input
-          required
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </label>
-    );
-  return (
-    <>
-      <label>
-        {label}
-        <select
-          value={custom ? "__custom__" : (matched?.id ?? value)}
-          onChange={(event) => {
-            const next = event.target.value;
-            if (next === "__custom__") {
-              setCustom(true);
-              onChange("");
-            } else {
-              setCustom(false);
-              onChange(next);
-            }
-          }}
-        >
-          {models.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label}
-            </option>
-          ))}
-          <option value="__custom__">自定义模型名…</option>
-        </select>
-      </label>
-      {custom && (
-        <label>
-          自定义模型 id
-          <input
-            required
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            placeholder="填写服务商文档中的模型 id"
-          />
-        </label>
-      )}
-    </>
-  );
-}
 export function ModelSettings({
   settings: s,
   onChange,
@@ -179,8 +73,7 @@ export function ModelSettings({
           }}
         >
           <option value="deepseek">DeepSeek API</option>
-          <option value="glm">智谱 GLM（标准 API）</option>
-          <option value="glm-coding">智谱 GLM Coding Plan</option>
+          <option value="glm">智谱 GLM API</option>
           <option value="ccswitch">CCSwitch / Claude Code 当前接口</option>
           <option value="custom">自定义兼容接口</option>
         </select>
@@ -224,33 +117,31 @@ export function ModelSettings({
               onChange={(e) => onChange({ ...s, llm_endpoint: e.target.value })}
             />
           </label>
-          <ModelSelect
-            key={s.llm_provider}
-            provider={s.llm_provider}
-            value={s.llm_model}
-            onChange={(model) => onChange({ ...s, llm_model: model })}
-          />
-          {s.llm_provider === "glm" && (
-            <p className="muted">
-              GLM-5.x 系列需要账户有可用资源包；余额不足时可选免费的
-              GLM-4.5-Flash。
-            </p>
-          )}
-          <label>
-            接口格式
-            <select
-              value={s.llm_protocol}
-              onChange={(e) =>
-                onChange({
-                  ...s,
-                  llm_protocol: e.target.value as Settings["llm_protocol"],
-                })
-              }
-            >
-              <option value="openai">Chat Completions</option>
-              <option value="anthropic">Anthropic Messages</option>
-            </select>
-          </label>
+          <div className="form-grid">
+            <label>
+              模型名称
+              <input
+                required={s.llm_enabled}
+                value={s.llm_model}
+                onChange={(e) => onChange({ ...s, llm_model: e.target.value })}
+              />
+            </label>
+            <label>
+              接口格式
+              <select
+                value={s.llm_protocol}
+                onChange={(e) =>
+                  onChange({
+                    ...s,
+                    llm_protocol: e.target.value as Settings["llm_protocol"],
+                  })
+                }
+              >
+                <option value="openai">Chat Completions</option>
+                <option value="anthropic">Anthropic Messages</option>
+              </select>
+            </label>
+          </div>
           <label>
             API Key（留空保留已保存的密钥）
             <input
