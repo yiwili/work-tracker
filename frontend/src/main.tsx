@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import type { Report, Settings, Task, WorkEvent } from "./types";
 import "./style.css";
+import { api } from "./api";
 import { Conversations } from "./Conversations";
 import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
@@ -36,6 +37,7 @@ import { AllocationModal } from "./AllocationModal";
 import { GiteePublishModal } from "./GiteePublishModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
 import { GitSettings } from "./GitSettings";
+import { SetupWizard } from "./SetupWizard";
 
 const statuses: Record<string, string> = {
   requested: "待执行",
@@ -95,24 +97,6 @@ function today(tz = "Asia/Shanghai") {
     day: "2-digit",
   }).format(new Date());
 }
-async function api<T>(
-  path: string,
-  method = "GET",
-  body?: unknown,
-): Promise<T> {
-  const r = await fetch("/api" + path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ detail: r.statusText }));
-    throw new Error(
-      typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail),
-    );
-  }
-  return r.json();
-}
 type Editor = { task?: Task; split?: boolean };
 type Draft = {
   date: string;
@@ -165,6 +149,8 @@ function App() {
     [editor, setEditor] = useState<Editor | null>(null),
     [allocationOpen, setAllocationOpen] = useState(false),
     [giteeOpen, setGiteeOpen] = useState(false),
+    [setupOpen, setSetupOpen] = useState(false),
+    [settingsEpoch, setSettingsEpoch] = useState(0),
     [proof, setProof] = useState<Task | null>(null),
     [selected, setSelected] = useState<string[]>([]);
   const [source, setSource] = useState(""),
@@ -360,6 +346,19 @@ function App() {
           </span>
           <ShieldCheck size={17} />
         </div>
+        <button
+          className={
+            "setup-launch" + (settings && !settings.llm_enabled ? " attention" : "")
+          }
+          onClick={() => setSetupOpen(true)}
+        >
+          <Sparkles size={18} />
+          <span>
+            配置引导
+            <small>按步骤接通全部功能</small>
+          </span>
+          <ChevronRight size={15} />
+        </button>
         <div className="version">
           拾时 V1.0 <span>个人工作记录工具</span>
         </div>
@@ -1037,6 +1036,7 @@ function App() {
           )}
           {page === "settings" && settings && (
             <SettingsForm
+              key={settingsEpoch}
               initial={settings}
               busy={!!busy}
               onImported={() => {
@@ -1101,6 +1101,16 @@ function App() {
             setPage("enterprise");
           }}
           onApplied={refresh}
+        />
+      )}
+      {setupOpen && settings && (
+        <SetupWizard
+          settings={settings}
+          onClose={() => setSetupOpen(false)}
+          onSaved={async () => {
+            await refresh();
+            setSettingsEpoch((value) => value + 1);
+          }}
         />
       )}
       {allocationOpen && report && (

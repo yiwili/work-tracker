@@ -100,7 +100,7 @@ def create_app(engine=None):
     @app.put('/api/settings')
     def put_settings(payload: Settings):
         with transaction() as conn:
-            return service.save_settings(conn, payload)
+            return service.save_settings(conn, model_provider.normalize(payload))
 
     @app.post('/api/git/identities')
     def git_identities(payload:GitIdentityQuery):
