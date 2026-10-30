@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
-from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput
+from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery
 from .git_tools import identity_options
 from . import gitee
@@ -148,9 +148,12 @@ def create_app(engine=None):
             return model_provider.status(settings)
 
     @app.post('/api/model/test')
-    def test_model():
+    def test_model(payload:ModelProbeInput|None=None):
         with engine.connect() as conn:
-            return model_provider.test_connection(service.get_settings(conn))
+            # A wizard probe may test an unsaved candidate; nothing is persisted here.
+            candidate = payload.settings if payload and payload.settings else service.get_settings(conn)
+            key = payload.api_key.get_secret_value() if payload and payload.api_key else None
+            return model_provider.test_connection(candidate, key)
 
     @app.get('/api/agents')
     def agents():

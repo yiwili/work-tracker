@@ -99,6 +99,7 @@ export function SetupWizard({
     setModelStatus(m);
     setGiteeStatus(g);
     setEntStatus(e);
+    return { doctor: d, model: m, gitee: g, enterprise: e };
   };
   useEffect(() => {
     loadStatus().catch((e) =>
@@ -167,36 +168,43 @@ export function SetupWizard({
     run("正在保存采集来源", async () => {
       await saveSettings(s);
       await loadStatus();
+      go(1);
       setFeedback({
         tone: "ok",
         text: "采集来源已保存。Git 提交证据可在下一步添加。",
       });
-      go(1);
     });
   const saveModel = () =>
     run("正在保存并测试模型连接", async () => {
-      const base = { ...s, llm_enabled: false };
-      await api("/settings", "PUT", base);
-      if (apiKey.trim())
-        await api("/model/key", "POST", { api_key: apiKey.trim() });
+      if (
+        s.llm_provider !== "ccswitch" &&
+        (!s.llm_endpoint.trim() || !s.llm_model.trim())
+      )
+        throw new Error("请先填写接口地址和模型名称");
+      // 先测后存：测试失败时一个字节都不写，避免把原本可用的连接改坏或悄悄关掉模型分析。
       const result = await api<{ ok: boolean; message?: string }>(
         "/model/test",
         "POST",
-        {},
+        {
+          settings: { ...s, llm_enabled: true },
+          api_key: apiKey.trim() || undefined,
+        },
       );
       if (!result.ok)
         throw new Error(result.message || "模型未返回连接成功结果");
       const next = { ...s, llm_enabled: true };
       await api("/settings", "PUT", next);
+      if (apiKey.trim())
+        await api("/model/key", "POST", { api_key: apiKey.trim() });
       setS(next);
       setApiKey("");
       await onSaved();
       await loadStatus();
+      go(2);
       setFeedback({
         tone: "ok",
         text: "模型连接测试成功，已开启模型分析。",
       });
-      go(2);
     });
   const parseMappings = () => {
     const mappings: Record<string, string> = {};
@@ -221,11 +229,11 @@ export function SetupWizard({
         project_mappings: parseMappings(),
       };
       await saveSettings(next);
+      go(3);
       setFeedback({
         tone: "ok",
         text: "Git 仓库与项目映射已保存。提交只作为证据，不按条生成工作项。",
       });
-      go(3);
     });
   const saveGitee = () =>
     run("正在保存 Gitee 凭据", async () => {
@@ -233,15 +241,15 @@ export function SetupWizard({
         await api("/gitee/token", "POST", { api_key: giteeToken.trim() });
       await saveSettings(s);
       setGiteeToken("");
-      await loadStatus();
-      const configured = !!giteeToken.trim() || giteeReady;
+      const status = await loadStatus();
+      const configured = !!giteeToken.trim() || !!status.gitee.configured;
+      if (configured) go(4);
       setFeedback({
         tone: configured ? "ok" : "error",
         text: configured
           ? "Gitee 历史抓取配置已保存。"
           : "尚未保存 Token，历史 Issue 导入仍不可用。",
       });
-      if (configured) go(4);
     });
   const saveEntToken = () =>
     run("正在读取企业列表", async () => {
@@ -266,11 +274,11 @@ export function SetupWizard({
     run("正在保存企业配置", async () => {
       await saveSettings(s);
       await loadStatus();
+      go(5);
       setFeedback({
         tone: "ok",
         text: "企业配置已保存；标题与项目映射可在「企业工作项」页面继续完善。",
       });
-      go(5);
     });
 
   const pathText = (source: "codex" | "claude_code") =>

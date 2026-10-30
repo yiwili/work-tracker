@@ -234,6 +234,12 @@ class ModelKeyInput(BaseModel):
     api_key: SecretStr = Field(min_length=1, max_length=8192)
 
 
+class ModelProbeInput(BaseModel):
+    """Optional unsaved candidate, so a failed test writes nothing to the store."""
+    settings: Settings | None = None
+    api_key: SecretStr | None = None
+
+
 class StyleImportInput(BaseModel):
     path: str = ''
     filename: str = ''

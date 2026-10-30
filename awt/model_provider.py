@@ -227,10 +227,10 @@ def claude_connection(settings):
         raise ModelError('无法读取 Claude Code 当前接口，请在 CCSwitch 选择 API 供应商，或指定有效 settings.json') from None
 
 
-def connection(settings):
+def connection(settings, key=None):
     if settings.llm_provider == 'ccswitch':
         return claude_connection(settings)
-    key = _saved_key(settings) or os.environ.get(settings.llm_key_env, '')
+    key = key or _saved_key(settings) or os.environ.get(settings.llm_key_env, '')
     if not key:
         raise ModelError('请先保存 API Key，或配置对应的服务端环境变量')
     model = official_model(settings.llm_provider, settings.llm_model)
@@ -239,9 +239,9 @@ def connection(settings):
     return {'endpoint': settings.llm_endpoint, 'model': model, 'key': key, 'protocol': settings.llm_protocol, 'auth': 'api_key'}
 
 
-def status(settings):
+def status(settings, key=None):
     try:
-        c = connection(settings)
+        c = connection(settings, key)
         return {'configured': True, 'provider': settings.llm_provider, 'endpoint': c['endpoint'], 'model': c['model'], 'protocol': c['protocol'], 'error': ''}
     except ModelError as exc:
         return {'configured': False, 'provider': settings.llm_provider, 'endpoint': settings.llm_endpoint if settings.llm_provider != 'ccswitch' else '', 'model': settings.llm_model, 'error': str(exc)}
@@ -262,8 +262,8 @@ def _provider_message(response):
     return str(text).strip()[:200]
 
 
-def complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True):
-    c = connection(settings)
+def complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
+    c = connection(settings, key)
     max_tokens=output_budget(c['model'],max_tokens,purpose)
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
@@ -310,6 +310,6 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
         raise ModelError('模型响应格式不兼容；原任务已保留') from None
 
 
-def test_connection(settings):
-    complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=128, require_text=False)
-    return {**status(settings), 'ok': True, 'message': '已完成真实模型请求，连接成功；未发送工作对话。'}
+def test_connection(settings, key=None):
+    complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=128, require_text=False, key=key)
+    return {**status(settings, key), 'ok': True, 'message': '已完成真实模型请求，连接成功；未发送工作对话。'}

@@ -70,5 +70,5 @@ def fake_enterprise(method,path,params=None,payload=None,credential=None):
 gitee_enterprise.request=fake_enterprise
 gitee_enterprise.token=lambda:'isolated-enterprise-fixture-token'
 gitee.fetch=lambda config:([{'id':987,'title':'优化档案检索功能','created_at':'2026-10-20T00:00:00Z','project_path':'tester/repo'}],{'login':'e2e-tester','name':'Test'})
-model_provider.status=lambda settings:{'configured':True,'provider':settings.llm_provider,'endpoint':settings.llm_endpoint,'model':settings.llm_model,'error':''}
+model_provider.status=lambda settings,*_a:{'configured':True,'provider':settings.llm_provider,'endpoint':settings.llm_endpoint,'model':settings.llm_model,'error':''}
 uvicorn.run(create_app(engine), host='127.0.0.1', port=8766)

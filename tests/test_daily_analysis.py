@@ -239,7 +239,7 @@ def scope_model(answer):
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
 def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_models(monkeypatch,model,purpose,requested,expected,protocol):
     captured=[]
-    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
     class Client:
         def __init__(self,**kw):pass
         def __enter__(self):return self
@@ -264,7 +264,7 @@ def test_truncation_reports_stage_keeps_original_tasks_and_does_not_retry(app_cl
     manual=client.post('/api/tasks',json={'date':'2026-10-24','title':'人工沟通','confirmed_minutes':60}).json()['id']
     draft=client.post('/api/tasks',json={'date':'2026-10-24','title':'原有待审核草稿'}).json()['id']
     with engine.begin() as conn:conn.execute(update(db.tasks).where(db.tasks.c.id==draft).values(origin='auto',edited=False))
-    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'never-log-this-secret'})
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'never-log-this-secret'})
     captured=[]
     class Client:
         def __init__(self,**kw):pass
@@ -294,7 +294,7 @@ def test_truncation_reports_stage_keeps_original_tasks_and_does_not_retry(app_cl
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
 @pytest.mark.parametrize('mode',['complete','truncated','incomplete','error'])
 def test_daily_stream_requires_complete_end_discards_thinking_and_never_retries(monkeypatch,protocol,mode):
-    monkeypatch.setattr(model_provider,'connection',lambda s:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
     if protocol=='anthropic':
         events=[{'type':'message_start','message':{}},
                 {'type':'content_block_start','content_block':{'type':'thinking','thinking':'private reasoning'}},
