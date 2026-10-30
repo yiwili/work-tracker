@@ -49,8 +49,20 @@ const statuses: Record<string, string> = {
 const sources: Record<string, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
+  workbuddy: "WorkBuddy（国内外版）",
+  deepseek_harness: "DeepSeek Harness",
+  qoder: "Qoder（国内外版）",
+  trae: "Trae（会话摘要）",
   git: "Git",
 };
+const sourceKeys = [
+  "claude_code",
+  "codex",
+  "workbuddy",
+  "deepseek_harness",
+  "qoder",
+  "trae",
+] as const;
 const kinds: Record<string, string> = {
   user_prompt: "用户请求",
   assistant_message: "AI 回复",
@@ -144,6 +156,7 @@ function App() {
     [events, setEvents] = useState<WorkEvent[]>([]),
     [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState(""),
+    [collectProgress, setCollectProgress] = useState(""),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [editor, setEditor] = useState<Editor | null>(null),
@@ -219,16 +232,56 @@ function App() {
     }
   };
   const collect = () =>
-    run("正在采集全天对话", async () => {
-      const c = await api<{ new_events: number; warnings: string[] }>(
-        "/collect?date=" + day,
-        "POST",
-        {},
-      );
-      await refresh();
-      setNotice(
-        `新增 ${c.new_events} 条活动记录，已更新全天对话统计；请点击 AI 分析归纳实际工作任务。${c.warnings.join("；")}`,
-      );
+    run("正在采集对话与 Git 提交", async () => {
+      setCollectProgress("正在读取本地日志，首次采集会扫描全部历史，请稍候");
+      const timer = window.setInterval(() => {
+        api<{
+          running: boolean;
+          source?: string;
+          files_done?: number;
+          files_total?: number;
+          new_events?: number;
+        }>("/collect/status?date=" + day)
+          .then((s) => {
+            if (!s.running) return;
+            const label = s.source ? sources[s.source] || s.source : "准备中";
+            setCollectProgress(
+              s.files_total
+                ? `已读取 ${label} ${s.files_done}/${s.files_total} 个文件，新增 ${s.new_events ?? 0} 条活动记录`
+                : `正在读取 ${label}`,
+            );
+          })
+          .catch(() => {});
+      }, 800);
+      try {
+        const c = await api<{
+          new_events: number;
+          git_events?: number;
+          sources?: { source: string; enabled: boolean; files: number; new_events: number }[];
+          warnings: string[];
+        }>("/collect?date=" + day, "POST", {});
+        await refresh();
+        const git = c.git_events ?? 0;
+        const chat = Math.max(0, c.new_events - git);
+        const pieces = [
+          c.new_events === 0
+            ? "这一天已经采集过了，没有新的活动记录"
+            : `新增 ${c.new_events} 条活动记录`,
+          `Git 提交 ${git} 条 / 对话 ${chat} 条`,
+        ];
+        // 采集路径不存在时对话永远是 0，直接说清楚，别让人以为点漏了。
+        const unreadable = (c.sources || []).filter((s) => !s.files).length;
+        if (unreadable && chat === 0)
+          pieces.push(
+            `${unreadable} 个对话目录没读到文件，请到偏好设置检查采集路径`,
+          );
+        pieces.push(...c.warnings);
+        if (c.new_events > 0) pieces.push("请点击 AI 分析归纳实际工作任务");
+        setNotice(pieces.join("；") + "。");
+      } finally {
+        window.clearInterval(timer);
+        setCollectProgress("");
+      }
     });
   const analyzeDay = () =>
     run("AI 正在通读全天对话并合并工作目标，长记录可能需要数分钟", async () => {
@@ -411,16 +464,26 @@ function App() {
               </p>
             </div>
             {(page === "daily" || page === "timeline") && (
-              <button className="primary" disabled={!!busy} onClick={collect}>
+              <button
+                className="primary"
+                disabled={!!busy}
+                onClick={collect}
+                title="读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
+              >
                 {busy ? (
                   <LoaderCircle className="spin" size={17} />
                 ) : (
                   <ScanLine size={17} />
                 )}
-                采集全天对话
+                采集当天数据
               </button>
             )}
           </div>
+          {collectProgress && (
+            <p className="muted" role="status">
+              {collectProgress}
+            </p>
+          )}
           {error && (
             <div className="alert error" role="alert">
               {error}
@@ -961,7 +1024,7 @@ function App() {
                   <div className="empty">
                     <Activity size={30} />
                     <h3>暂无匹配的活动记录</h3>
-                    <p>点击“采集全天对话”读取本地历史，或调整筛选条件。</p>
+                    <p>点击“采集当天数据”读取本地对话与 Git 提交，或调整筛选条件。</p>
                   </div>
                 ) : (
                   filtered.map((e) => (
@@ -1534,6 +1597,22 @@ function SettingsForm({
                 ...s.claude_code,
                 paths: lines(s.claude_code.paths.join("\n")),
               },
+              workbuddy: {
+                ...s.workbuddy,
+                paths: lines(s.workbuddy.paths.join("\n")),
+              },
+              deepseek_harness: {
+                ...s.deepseek_harness,
+                paths: lines(s.deepseek_harness.paths.join("\n")),
+              },
+              qoder: {
+                ...s.qoder,
+                paths: lines(s.qoder.paths.join("\n")),
+              },
+              trae: {
+                ...s.trae,
+                paths: lines(s.trae.paths.join("\n")),
+              },
             },
             apiKey,
             test,
@@ -1561,7 +1640,7 @@ function SettingsForm({
             只读扫描 JSONL
             会话文件。路径位于运行本服务的电脑上，每行填写一个路径。
           </p>
-          {(["claude_code", "codex"] as const).map((key) => (
+          {sourceKeys.map((key) => (
             <div className="source-setting" key={key}>
               <label className="check-label">
                 <input

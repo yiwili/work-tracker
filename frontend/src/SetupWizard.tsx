@@ -56,7 +56,19 @@ type StepKey = (typeof stepKeys)[number];
 const sourceLabels: Record<string, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
+  workbuddy: "WorkBuddy（国内外版）",
+  deepseek_harness: "DeepSeek Harness",
+  qoder: "Qoder（国内外版）",
+  trae: "Trae（会话摘要）",
 };
+const sourceKeys = [
+  "claude_code",
+  "codex",
+  "workbuddy",
+  "deepseek_harness",
+  "qoder",
+  "trae",
+] as const;
 
 export function SetupWizard({
   settings,
@@ -166,12 +178,23 @@ export function SetupWizard({
   };
   const saveSources = () =>
     run("正在保存采集来源", async () => {
-      await saveSettings(s);
+      // 启用了哪个来源就把它纳入分析，否则采到了也不会参与归纳。
+      const enabled = sourceKeys.filter((key) => s[key].enabled);
+      if (!enabled.length) throw new Error("请至少启用一个会话来源");
+      const next = {
+        ...s,
+        analysis_sources: [
+          ...enabled,
+          ...(s.analysis_sources.includes("git") ? ["git"] : []),
+        ],
+      };
+      await saveSettings(next);
+      setS(next);
       await loadStatus();
       go(1);
       setFeedback({
         tone: "ok",
-        text: "采集来源已保存。Git 提交证据可在下一步添加。",
+        text: "采集来源已保存，已启用的来源会参与 AI 分析。Git 提交证据可在下一步添加。",
       });
     });
   const saveModel = () =>
@@ -281,9 +304,12 @@ export function SetupWizard({
       });
     });
 
-  const pathText = (source: "codex" | "claude_code") =>
+  const pathText = (source: (typeof sourceKeys)[number]) =>
     s[source].paths.join("\n");
-  const setPaths = (source: "codex" | "claude_code", value: string) =>
+  const setPaths = (
+    source: (typeof sourceKeys)[number],
+    value: string,
+  ) =>
     setS({
       ...s,
       [source]: {
@@ -365,7 +391,7 @@ export function SetupWizard({
             ) : (
               <p className="muted">正在检查默认路径…</p>
             )}
-            {(["codex", "claude_code"] as const).map((source) => (
+            {sourceKeys.map((source) => (
               <div key={source} className="setup-source">
                 <label className="check-label">
                   <input

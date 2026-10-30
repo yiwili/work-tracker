@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from awt import db, service, model_provider
 from awt.app import create_app
-from awt.models import Settings
+from awt.models import CONVERSATION_SOURCES, Settings
 from awt.privacy import redact
 
 DAY = '2026-10-24'
@@ -22,8 +22,8 @@ def client(tmp_path, monkeypatch):
     engine = db.make_engine(tmp_path / 'test.db')
     with TestClient(create_app(engine)) as client:
         s = client.get('/api/settings').json()
-        s['codex']['paths'] = []
-        s['claude_code']['paths'] = []
+        for key in CONVERSATION_SOURCES:
+            s[key]['paths'] = []
         client.put('/api/settings', json=s).raise_for_status()
         yield client
     engine.dispose()
@@ -267,6 +267,33 @@ def test_local_origin_protection(client):
     assert client.post('/api/collect?date='+DAY,content='').status_code==415
     assert client.get('/api/settings',headers={'Host':'evil.example'}).status_code==403
     assert client.post('/api/tasks',json=manual(0),headers={'Origin':'http://testserver'}).status_code==200
+
+
+def test_collect_status_idle(client):
+    assert client.get('/api/collect/status?date='+DAY).json()=={'running': False}
+
+
+def test_collect_reports_file_progress(client,tmp_path):
+    path=tmp_path/'log.jsonl';write_jsonl(path,codex_rows())
+    config_paths(client,codex=[path])
+    updates=[]
+    with client.app.state.engine.begin() as conn:
+        service.collect(conn,date.fromisoformat(DAY),updates.append)
+    assert any(u['source']=='codex' and u['files_total']==1 and u['files_done']==1 and u['new_events']==3 for u in updates)
+
+
+def test_nested_repo_attribution_uses_nested_root(client,tmp_path):
+    outer,nested=tmp_path/'outer',tmp_path/'outer'/'nested'
+    nested.mkdir(parents=True)
+    for repo in [outer,nested]:
+        subprocess.run(['git','-C',str(repo),'init'],check=True,capture_output=True)
+    rows=codex_rows(outer)
+    rows.append({'type':'response_item','timestamp':'2026-10-24T01:05:00Z','payload':{'type':'custom_tool_call','name':'apply_patch','call_id':'p1','input':f'*** Begin Patch\n*** Update File: {nested / "app.py"}\n@@\n-old\n+new\n*** End Patch'}})
+    path=tmp_path/'nested.jsonl';write_jsonl(path,rows)
+    config_paths(client,codex=[path]);client.post('/api/collect?date='+DAY,json={}).raise_for_status()
+    events=client.get('/api/events?date='+DAY).json()
+    patch=[e for e in events if e['kind']=='tool_call'][0]
+    assert patch['project']=='nested'
 
 
 def test_tool_workdir_and_file_path_override_session_project(client,tmp_path):

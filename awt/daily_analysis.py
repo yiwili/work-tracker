@@ -10,6 +10,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from . import db, model_provider
 from .collectors import stable
 from .git_tools import excluded
+from .models import CONVERSATION_SOURCES
 from .privacy import redact
 
 from . import activity_time, prompts
@@ -39,7 +40,7 @@ def overview(conn, day, settings):
             if e['kind'] == 'user_prompt' and not session['preview']:
                 session['preview'] = e['summary'][:200]
     source_stats = []
-    for source in ('codex', 'claude_code', 'git'):
+    for source in (*CONVERSATION_SOURCES, 'git'):
         items = [e for e in all_rows if e['source'] == source]
         counts = Counter(e['kind'] for e in items)
         source_stats.append({'source': source, 'selected': source in settings.analysis_sources,

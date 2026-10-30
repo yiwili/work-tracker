@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.prompt import Prompt,Confirm
 from rich.table import Table
 from . import db
+from .models import CONVERSATION_SOURCES
 
 
 def minutes(value):
@@ -130,13 +131,13 @@ class Terminal:
         if mode=='Git用户':
             self.git_users(settings);return
         if mode=='来源':
-            for key in ('codex','claude_code'):
+            for key in CONVERSATION_SOURCES:
                 settings[key]['enabled']=self.confirm('启用 '+key+' 采集？',settings[key]['enabled'])
                 paths=self.ask(key+' 路径（多条用 | 分隔）','|'.join(settings[key]['paths']))
                 settings[key]['paths']=[p.strip() for p in paths.split('|') if p.strip()]
             roots=self.ask('Git仓库根目录（多条用 | 分隔）','|'.join(settings['git_roots']))
             settings['git_roots']=[p.strip() for p in roots.split('|') if p.strip()]
-            sources=self.ask('参与AI分析的来源（codex | claude_code，可另加git）','|'.join(settings['analysis_sources']))
+            sources=self.ask('参与AI分析的来源（'+' | '.join(CONVERSATION_SOURCES)+'，可另加git）','|'.join(settings['analysis_sources']))
             settings['analysis_sources']=[p.strip() for p in sources.split('|') if p.strip()]
             self.put('/settings',settings);return
         presets=self.get('/model/presets')

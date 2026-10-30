@@ -10,7 +10,7 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
   await expect(
     page.getByRole("heading", { name: "今天的工作，等你来记录" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "采集全天对话", exact: true }).click();
+  await page.getByRole("button", { name: "采集当天数据", exact: true }).click();
   await expect(page.getByText("本次范围：")).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(0);
   await page
@@ -134,7 +134,7 @@ test("mobile empty layout, split, merge, evidence and reanalysis preserve review
     dialog.getByText("人工事项未关联 AI 日志，以用户填写内容为依据。"),
   ).toBeVisible();
   await dialog.getByLabel("关闭证据").click();
-  await page.getByRole("button", { name: "采集全天对话", exact: true }).click();
+  await page.getByRole("button", { name: "采集当天数据", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(1);
 });
 

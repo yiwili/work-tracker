@@ -6,8 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from .privacy import redact
+
+try:
+    import zstandard
+except ImportError:  # 缺少依赖时其他来源仍可用，只跳过压缩会话
+    zstandard = None
 
 
 def stable(*values):
@@ -97,9 +103,10 @@ class AIAdapter(Protocol):
 class JSONLAdapter:
     name = "unknown"
 
-    def __init__(self, paths, patterns=()):
+    def __init__(self, paths, patterns=(), timezone_name="Asia/Shanghai"):
         self.paths = paths
         self.patterns = patterns
+        self.timezone_name = timezone_name
         self.session_id = ""
         self.cwd = ""
         self.calls = {}
@@ -227,4 +234,284 @@ class ClaudeAdapter(JSONLAdapter):
                 result += self.make(raw, location, "shell_command" if name == "Bash" else "tool_call", name + "\n" + json.dumps(args, ensure_ascii=False), row.get("timestamp"), {"tool": name, **context})
             elif kind == "tool_result":
                 result += self.make(raw, location, "tool_result", content_text(part.get("content")), row.get("timestamp"), {"tool": self.calls.get(part.get("tool_use_id"), "tool"), "is_error": part.get("is_error", False), **self.call_contexts.get(part.get('tool_use_id'), {})})
+        return result
+
+
+# WorkBuddy 会在用户消息前面塞一大段 <system-reminder>，里面是工作区、时间和身份注入。
+# 那是工具自己写的上下文，不是用户说的话；留着会把整段对话淹掉，必须先摘掉。
+SYSTEM_REMINDER = re.compile(r"<system-reminder\b[^>]*>.*?</system-reminder>", re.S)
+
+
+class WorkBuddyAdapter(JSONLAdapter):
+    """WorkBuddy 会话记录（~/.workbuddy-ai/projects/<项目>/<session>.jsonl）。
+
+    每行一个对象，靠 type 区分：message / function_call / function_call_result /
+    reasoning / file-history-snapshot / ai-title / session-meta。
+    只取对话与工具调用：reasoning 是模型思考，不能当成工作证据。
+    """
+
+    name = "workbuddy"
+
+    def normalize(self, raw, location):
+        row = raw.value
+        self.session_id = str(row.get("sessionId") or self.session_id)
+        self.cwd = str(row.get("cwd") or self.cwd)
+        kind = row.get("type")
+        ts = row.get("timestamp")
+
+        if kind == "message":
+            role = row.get("role")
+            if role not in ("user", "assistant"):
+                return []
+            text = content_text(row.get("content"))
+            if role == "user":
+                text = SYSTEM_REMINDER.sub("", text).strip()
+                if not text:
+                    return []
+                return self.make(raw, location, "user_prompt", text, ts)
+            return self.make(raw, location, "assistant_message", text, ts)
+
+        if kind == "function_call":
+            name = row.get("name", "tool")
+            args = row.get("arguments", "")
+            call_id = row.get("callId")
+            context = tool_context(args, self.cwd)
+            self.calls[call_id] = name
+            self.call_contexts[call_id] = context
+            rendered = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+            return self.make(raw, location, "shell_command" if name in ("Bash", "Shell") else "tool_call",
+                             name + "\n" + rendered, ts, {"tool": name, **context})
+
+        if kind == "function_call_result":
+            call_id = row.get("callId")
+            name = self.calls.get(call_id) or row.get("name") or "tool"
+            status = row.get("status")
+            return self.make(raw, location, "tool_result", content_text(row.get("output")), ts,
+                             {"tool": name, "is_error": bool(status) and status != "completed",
+                              **self.call_contexts.get(call_id, {})})
+        return []
+
+
+class QoderAdapter(ClaudeAdapter):
+    """Qoder（国内外版）会话记录：~/.qoder[-cn]/projects/<cwd>/<session>.jsonl。
+
+    行格式与 Claude Code 基本一致：user/assistant + message.content 的
+    text / tool_use / tool_result 块；attachment、active-leaf 等行直接忽略。
+    """
+
+    name = "qoder"
+
+
+class ZstdJSONLAdapter(JSONLAdapter):
+    """以 .jsonl.zstd 追加写入的会话日志，每个压缩帧内是若干行 JSON。"""
+
+    suffix = ".jsonl.zstd"
+
+    def discover(self):
+        found = {}
+        for configured in self.paths:
+            path = Path(configured).expanduser()
+            if path.is_file() and path.name.endswith(self.suffix):
+                found[str(path.resolve())] = path
+            elif path.is_dir():
+                for item in path.rglob("*" + self.suffix):
+                    found[str(item.resolve())] = item
+            else:
+                self.warnings.append(f"路径不存在：{path}")
+        return [SourceLocation(path, self.name) for path in found.values()]
+
+    def collect(self, location, cursor):
+        self.session_id = location.path.parent.name
+        self.cwd = ""
+        self.calls = {}
+        self.call_contexts = {}
+        if zstandard is None:
+            self.warnings.append("读取压缩会话需要安装 zstandard 依赖")
+            return
+        try:
+            data = location.path.read_bytes()
+        except OSError:
+            self.warnings.append(f"{location.path.name}: 无法读取")
+            return
+        remaining = data
+        while remaining:
+            decoder = zstandard.ZstdDecompressor().decompressobj()
+            try:
+                payload = decoder.decompress(remaining)
+            except zstandard.ZstdError:
+                break
+            consumed = len(remaining) - len(decoder.unused_data)
+            # 只推进到最后一个完整帧；未写完的帧等下次采集再读，避免丢记录。
+            if not decoder.eof or consumed <= 0:
+                break
+            frame_offset = len(data) - len(remaining)
+            for line in payload.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("not an object")
+                    raw = RawEvent(value, frame_offset)
+                    normalized = self.normalize(raw, location)
+                    if frame_offset >= self.start_offset:
+                        yield from normalized
+                except (ValueError, TypeError, KeyError, AttributeError, OverflowError, UnicodeDecodeError):
+                    self.warnings.append(f"{location.path.name}:{frame_offset} 无效或不支持的记录已跳过")
+            cursor.offset = frame_offset + consumed
+            remaining = decoder.unused_data
+
+
+SHELL_TOOLS = {"bash", "shell", "exec_command", "run_command", "shell_command"}
+
+
+class DeepSeekHarnessAdapter(ZstdJSONLAdapter):
+    """DeepSeek Harness 会话（~/.dsh/sessions/<cwd>/session-*/session*.jsonl.zstd）。
+
+    只取 user/message、assistant/message 的正文、tool/call 与 tool/result；
+    assistant/chunk、text-chunks、reasoning-chunks 是流式重复片段，忽略。
+    """
+
+    name = "deepseek_harness"
+
+    def normalize(self, raw, location):
+        row = raw.value
+        kind = row.get("type")
+        data = row.get("data") or {}
+        if not isinstance(data, dict):
+            return []
+        ts = row.get("time")
+
+        if kind == "session":
+            self.session_id = str(data.get("id") or self.session_id)
+            self.cwd = str(data.get("cwd") or self.cwd)
+            return []
+
+        if kind == "user/message":
+            if (data.get("source") or {}).get("kind") not in (None, "user", "human"):
+                return []
+            return self.make(raw, location, "user_prompt", content_text(data.get("content")), ts)
+
+        if kind == "assistant/message":
+            message = data.get("message") or {}
+            result = []
+            for part in message.get("content") or []:
+                # reasoning 是模型思考，不是工作证据；工具调用由 tool/call 记录。
+                if isinstance(part, dict) and part.get("type") == "text":
+                    result += self.make(raw, location, "assistant_message", part.get("text", ""), ts)
+            return result
+
+        if kind == "tool/call":
+            name = data.get("name", "tool")
+            call_id = data.get("callId")
+            args = data.get("arguments", "")
+            context = tool_context(args, self.cwd)
+            self.calls[call_id] = name
+            self.call_contexts[call_id] = context
+            rendered = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+            return self.make(raw, location, "shell_command" if str(name).lower() in SHELL_TOOLS else "tool_call",
+                             name + "\n" + rendered, ts, {"tool": name, **context})
+
+        if kind == "tool/result":
+            message = data.get("message") or data
+            call_id = data.get("toolCallId") or message.get("toolCallId") or (message.get("source") or {}).get("callId")
+            name = self.calls.get(call_id) or "tool"
+            is_error = bool(data.get("isError") or message.get("isError"))
+            return self.make(raw, location, "tool_result", content_text(message.get("content")), ts,
+                             {"tool": name, "is_error": is_error, **self.call_contexts.get(call_id, {})})
+
+        return []
+
+
+TRAE_TIME = "%Y-%m-%d %H:%M:%S"
+
+
+class TraeAdapter(JSONLAdapter):
+    """Trae（国内外版）会话摘要：~/.trae[-cn]/memory/projects/<项目>/<日期>/session_memory_*.jsonl。
+
+    Trae 的完整会话库是加密 SQLite，本机唯一可读的是它生成的会话摘要，
+    因此这里把 intent 作为用户请求、actions/outcome/learned 作为 AI 归纳证据。
+    """
+
+    name = "trae"
+
+    def __init__(self, paths, patterns=(), timezone_name="Asia/Shanghai"):
+        super().__init__(paths, patterns, timezone_name)
+        self.cwd_cache = {}
+
+    def discover(self):
+        found = {}
+        for configured in self.paths:
+            path = Path(configured).expanduser()
+            if path.is_file() and path.name.startswith("session_memory_"):
+                found[str(path.resolve())] = path
+            elif path.is_dir():
+                for item in path.rglob("session_memory_*.jsonl"):
+                    found[str(item.resolve())] = item
+            else:
+                self.warnings.append(f"路径不存在：{path}")
+        return [SourceLocation(path, self.name) for path in found.values()]
+
+    def _decode_cwd(self, folder):
+        if folder in self.cwd_cache:
+            return self.cwd_cache[folder]
+        key = folder.split("--p2-", 1)[0]
+        match = re.fullmatch(r"-([a-zA-Z])-(.+)", key)
+        result = ""
+        if match:
+            rest = match.group(2).strip("-")
+
+            def walk(base, remaining):
+                if not remaining:
+                    return base if base.is_dir() else None
+                try:
+                    children = list(base.iterdir())
+                except OSError:
+                    return None
+                for child in children:
+                    if not child.is_dir():
+                        continue
+                    encoded = re.sub(r"[^a-z0-9]+", "-", child.name.lower()).strip("-")
+                    if encoded and remaining == encoded:
+                        return child
+                    if encoded and remaining.startswith(encoded + "-"):
+                        found = walk(child, remaining[len(encoded) + 1:])
+                        if found:
+                            return found
+                return None
+
+            found = walk(Path(match.group(1).upper() + ":\\"), rest)
+            result = str(found) if found else ""
+        self.cwd_cache[folder] = result
+        return result
+
+    def normalize(self, raw, location):
+        row = raw.value
+        if not isinstance(row.get("intent"), str) and "outcome" not in row:
+            return []
+        name = location.path.stem
+        self.session_id = name.removeprefix("session_memory_") or name
+        self.cwd = self._decode_cwd(location.path.parent.parent.name)
+        stamp = row.get("message_summary_time")
+        try:
+            occurred_at = datetime.strptime(stamp, TRAE_TIME).replace(tzinfo=ZoneInfo(self.timezone_name)).isoformat()
+        except (TypeError, ValueError):
+            occurred_at = datetime.fromtimestamp(location.path.stat().st_mtime, timezone.utc).isoformat()
+
+        meta = {"derived": "trae_session_memory", "event_cwd": self.cwd}
+        result = []
+        intent = str(row.get("intent") or "").strip()
+        if intent:
+            result += self.make(raw, location, "user_prompt", intent, occurred_at, meta)
+        details = []
+        actions = row.get("actions") or []
+        if actions:
+            details.append("操作：" + "；".join(str(item) for item in actions))
+        if row.get("outcome"):
+            details.append("结果：" + str(row.get("outcome")))
+        learned = row.get("learned") or []
+        if learned:
+            details.append("要点：" + "；".join(str(item) for item in learned))
+        if details:
+            result += self.make(raw, location, "assistant_message", "\n".join(details), occurred_at, meta)
         return result

@@ -3,6 +3,10 @@ import type { ConversationOverview, Settings } from "./types";
 const names: Record<string, string> = {
   codex: "Codex",
   claude_code: "Claude Code",
+  workbuddy: "WorkBuddy（国内外版）",
+  deepseek_harness: "DeepSeek Harness",
+  qoder: "Qoder（国内外版）",
+  trae: "Trae（会话摘要）",
   git: "Git 辅助证据",
 };
 
@@ -25,6 +29,11 @@ export function Conversations({
   onSources: (sources: string[]) => void;
   onView: (source: string, session: string) => void;
 }) {
+  const messages = overview.user_messages + overview.assistant_messages;
+  const gitEvents = overview.sources.find((s) => s.source === "git")?.events ?? 0;
+  // 只有 Git 提交时 AI 分析一定是灰的：后端也要求当天存在对话才归纳。
+  // 不解释一句，用户会以为按钮坏了或者自己点漏了。
+  const onlyGit = messages === 0 && gitEvents > 0;
   return (
     <section className="conversations-panel">
       <div className="section-head">
@@ -42,11 +51,21 @@ export function Conversations({
             overview.user_messages + overview.assistant_messages === 0
           }
           onClick={onAnalyze}
+          title={
+            messages === 0
+              ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
+              : undefined
+          }
         >
           <Sparkles size={16} />
           {overview.running ? "AI 正在分析，请稍候" : "AI 分析全天对话"}
         </button>
       </div>
+      {onlyGit && (
+        <p className="muted">
+          {`已采集到 ${gitEvents} 条 Git 提交，但 AI 归纳需要当天的对话记录。请到「偏好设置」配置可读的对话日志目录，或在下方用「添加人工事项」手工记录今天的工作。`}
+        </p>
+      )}
       <div className="conversation-sources">
         {overview.sources.map((s) => (
           <label className="check-label" key={s.source}>

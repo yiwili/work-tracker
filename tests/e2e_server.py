@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from awt import db, service, model_provider, gitee
 from awt import gitee_enterprise
-from awt.models import Settings, SourceConfig
+from awt.models import CONVERSATION_SOURCES, Settings, SourceConfig
 from awt.app import create_app
 from awt.git_tools import resolve_project
 import uvicorn
@@ -27,7 +27,7 @@ log.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),enco
 engine = db.make_engine()
 db.migrate(engine)
 with engine.begin() as conn:
-    service.save_settings(conn, Settings(codex=SourceConfig(paths=[str(log)]),claude_code=SourceConfig(paths=[]),llm_enabled=True,llm_model='browser-test-model'))
+    service.save_settings(conn, Settings(codex=SourceConfig(paths=[str(log)]),**{key:SourceConfig(paths=[]) for key in CONVERSATION_SOURCES if key!='codex'},llm_enabled=True,llm_model='browser-test-model'))
 
 # A real, isolated two-author repository for the Git user selection workflow.
 git_repo=data/'git-user-project';git_repo.mkdir()

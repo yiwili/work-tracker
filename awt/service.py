@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -11,8 +11,9 @@ from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db
-from .collectors import ClaudeAdapter, CodexAdapter, CollectionCursor, stable
-from .git_tools import collect_commits, day_bounds, excluded, resolve_project, filter_git_events
+from .collectors import (ClaudeAdapter, CodexAdapter, DeepSeekHarnessAdapter, QoderAdapter,
+                         TraeAdapter, WorkBuddyAdapter, CollectionCursor, stable)
+from .git_tools import collect_commits, day_bounds, exclusion_prefixes, excluded, resolve_project, filter_git_events
 from .models import Settings, TaskInput
 from .privacy import redact
 
@@ -61,33 +62,82 @@ def visible_events(conn, day, settings):
     return filter_git_events([dict(e) for e in conn.execute(event_query(day,settings)).mappings()],settings)
 
 
-def attribute_events(item, settings):
+def _inside(path, root):
+    value = os.path.normcase(os.path.abspath(str(path)))
+    base = os.path.normcase(os.path.abspath(str(root))).rstrip("\\/")
+    return value == base or value.startswith(base + os.sep)
+
+
+def _nested_repo(path, root, cache):
+    """工具改的是嵌套仓库里的文件时，不能直接沿用会话所属仓库。"""
+    current = Path(os.path.abspath(str(path)))
+    if not current.is_dir():
+        current = current.parent
+    base = Path(os.path.abspath(str(root)))
+    key = (os.path.normcase(str(base)), os.path.normcase(str(current)))
+    cached = cache.get(("nested", key))
+    if cached is not None:
+        return cached
+    nested = False
+    while current != base and base in current.parents:
+        if (current / ".git").exists():
+            nested = True
+            break
+        current = current.parent
+    cache[("nested", key)] = nested
+    return nested
+
+
+def attribute_events(item, settings, cache=None, prefixes=None):
     paths = item.metadata.get('affected_paths', [])
     if not paths:
         return [item]
-    if any(excluded(path, settings) for path in paths):
+    if any(excluded(path, settings, prefixes) for path in paths):
         return []
+    if cache is None:
+        cache = {}
+    # 绝大多数工具操作都落在会话自己的仓库内，先做一次廉价判断，避免逐条调用 git。
+    _, home_repo = resolve_project(item.cwd, settings, cache) if item.cwd else (None, None)
     attributed = {}
     for path in paths:
-        if excluded(path, settings):
-            continue
-        project, repo = resolve_project(path, settings)
-        cwd = repo['root'] if repo else str(Path(path).parent)
+        if home_repo and _inside(path, home_repo['root']) and not _nested_repo(path, home_repo['root'], cache):
+            cwd = home_repo['root']
+        else:
+            _, repo = resolve_project(path, settings, cache)
+            cwd = repo['root'] if repo else str(Path(path).parent)
         attributed[cwd] = replace(item, id=stable(item.id, cwd), cwd=cwd,
                                   metadata={**item.metadata, 'attributed_path': path})
     return list(attributed.values())
 
 
-def collect(conn, day):
+def collect(conn, day, progress=None):
     settings = get_settings(conn)
+    prefixes = exclusion_prefixes(settings)
+    excluded_cache = {}
+
+    def is_excluded(path):
+        if path not in excluded_cache:
+            excluded_cache[path] = excluded(path, settings, prefixes)
+        return excluded_cache[path]
+
     warnings, added, project_cache, repos = [], 0, {}, {}
+    resolution_cache = {}
     health = []
-    for cls, config in [(ClaudeAdapter, settings.claude_code), (CodexAdapter, settings.codex)]:
-        adapter = cls(config.paths, settings.redact_patterns)
+    if progress:
+        progress({"source": "", "files_done": 0, "files_total": 0, "new_events": 0})
+    for cls, config in [(ClaudeAdapter, settings.claude_code), (CodexAdapter, settings.codex),
+                        (WorkBuddyAdapter, settings.workbuddy), (DeepSeekHarnessAdapter, settings.deepseek_harness),
+                        (QoderAdapter, settings.qoder), (TraeAdapter, settings.trae)]:
+        adapter = cls(config.paths, settings.redact_patterns, settings.timezone)
         count, files = 0, 0
         if config.enabled:
-            for location in adapter.discover():
-                if excluded(str(location.path), settings):
+            locations = list(adapter.discover())
+            total, done = len(locations), 0
+            if progress:
+                progress({"source": adapter.name, "files_done": 0, "files_total": total, "new_events": added})
+            for location in locations:
+                if is_excluded(str(location.path)):
+                    done += 1
                     continue
                 files += 1
                 source_key = f"{adapter.name}:{location.path.resolve()}"
@@ -99,29 +149,42 @@ def collect(conn, day):
                         prefix = stable(stream.read(min(4096, saved['offset'] if saved else 4096)).hex())
                     valid = saved and saved['file_id'] == file_id and stat.st_size >= saved['offset'] and prefix == saved['prefix_hash']
                     if valid and stat.st_size == saved['offset']:
+                        done += 1
+                        if progress:
+                            progress({"source": adapter.name, "files_done": done, "files_total": total, "new_events": added + count})
                         continue
                     offset = saved['offset'] if valid else 0
                     cursor = CollectionCursor(offset, file_id, prefix)
                     adapter.start_offset = offset
-                    for item in (attributed for raw in adapter.collect(location, cursor) for attributed in attribute_events(raw, settings)):
-                        if excluded(item.cwd, settings):
-                            continue
-                        if item.cwd not in project_cache:
-                            project_cache[item.cwd] = resolve_project(item.cwd, settings)
-                        project, repo = project_cache[item.cwd]
-                        if repo:
-                            repos[repo['id']] = repo
-                        values = asdict(item)
-                        values.update(project=project, repo_id=repo['id'] if repo else None)
-                        inserted = conn.execute(sqlite_insert(db.events).values(**values).on_conflict_do_nothing()).rowcount
-                        count += inserted
-                        session_id = f"{item.source}:{item.session_id}"
-                        upsert(conn, db.sessions, {"id": session_id, "source": item.source, "cwd": item.cwd, "last_seen_at": now()}, "id")
+                    pending, session_cwds = [], {}
+                    for raw in adapter.collect(location, cursor):
+                        for item in attribute_events(raw, settings, resolution_cache, prefixes):
+                            if is_excluded(item.cwd):
+                                continue
+                            if item.cwd not in project_cache:
+                                project_cache[item.cwd] = resolve_project(item.cwd, settings, resolution_cache)
+                            project, repo = project_cache[item.cwd]
+                            if repo:
+                                repos[repo['id']] = repo
+                            values = vars(item).copy()
+                            values.update(project=project, repo_id=repo['id'] if repo else None)
+                            pending.append(values)
+                            session_cwds[(item.source, item.session_id)] = item.cwd
+                        if len(pending) >= 1000:
+                            count += conn.execute(sqlite_insert(db.events).on_conflict_do_nothing(), pending).rowcount
+                            pending.clear()
+                    if pending:
+                        count += conn.execute(sqlite_insert(db.events).on_conflict_do_nothing(), pending).rowcount
+                    for (source, session), cwd in session_cwds.items():
+                        upsert(conn, db.sessions, {"id": f"{source}:{session}", "source": source, "cwd": cwd, "last_seen_at": now()}, "id")
                     with location.path.open("rb") as stream:
                         prefix = stable(stream.read(min(4096, cursor.offset)).hex())
                     upsert(conn, db.cursors, {"source_key": source_key, "file_id": file_id, "offset": cursor.offset, "prefix_hash": prefix, "last_seen_at": now()}, "source_key")
                 except (OSError, ValueError) as exc:
                     warnings.append(f"{location.path.name}: 无法读取 ({type(exc).__name__})")
+                done += 1
+                if progress:
+                    progress({"source": adapter.name, "files_done": done, "files_total": total, "new_events": added + count})
         warnings.extend(adapter.warnings[:30])
         state = {"enabled": config.enabled, "files": files, "new_events": count, "warnings": len(adapter.warnings), "checked_at": now()}
         upsert(conn, db.sources, {"name": adapter.name, "config": config.model_dump(), "health": state}, "name")
@@ -129,22 +192,22 @@ def collect(conn, day):
         added += count
     # Include repositories found in past scans, not just newly appended sessions.
     for row in conn.execute(event_query(day, settings)).mappings():
-        if row['cwd'] and row['cwd'] not in project_cache and not excluded(row['cwd'], settings):
-            project_cache[row['cwd']] = resolve_project(row['cwd'], settings)
+        if row['cwd'] and row['cwd'] not in project_cache and not is_excluded(row['cwd']):
+            project_cache[row['cwd']] = resolve_project(row['cwd'], settings, resolution_cache)
     for _, repo in project_cache.values():
         if repo:
             repos[repo['id']] = repo
     for root in settings.git_roots:
-        if excluded(root, settings):
+        if is_excluded(root):
             continue
-        _, repo = resolve_project(root, settings)
+        _, repo = resolve_project(root, settings, resolution_cache)
         if repo:
             repos[repo['id']] = repo
         else:
             warnings.append(f"Git 根目录无效或未初始化：{root}")
     git_added = 0
     for repo in repos.values():
-        if excluded(repo['root'], settings):
+        if is_excluded(repo['root']):
             continue
         upsert(conn, db.repositories, repo, "id")
         for commit in collect_commits(repo, day, settings,warnings):

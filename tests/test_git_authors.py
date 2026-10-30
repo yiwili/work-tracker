@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import insert,select
 
 from awt import db,git_tools,service,daily_analysis,model_provider
-from awt.models import Settings,GitAuthor
+from awt.models import CONVERSATION_SOURCES, Settings,GitAuthor
 from awt.app import create_app
 
 DAY=date(2026,10,24)
@@ -52,7 +52,8 @@ def client(tmp_path,monkeypatch):
     monkeypatch.setenv('AWT_DATA_DIR',str(tmp_path/'data'))
     engine=db.make_engine()
     with TestClient(create_app(engine)) as c:
-        settings=c.get('/api/settings').json();settings['codex']['paths']=[];settings['claude_code']['paths']=[]
+        settings=c.get('/api/settings').json()
+        for key in CONVERSATION_SOURCES:settings[key]['paths']=[]
         c.put('/api/settings',json=settings).raise_for_status()
         yield c
     engine.dispose()

@@ -9,7 +9,7 @@ from sqlalchemy import insert, select, update
 
 from awt import db, daily_analysis, model_provider, service
 from awt.app import create_app
-from awt.models import Settings
+from awt.models import CONVERSATION_SOURCES, Settings
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def app_client(tmp_path,monkeypatch):
     with TestClient(create_app(engine)) as client:
         s=client.get('/api/settings').json()
         s.update(llm_enabled=True,llm_model='test',analysis_sources=['codex'])
-        s['codex']['paths']=[];s['claude_code']['paths']=[]
+        for key in CONVERSATION_SOURCES:s[key]['paths']=[]
         client.put('/api/settings',json=s).raise_for_status()
         yield client,engine
     engine.dispose()

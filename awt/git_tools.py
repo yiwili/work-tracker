@@ -19,40 +19,63 @@ def git(path, *args):
         return ""
 
 
-def excluded(path, settings):
+def _canonical(path):
+    return os.path.normcase(str(Path(path).expanduser().resolve()))
+
+
+def exclusion_prefixes(settings):
+    return tuple(_canonical(item).replace("\\", "/").rstrip("/") for item in settings.excluded_paths)
+
+
+def excluded(path, settings, prefixes=None):
     if not path:
         return False
-    absolute = str(Path(path).expanduser().resolve()).casefold().replace("\\", "/").rstrip("/")
-    for item in settings.excluded_paths:
-        prefix = str(Path(item).expanduser().resolve()).casefold().replace("\\", "/").rstrip("/")
+    absolute = _canonical(path).replace("\\", "/").rstrip("/")
+    for prefix in prefixes if prefixes is not None else exclusion_prefixes(settings):
         if absolute == prefix or absolute.startswith(prefix + "/"):
             return True
     return False
 
 
-def resolve_project(cwd, settings):
+def resolve_project(cwd, settings, cache=None):
     if not cwd:
         return "未归属项目", None
     path = Path(cwd).expanduser()
-    mappings = sorted(settings.project_mappings.items(), key=lambda item: len(item[0]), reverse=True)
-    project = None
-    for prefix, name in mappings:
-        try:
-            if path.resolve().is_relative_to(Path(prefix).expanduser().resolve()):
-                project = name
-                break
-        except (OSError, ValueError):
-            pass
-    root = git(path if path.is_dir() else path.parent, "rev-parse", "--show-toplevel")
+    base = path if path.is_dir() else path.parent
+    try:
+        dir_key = os.path.normcase(str(base.resolve()))
+    except OSError:
+        dir_key = os.path.normcase(str(base))
+    cached = cache.get(("dir", dir_key)) if cache is not None else None
+    if cached is not None:
+        project, root = cached
+    else:
+        mappings = sorted(settings.project_mappings.items(), key=lambda item: len(item[0]), reverse=True)
+        project = None
+        for prefix, name in mappings:
+            try:
+                if path.resolve().is_relative_to(Path(prefix).expanduser().resolve()):
+                    project = name
+                    break
+            except (OSError, ValueError):
+                pass
+        root = git(base, "rev-parse", "--show-toplevel")
+        root = str(Path(root).resolve()) if root else ""
+        if cache is not None:
+            cache[("dir", dir_key)] = (project, root)
     if not root:
         return project or path.name or "未归属项目", None
-    root = str(Path(root).resolve())
+    if cache is not None and ("repo", root) in cache:
+        return cache[("repo", root)]
     repo = {"id": stable(root.casefold()), "root": root, "project": project or Path(root).name,
             "remote": redact(git(root, "remote", "get-url", "origin"), settings.redact_patterns),
             "branch": git(root, "branch", "--show-current"),
             "current_changes": redact(git(root, "status", "--short"), settings.redact_patterns),
             "observed_at": datetime.now(timezone.utc).isoformat()}
-    return repo["project"], repo
+    result = (repo["project"], repo)
+    if cache is not None:
+        cache[("repo", root)] = result
+    return result
 
 
 def day_bounds(day, tz):

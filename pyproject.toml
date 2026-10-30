@@ -7,7 +7,7 @@ name = "ai-work-tracker"
 version = "0.1.0"
 description = "Local-first AI work records and reviewed daily timesheets"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "sqlalchemy>=2.0,<2.1", "alembic>=1.14,<2", "typer>=0.15,<1", "httpx>=0.28,<1", "tzdata>=2025.1", "openpyxl>=3.1,<4", "xlrd>=2,<3", "rich>=13,<16"]
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "sqlalchemy>=2.0,<2.1", "alembic>=1.14,<2", "typer>=0.15,<1", "httpx>=0.28,<1", "tzdata>=2025.1", "openpyxl>=3.1,<4", "xlrd>=2,<3", "rich>=13,<16", "zstandard>=0.25,<1"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]

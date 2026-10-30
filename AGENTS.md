@@ -10,6 +10,7 @@ Read the matching `SKILL.md` when asked to operate that workflow. Use the local 
 
 Implementation boundaries:
 
+- `collectors.py`: read-only, version-tolerant adapters for Codex / Claude Code / WorkBuddy (CN + international) / DeepSeek Harness (append-only zstd frames) / Qoder (CN + international) / Trae. Trae stores full transcripts in encrypted SQLite, so only its plaintext session-memory summaries are ingested; never present them as raw conversation or invent user text.
 - `awt/prompts/*.md`: default role instructions; `Settings.agent_prompts`: user supplements; evidence/JSON/minute constraints stay enforced in code.
 - `work_scope.py`: classify work vs personal/unrelated/uncertain turns before task generation or work timing.
 - `daily_analysis.py`: consolidate actual business goals; historical examples are style references, never today's evidence.

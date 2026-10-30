@@ -89,6 +89,10 @@ export type Settings = {
   step_minutes: number;
   claude_code: SourceConfig;
   codex: SourceConfig;
+  workbuddy: SourceConfig;
+  deepseek_harness: SourceConfig;
+  qoder: SourceConfig;
+  trae: SourceConfig;
   git_roots: string[];
   git_author: GitAuthor | null;
   git_author_overrides: Record<string, GitAuthor>;

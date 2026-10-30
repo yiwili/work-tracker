@@ -1,4 +1,5 @@
 from datetime import date as Date, datetime
+from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -8,6 +9,31 @@ from pydantic import BaseModel, Field, SecretStr, field_validator, model_validat
 class SourceConfig(BaseModel):
     enabled: bool = True
     paths: list[str] = Field(default_factory=list)
+
+
+CONVERSATION_SOURCES = ('codex', 'claude_code', 'workbuddy', 'deepseek_harness', 'qoder', 'trae')
+
+
+def _workbuddy_source():
+    # 国内版写在 ~/.workbuddy，国外版 WorkBuddy AI 写在 ~/.workbuddy-ai。
+    home = Path.home()
+    return SourceConfig(paths=[str(home / ".workbuddy-ai" / "projects"), str(home / ".workbuddy" / "projects")])
+
+
+def _deepseek_harness_source():
+    return SourceConfig(paths=[str(Path.home() / ".dsh" / "sessions")])
+
+
+def _qoder_source():
+    # 国外版 ~/.qoder，国内版 ~/.qoder-cn；不存在的目录会在采集时提示。
+    home = Path.home()
+    return SourceConfig(paths=[str(home / ".qoder" / "projects"), str(home / ".qoder-cn" / "projects")])
+
+
+def _trae_source():
+    # Trae 完整会话库加密，这里读取它落盘的会话摘要。
+    home = Path.home()
+    return SourceConfig(paths=[str(home / ".trae" / "memory" / "projects"), str(home / ".trae-cn" / "memory" / "projects")])
 
 
 class GiteeConfig(BaseModel):
@@ -95,6 +121,10 @@ class Settings(BaseModel):
     step_minutes: int = Field(default=15, ge=1, le=120)
     claude_code: SourceConfig = Field(default_factory=SourceConfig)
     codex: SourceConfig = Field(default_factory=SourceConfig)
+    workbuddy: SourceConfig = Field(default_factory=_workbuddy_source)
+    deepseek_harness: SourceConfig = Field(default_factory=_deepseek_harness_source)
+    qoder: SourceConfig = Field(default_factory=_qoder_source)
+    trae: SourceConfig = Field(default_factory=_trae_source)
     git_roots: list[str] = Field(default_factory=list)
     git_author: GitAuthor | None = None
     git_author_overrides: dict[str,GitAuthor] = Field(default_factory=dict,max_length=100)
@@ -108,7 +138,7 @@ class Settings(BaseModel):
     llm_provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
     llm_protocol: Literal['openai', 'anthropic'] = 'openai'
     ccswitch_config_path: str = ''
-    analysis_sources: list[Literal['codex', 'claude_code', 'git']] = Field(default_factory=lambda: ['codex'])
+    analysis_sources: list[Literal['codex', 'claude_code', 'workbuddy', 'deepseek_harness', 'qoder', 'trae', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)
     history_reference: dict = Field(default_factory=dict)
@@ -141,7 +171,7 @@ class Settings(BaseModel):
     @field_validator('analysis_sources')
     @classmethod
     def valid_sources(cls, values):
-        if not values or not any(v in ('codex', 'claude_code') for v in values):
+        if not values or not any(v in CONVERSATION_SOURCES for v in values):
             raise ValueError('至少选择一种对话来源；Git 只能作为辅助证据')
         return list(dict.fromkeys(values))
 

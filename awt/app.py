@@ -14,7 +14,7 @@ from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, CONVERSATION_SOURCES
 from .git_tools import identity_options
 from . import gitee
 from . import gitee_enterprise
@@ -46,6 +46,7 @@ def create_app(engine=None):
     app = FastAPI(title="AI Work Tracker", version="0.1.0", lifespan=lifespan)
     app.state.engine = engine
     analysis_locks = {}
+    collect_states = {}
 
     @contextmanager
     def transaction():
@@ -113,8 +114,9 @@ def create_app(engine=None):
     def doctor():
         with engine.connect() as conn:
             config = service.get_settings(conn)
+            sources = {name: getattr(config, name) for name in CONVERSATION_SOURCES}
             return {'sources': [dict(r) for r in conn.execute(select(db.sources)).mappings()],
-                    'paths': [{'source': name, 'path': path, 'exists': Path(path).expanduser().exists()} for name, source in [('codex', config.codex), ('claude_code', config.claude_code)] for path in source.paths],
+                    'paths': [{'source': name, 'path': path, 'exists': Path(path).expanduser().exists()} for name, source in sources.items() for path in source.paths],
                     'llm_enabled': config.llm_enabled, 'timezone': config.timezone}
 
     @app.get('/api/conversations')
@@ -285,8 +287,16 @@ def create_app(engine=None):
 
     @app.post('/api/collect')
     def collect(date: date):
-        with transaction() as conn:
-            return service.collect(conn, date)
+        state = collect_states[str(date)] = {"running": True, "source": "", "files_done": 0, "files_total": 0, "new_events": 0}
+        try:
+            with transaction() as conn:
+                return service.collect(conn, date, state.update)
+        finally:
+            state["running"] = False
+
+    @app.get('/api/collect/status')
+    def collect_status(date: date):
+        return collect_states.get(str(date), {"running": False})
 
     @app.post('/api/analyze')
     def analyze(date: date):
