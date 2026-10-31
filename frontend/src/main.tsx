@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  Bot,
   Building2,
   Check,
   CheckCheck,
@@ -22,12 +23,13 @@ import {
   ScanLine,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Split,
   Trash2,
   X,
 } from "lucide-react";
-import type { Report, Settings, Task, WorkEvent } from "./types";
+import type { PendingTask, Report, Settings, Task, WorkEvent } from "./types";
 import "./style.css";
 import { api } from "./api";
 import { Conversations } from "./Conversations";
@@ -36,8 +38,13 @@ import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal } from "./AllocationModal";
 import { GiteePublishModal } from "./GiteePublishModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
+import { HistoryPanel } from "./HistoryPanel";
 import { GitSettings } from "./GitSettings";
 import { SetupWizard } from "./SetupWizard";
+import { SourcePicker, sourceKeys, sourceLabels } from "./SourcePicker";
+import { CollectDetailsModal } from "./CollectDetailsModal";
+import { AnalysisResultsModal } from "./AnalysisResultsModal";
+import { JobToast, type JobToastState } from "./JobToast";
 
 const statuses: Record<string, string> = {
   requested: "待执行",
@@ -47,22 +54,21 @@ const statuses: Record<string, string> = {
   delivered: "已交付",
 };
 const sources: Record<string, string> = {
-  codex: "Codex",
-  claude_code: "Claude Code",
-  workbuddy: "WorkBuddy（国内外版）",
-  deepseek_harness: "DeepSeek Harness",
-  qoder: "Qoder（国内外版）",
-  trae: "Trae（会话摘要）",
+  ...sourceLabels,
+  workbuddy: "WorkBuddy（旧版合并记录）",
+  qoder: "Qoder（旧版合并记录）",
+  trae: "Trae（旧版合并记录）",
   git: "Git",
 };
-const sourceKeys = [
-  "claude_code",
-  "codex",
-  "workbuddy",
-  "deepseek_harness",
-  "qoder",
-  "trae",
+const settingsTabs = [
+  { key: "sources", label: "数据来源", icon: FolderGit2 },
+  { key: "time", label: "时间与隐私", icon: Clock3 },
+  { key: "model", label: "模型分析", icon: Sparkles },
+  { key: "operation", label: "操作设置", icon: SlidersHorizontal },
+  { key: "workflow", label: "提示词与风格", icon: Bot },
+  { key: "enterprise", label: "企业同步", icon: Building2 },
 ] as const;
+type SettingsTab = (typeof settingsTabs)[number]["key"];
 const kinds: Record<string, string> = {
   user_prompt: "用户请求",
   assistant_message: "AI 回复",
@@ -164,22 +170,36 @@ function App() {
     [giteeOpen, setGiteeOpen] = useState(false),
     [setupOpen, setSetupOpen] = useState(false),
     [settingsEpoch, setSettingsEpoch] = useState(0),
+    [settingsTab, setSettingsTab] = useState<SettingsTab>("sources"),
     [proof, setProof] = useState<Task | null>(null),
     [selected, setSelected] = useState<string[]>([]);
+  const [collecting, setCollecting] = useState(false),
+    [analyzing, setAnalyzing] = useState(false),
+    [collectDay, setCollectDay] = useState<string | null>(null),
+    [analysisView, setAnalysisView] = useState<{
+      day: string;
+      pending: PendingTask[];
+      stale: boolean;
+    } | null>(null),
+    [toast, setToast] = useState<JobToastState | null>(null);
   const [source, setSource] = useState(""),
     [sessionFilter, setSessionFilter] = useState(""),
     [project, setProject] = useState(""),
     [taskFilter, setTaskFilter] = useState(""),
     [search, setSearch] = useState("");
+  const dayRef = useRef(day);
+  dayRef.current = day;
   const refresh = async (d = day) => {
     const [r, e, s] = await Promise.all([
       api<Report>("/reports/" + d),
       api<WorkEvent[]>("/events?date=" + d),
       api<Settings>("/settings"),
     ]);
+    setSettings(s);
+    // A background job for an older date must not overwrite the date now on screen.
+    if (dayRef.current !== d) return;
     setReport(r);
     setEvents(e);
-    setSettings(s);
     setSelected([]);
   };
   useEffect(() => {
@@ -231,73 +251,148 @@ function App() {
       setBusy("");
     }
   };
-  const collect = () =>
-    run("正在采集对话与 Git 提交", async () => {
-      setCollectProgress("正在读取本地日志，首次采集会扫描全部历史，请稍候");
-      const timer = window.setInterval(() => {
-        api<{
-          running: boolean;
-          source?: string;
-          files_done?: number;
-          files_total?: number;
-          new_events?: number;
-        }>("/collect/status?date=" + day)
-          .then((s) => {
-            if (!s.running) return;
-            const label = s.source ? sources[s.source] || s.source : "准备中";
-            setCollectProgress(
-              s.files_total
-                ? `已读取 ${label} ${s.files_done}/${s.files_total} 个文件，新增 ${s.new_events ?? 0} 条活动记录`
-                : `正在读取 ${label}`,
-            );
-          })
-          .catch(() => {});
-      }, 800);
-      try {
-        const c = await api<{
-          new_events: number;
-          git_events?: number;
-          sources?: { source: string; enabled: boolean; files: number; new_events: number }[];
-          warnings: string[];
-        }>("/collect?date=" + day, "POST", {});
-        await refresh();
-        const git = c.git_events ?? 0;
-        const chat = Math.max(0, c.new_events - git);
-        const pieces = [
-          c.new_events === 0
-            ? "这一天已经采集过了，没有新的活动记录"
-            : `新增 ${c.new_events} 条活动记录`,
-          `Git 提交 ${git} 条 / 对话 ${chat} 条`,
-        ];
-        // 采集路径不存在时对话永远是 0，直接说清楚，别让人以为点漏了。
-        const unreadable = (c.sources || []).filter((s) => !s.files).length;
-        if (unreadable && chat === 0)
-          pieces.push(
-            `${unreadable} 个对话目录没读到文件，请到偏好设置检查采集路径`,
+  const collect = async () => {
+    if (collecting || analyzing) return;
+    const jobDay = day;
+    setCollecting(true);
+    setError("");
+    setNotice("");
+    setCollectProgress("正在读取本地日志，首次采集会扫描全部历史，请稍候");
+    const timer = window.setInterval(() => {
+      api<{
+        running: boolean;
+        source?: string;
+        files_done?: number;
+        files_total?: number;
+        new_events?: number;
+      }>("/collect/status?date=" + jobDay)
+        .then((s) => {
+          if (!s.running) return;
+          const label = s.source ? sources[s.source] || s.source : "准备中";
+          setCollectProgress(
+            s.files_total
+              ? `已读取 ${label} ${s.files_done}/${s.files_total} 个文件，新增 ${s.new_events ?? 0} 条活动记录`
+              : `正在读取 ${label}`,
           );
-        pieces.push(...c.warnings);
-        if (c.new_events > 0) pieces.push("请点击 AI 分析归纳实际工作任务");
-        setNotice(pieces.join("；") + "。");
-      } finally {
-        window.clearInterval(timer);
-        setCollectProgress("");
-      }
-    });
-  const analyzeDay = () =>
-    run("AI 正在通读全天对话并合并工作目标，长记录可能需要数分钟", async () => {
+        })
+        .catch(() => {});
+    }, 800);
+    try {
+      const c = await api<{
+        new_events: number;
+        git_events?: number;
+        sources?: {
+          source: string;
+          enabled: boolean;
+          files: number;
+          new_events: number;
+        }[];
+        warnings: string[];
+      }>("/collect?date=" + jobDay, "POST", {});
+      await refresh(jobDay);
+      const git = c.git_events ?? 0;
+      const chat = Math.max(0, c.new_events - git);
+      const pieces = [
+        c.new_events === 0
+          ? "这一天已经采集过了，没有新的活动记录"
+          : `新增 ${c.new_events} 条活动记录`,
+        `Git 提交 ${git} 条 / 对话 ${chat} 条`,
+      ];
+      // 采集路径不存在时对话永远是 0，直接说清楚，别让人以为点漏了。
+      const unreadable = (c.sources || []).filter((s) => !s.files).length;
+      if (unreadable && chat === 0)
+        pieces.push(
+          `${unreadable} 个对话目录没读到文件，请到系统设置检查采集路径`,
+        );
+      pieces.push(...c.warnings);
+      if (c.new_events > 0) pieces.push("可继续 AI 分析归纳实际工作任务");
+      setToast({
+        title: "采集完成",
+        message: pieces.join("；") + "。",
+        actionLabel: "查看采集详情",
+        onAction: () => {
+          setToast(null);
+          setCollectDay(jobDay);
+        },
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      window.clearInterval(timer);
+      setCollectProgress("");
+      setCollecting(false);
+    }
+  };
+  const analyzeDay = async () => {
+    if (analyzing || collecting) return;
+    const jobDay = day;
+    setAnalyzing(true);
+    setError("");
+    setNotice("");
+    try {
       const a = await api<{
         created: number;
         archived: number;
+        pending: number;
+        pending_tasks: PendingTask[];
+        auto_imported: boolean;
         warnings: string[];
         analysis_required?: boolean;
-      }>("/analyze?date=" + day, "POST", {});
-      await refresh();
-      setNotice(
-        a.analysis_required
-          ? a.warnings.join("；")
-          : `全天 AI 分析已完成，归纳 ${a.created} 项工作，替换 ${a.archived} 项未审核草稿。${a.warnings.join("；")}`,
-      );
+        usage?: null | {
+          total_tokens: number;
+          prompt_tokens: number;
+          completion_tokens: number;
+          estimated: boolean;
+        };
+      }>("/analyze?date=" + jobDay, "POST", {});
+      await refresh(jobDay);
+      if (a.analysis_required) {
+        setNotice(a.warnings.join("；"));
+        return;
+      }
+      const usage = a.usage
+        ? `本次模型用量${a.usage.estimated ? "约 " : " "}${a.usage.total_tokens.toLocaleString("zh-CN")} tokens（输入 ${a.usage.prompt_tokens.toLocaleString("zh-CN")} / 输出 ${a.usage.completion_tokens.toLocaleString("zh-CN")}）。`
+        : "";
+      if (!a.created && !a.pending && !a.archived) {
+        setNotice(`AI 分析已完成，未发现可归纳的工作项。${usage}`);
+        return;
+      }
+      const warnings = a.warnings.length
+        ? ` 提示：${a.warnings.join("；")}`
+        : "";
+      setToast({
+        title: "AI 分析完成",
+        message: a.auto_imported
+          ? `已归纳 ${a.created} 项工作并写入今日清单，替换 ${a.archived} 项未审核草稿。${usage}${warnings}`
+          : `已生成 ${a.pending} 条候选工作项，尚未写入今日清单；确认后即可导入。${usage}${warnings}`,
+        actionLabel: "前往查看",
+        onAction: () => {
+          setToast(null);
+          if (a.auto_imported) {
+            setPage("daily");
+          } else {
+            setAnalysisView({
+              day: jobDay,
+              pending: a.pending_tasks || [],
+              stale: false,
+            });
+          }
+        },
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+  const openAnalysisResults = () => {
+    if (!report) return;
+    setAnalysisView({
+      day: report.date,
+      pending: report.conversations.analysis?.pending_tasks || [],
+      stale: report.conversations.stale,
     });
+  };
   const moveDay = (delta: number) => {
     const d = new Date(day + "T12:00:00");
     d.setDate(d.getDate() + delta);
@@ -366,7 +461,7 @@ function App() {
               ["daily", "每日日报", FileText],
               ["timeline", "活动时间线", Activity],
               ["enterprise", "企业工作项", Building2],
-              ["settings", "偏好设置", Settings2],
+              ["settings", "系统设置", Settings2],
             ] as const
           ).map(([key, label, Icon]) => (
             <button
@@ -426,7 +521,7 @@ function App() {
                 ? "活动时间线"
                 : page === "enterprise"
                   ? "企业工作项"
-                  : "偏好设置"}
+                  : "系统设置"}
           </span>
           <span className="private">
             <LockKeyhole size={13} /> 本地 SQLite 存储
@@ -464,19 +559,30 @@ function App() {
               </p>
             </div>
             {(page === "daily" || page === "timeline") && (
-              <button
-                className="primary"
-                disabled={!!busy}
-                onClick={collect}
-                title="读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
-              >
-                {busy ? (
-                  <LoaderCircle className="spin" size={17} />
-                ) : (
-                  <ScanLine size={17} />
-                )}
-                采集当天数据
-              </button>
+              <div className="heading-actions">
+                <button
+                  className="outline"
+                  disabled={!report}
+                  onClick={() => setCollectDay(day)}
+                  title="查看当天已采集的对话会话与 Git 提交；可勾选 Git 提交直接添加为工作项"
+                >
+                  <FolderGit2 size={16} />
+                  查看采集详情
+                </button>
+                <button
+                  className="primary"
+                  disabled={collecting || analyzing}
+                  onClick={collect}
+                  title="读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
+                >
+                  {collecting ? (
+                    <LoaderCircle className="spin" size={17} />
+                  ) : (
+                    <ScanLine size={17} />
+                  )}
+                  {collecting ? "正在采集…" : "采集当天数据"}
+                </button>
+              </div>
             )}
           </div>
           {collectProgress && (
@@ -555,16 +661,27 @@ function App() {
                 <Conversations
                   overview={report.conversations}
                   settings={settings}
-                  busy={!!busy}
+                  busy={collecting || analyzing}
+                  analyzing={analyzing}
+                  pendingCount={
+                    report.conversations.analysis?.pending_tasks?.length || 0
+                  }
                   legacyCount={report.legacy_count}
                   onAnalyze={analyzeDay}
                   onSettings={() => setPage("settings")}
+                  onViewPending={openAnalysisResults}
                   onSources={(values) =>
-                    run("正在更新分析范围", async () => {
-                      await api("/settings", "PUT", {
+                    run("正在更新采集与分析范围", async () => {
+                      const next: Settings = {
                         ...settings,
                         analysis_sources: values,
-                      });
+                      };
+                      for (const key of sourceKeys)
+                        next[key] = {
+                          ...next[key],
+                          enabled: values.includes(key),
+                        };
+                      await api("/settings", "PUT", next);
                       await refresh();
                     })
                   }
@@ -1102,6 +1219,8 @@ function App() {
               key={settingsEpoch}
               initial={settings}
               busy={!!busy}
+              tab={settingsTab}
+              onTab={setSettingsTab}
               onImported={() => {
                 void refresh();
               }}
@@ -1252,6 +1371,31 @@ function App() {
             )}
           </section>
         </div>
+      )}
+      {collectDay && (
+        <CollectDetailsModal
+          day={collectDay}
+          timezone={settings?.timezone || "Asia/Shanghai"}
+          onClose={() => setCollectDay(null)}
+          onAdded={async (created) => {
+            await refresh(collectDay);
+            if (created) setNotice(`已从 Git 提交添加 ${created} 个工作项。`);
+          }}
+        />
+      )}
+      {analysisView && (
+        <AnalysisResultsModal
+          day={analysisView.day}
+          pending={analysisView.pending}
+          stale={analysisView.stale}
+          onClose={() => setAnalysisView(null)}
+          onImported={async () => {
+            await refresh(analysisView.day);
+          }}
+        />
+      )}
+      {toast && (
+        <JobToast toast={toast} onClose={() => setToast(null)} />
       )}
     </div>
   );
@@ -1522,12 +1666,16 @@ function TaskEditor({
 function SettingsForm({
   initial,
   busy,
+  tab,
+  onTab,
   onSave,
   onImported,
 }: {
   onImported: () => void;
   initial: Settings;
   busy: boolean;
+  tab: SettingsTab;
+  onTab: (tab: SettingsTab) => void;
   onSave: (
     s: Settings,
     apiKey: string,
@@ -1541,10 +1689,22 @@ function SettingsForm({
     test?: boolean;
   } | null>(null);
   const [s, setS] = useState(initial),
-    [mapping, setMapping] = useState(
-      JSON.stringify(initial.project_mappings, null, 2),
-    ),
     [error, setError] = useState("");
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+  useEffect(() => {
+    const container = tabsRef.current;
+    const active = container?.querySelector<HTMLElement>(`[data-tab="${tab}"]`);
+    const update = () => {
+      if (!active) return;
+      setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    if (container) observer.observe(container);
+    if (active) observer.observe(active);
+    return () => observer.disconnect();
+  }, [tab]);
   const lines = (value: string) =>
     value
       .split("\n")
@@ -1576,42 +1736,50 @@ function SettingsForm({
           test,
         });
         try {
-          const m = JSON.parse(mapping);
-          if (
-            typeof m !== "object" ||
-            Array.isArray(m) ||
-            !m ||
-            Object.values(m).some((v) => typeof v !== "string")
-          )
-            throw new Error("项目映射需为路径到名称的 JSON 对象");
           setError("");
           const result = await onSave(
             {
               ...s,
-              project_mappings: m,
               git_roots: lines(s.git_roots.join("\n")),
+              project_mappings: s.project_mappings,
               excluded_paths: lines(s.excluded_paths.join("\n")),
               redact_patterns: lines(s.redact_patterns.join("\n")),
+              analysis_sources: [
+                ...sourceKeys.filter((key) => s[key].enabled),
+                ...(s.analysis_sources.includes("git") ? ["git"] : []),
+              ],
               codex: { ...s.codex, paths: lines(s.codex.paths.join("\n")) },
               claude_code: {
                 ...s.claude_code,
                 paths: lines(s.claude_code.paths.join("\n")),
               },
-              workbuddy: {
-                ...s.workbuddy,
-                paths: lines(s.workbuddy.paths.join("\n")),
+              workbuddy_cn: {
+                ...s.workbuddy_cn,
+                paths: lines(s.workbuddy_cn.paths.join("\n")),
+              },
+              workbuddy_intl: {
+                ...s.workbuddy_intl,
+                paths: lines(s.workbuddy_intl.paths.join("\n")),
               },
               deepseek_harness: {
                 ...s.deepseek_harness,
                 paths: lines(s.deepseek_harness.paths.join("\n")),
               },
-              qoder: {
-                ...s.qoder,
-                paths: lines(s.qoder.paths.join("\n")),
+              qoder_cn: {
+                ...s.qoder_cn,
+                paths: lines(s.qoder_cn.paths.join("\n")),
               },
-              trae: {
-                ...s.trae,
-                paths: lines(s.trae.paths.join("\n")),
+              qoder_intl: {
+                ...s.qoder_intl,
+                paths: lines(s.qoder_intl.paths.join("\n")),
+              },
+              trae_cn: {
+                ...s.trae_cn,
+                paths: lines(s.trae_cn.paths.join("\n")),
+              },
+              trae_intl: {
+                ...s.trae_intl,
+                paths: lines(s.trae_intl.paths.join("\n")),
               },
             },
             apiKey,
@@ -1631,165 +1799,265 @@ function SettingsForm({
         }
       }}
     >
-      <fieldset disabled={busy} className="settings-fields">
-        <section className="settings-section">
-          <h2>
-            <FolderGit2 size={19} /> 本地数据来源
-          </h2>
-          <p>
-            只读扫描 JSONL
-            会话文件。路径位于运行本服务的电脑上，每行填写一个路径。
-          </p>
-          {sourceKeys.map((key) => (
-            <div className="source-setting" key={key}>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={s[key].enabled}
-                  onChange={(e) =>
-                    setS({
-                      ...s,
-                      [key]: { ...s[key], enabled: e.target.checked },
-                    })
-                  }
-                />
-                {sources[key]}
-              </label>
-              <textarea
-                aria-label={sources[key] + " 路径"}
-                rows={3}
-                value={s[key].paths.join("\n")}
-                onChange={(e) =>
-                  setS({
-                    ...s,
-                    [key]: { ...s[key], paths: e.target.value.split("\n") },
-                  })
-                }
-              />
-            </div>
-          ))}
-          <label>
-            Git 仓库根目录（每行一个）
-            <textarea
-              value={s.git_roots.join("\n")}
-              onChange={(e) =>
-                setS({ ...s, git_roots: e.target.value.split("\n") })
-              }
-            />
-          </label>
-          <GitSettings settings={s} onChange={setS} />
-          <label>
-            目录到项目名称映射（JSON）
-            <textarea
-              rows={4}
-              value={mapping}
-              onChange={(e) => setMapping(e.target.value)}
-            />
-          </label>
-        </section>
-        <section className="settings-section">
-          <h2>
-            <Clock3 size={19} /> 工时与日期
-          </h2>
-          <div className="form-grid">
-            <label>
-              展示时区
-              <input
-                value={s.timezone}
-                onChange={(e) => setS({ ...s, timezone: e.target.value })}
-              />
-            </label>
-            <label>
-              每日目标（分钟）
-              <input
-                required
-                min="1"
-                max="1440"
-                type="number"
-                value={s.target_minutes}
-                onChange={(e) =>
-                  setS({ ...s, target_minutes: Number(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              增减步长（分钟）
-              <input
-                required
-                min="1"
-                max="120"
-                type="number"
-                value={s.step_minutes}
-                onChange={(e) =>
-                  setS({ ...s, step_minutes: Number(e.target.value) })
-                }
-              />
-            </label>
-          </div>
-          <p>
-            默认目标为 480
-            分钟（8h）；修改目标或时区会撤销已有日报确认，需重新审核。
-          </p>
-        </section>
-        <section className="settings-section">
-          <h2>
-            <ShieldCheck size={19} /> 隐私与可选模型
-          </h2>
-          <label>
-            排除的敏感目录（每行一个）
-            <textarea
-              value={s.excluded_paths.join("\n")}
-              onChange={(e) =>
-                setS({ ...s, excluded_paths: e.target.value.split("\n") })
-              }
-            />
-          </label>
-          <label>
-            附加脱敏正则（每行一条）
-            <textarea
-              value={s.redact_patterns.join("\n")}
-              onChange={(e) =>
-                setS({ ...s, redact_patterns: e.target.value.split("\n") })
-              }
-            />
-          </label>
-          <div className="privacy-info">
-            <LockKeyhole size={19} />
-            <p>
-              本地先统计每日会话和消息。开启 AI
-              后，按实际工作目标归纳全天对话，追问、修改、测试合并处理，不自动凑满工时。
-            </p>
-          </div>
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={s.llm_enabled}
-              onChange={(e) => setS({ ...s, llm_enabled: e.target.checked })}
-            />
-            我了解发送范围，显式开启模型分析
-          </label>
-          <ModelSettings
-            settings={s}
-            onChange={(next) => {
-              setS(next);
-              setFeedback(null);
-            }}
-            apiKey={apiKey}
-            onKeyChange={(value) => {
-              setApiKey(value);
-              setFeedback(null);
-            }}
-            busy={busy}
-            saved={initial}
-            feedback={feedback}
-          />
-        </section>
-        <WorkflowSettings
-          settings={s}
-          onChange={setS}
-          onImported={onImported}
+      <div
+        className="settings-tabs"
+        role="tablist"
+        aria-label="系统设置分类"
+        ref={tabsRef}
+      >
+        {settingsTabs.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            id={`settings-tab-${key}`}
+            data-tab={key}
+            className="settings-tab"
+            aria-selected={tab === key}
+            aria-controls={`settings-pane-${key}`}
+            onClick={() => onTab(key)}
+          >
+            <Icon size={15} />
+            {label}
+          </button>
+        ))}
+        <span
+          className="settings-tab-indicator"
+          style={{ left: indicator.left, width: indicator.width }}
+          aria-hidden="true"
         />
+      </div>
+      <fieldset disabled={busy} className="settings-fields">
+        <div className="settings-content">
+          <div
+            className="settings-pane"
+            key={tab}
+            id={`settings-pane-${tab}`}
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${tab}`}
+          >
+            {tab === "sources" && (
+              <>
+                <section className="settings-section">
+                  <h2>
+                    <FolderGit2 size={19} /> 本地数据来源
+                  </h2>
+                  <p>
+                    只读扫描 JSONL
+                    会话文件。所有 Agent 都会列出，勾选要采集的来源；国内版与国际版分开配置，未检测到的展开后填写路径。修改来源只会影响后续采集与 AI
+                    分析，不会删除当天已生成的工作项。
+                  </p>
+                  <SourcePicker settings={s} onChange={setS} />
+                </section>
+                <section className="settings-section">
+                  <h2>
+                    <FolderGit2 size={19} /> Git 仓库
+                  </h2>
+                  <p>
+                    选择项目上级目录后扫描，最多向下 3
+                    层。提交只作为证据，不按条生成工作项。
+                  </p>
+                  <GitSettings settings={s} onChange={setS} />
+                </section>
+              </>
+            )}
+            {tab === "time" && (
+              <>
+                <section className="settings-section">
+                  <h2>
+                    <Clock3 size={19} /> 工时与日期
+                  </h2>
+                  <div className="form-grid">
+                    <label>
+                      展示时区
+                      <input
+                        value={s.timezone}
+                        onChange={(e) =>
+                          setS({ ...s, timezone: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      每日目标（分钟）
+                      <input
+                        required
+                        min="1"
+                        max="1440"
+                        type="number"
+                        value={s.target_minutes}
+                        onChange={(e) =>
+                          setS({ ...s, target_minutes: Number(e.target.value) })
+                        }
+                      />
+                    </label>
+                    <label>
+                      增减步长（分钟）
+                      <input
+                        required
+                        min="1"
+                        max="120"
+                        type="number"
+                        value={s.step_minutes}
+                        onChange={(e) =>
+                          setS({ ...s, step_minutes: Number(e.target.value) })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <p>
+                    默认目标为 480
+                    分钟（8h）；修改目标或时区会撤销已有日报确认，需重新审核。
+                  </p>
+                </section>
+                <section className="settings-section">
+                  <h2>
+                    <Activity size={19} /> 活跃时间口径
+                  </h2>
+                  <label>
+                    活跃片段的相邻消息阈值（分钟）
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={s.activity_gap_minutes}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          activity_gap_minutes: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                  <p>
+                    仅作低置信度时间参考，超过阈值的空闲间隔不累计；并行片段取并集。跨度或工具运行时长不等于人的实际投入。
+                  </p>
+                </section>
+                <section className="settings-section">
+                  <h2>
+                    <ShieldCheck size={19} /> 隐私与脱敏
+                  </h2>
+                  <p>
+                    排除的目录不会采集；脱敏正则会从写入本机的对话文本中移除匹配内容。
+                  </p>
+                  <label>
+                    排除的敏感目录（每行一个）
+                    <textarea
+                      value={s.excluded_paths.join("\n")}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          excluded_paths: e.target.value.split("\n"),
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    附加脱敏正则（每行一条）
+                    <textarea
+                      value={s.redact_patterns.join("\n")}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          redact_patterns: e.target.value.split("\n"),
+                        })
+                      }
+                    />
+                  </label>
+                </section>
+              </>
+            )}
+            {tab === "model" && (
+              <section className="settings-section">
+                <h2>
+                  <Sparkles size={19} /> 模型分析
+                </h2>
+                <div className="privacy-info">
+                  <LockKeyhole size={19} />
+                  <p>
+                    本地先统计每日会话和消息。开启 AI
+                    后，按实际工作目标归纳全天对话，追问、修改、测试合并处理，不自动凑满工时。
+                  </p>
+                </div>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={s.llm_enabled}
+                    onChange={(e) =>
+                      setS({ ...s, llm_enabled: e.target.checked })
+                    }
+                  />
+                  我了解发送范围，显式开启模型分析
+                </label>
+                <ModelSettings
+                  settings={s}
+                  onChange={(next) => {
+                    setS(next);
+                    setFeedback(null);
+                  }}
+                  apiKey={apiKey}
+                  onKeyChange={(value) => {
+                    setApiKey(value);
+                    setFeedback(null);
+                  }}
+                  busy={busy}
+                  saved={initial}
+                  feedback={feedback}
+                />
+              </section>
+            )}
+            {tab === "operation" && (
+              <section className="settings-section">
+                <h2>
+                  <SlidersHorizontal size={19} /> 操作设置
+                </h2>
+                <p>控制 AI 分析结果如何进入今日工作清单。</p>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={s.auto_import_analysis}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        auto_import_analysis: e.target.checked,
+                      })
+                    }
+                  />
+                  AI 分析完成后直接填入今日工作清单
+                </label>
+                <p>
+                  未勾选（默认）：分析只生成候选，在日报的「分析结果」中逐条查看、修改后再导入。勾选后沿用直接写入方式，未审核的旧草稿会被替换；人工事项、已审核和固定工时的记录始终保留。
+                </p>
+              </section>
+            )}
+            {tab === "workflow" && (
+              <>
+                <WorkflowSettings settings={s} onChange={setS} />
+                <HistoryPanel
+                  settings={s}
+                  onChange={setS}
+                  onImported={onImported}
+                />
+              </>
+            )}
+            {tab === "enterprise" && (
+              <EnterpriseSettings settings={s} onChange={setS} />
+            )}
+          </div>
+        </div>
         {error && <div className="alert error">{error}</div>}
+        {feedback && tab !== "model" && (
+          <div
+            className={
+              "alert settings-save-feedback" +
+              (feedback.state === "error" ? " error" : "")
+            }
+            role={feedback.state === "error" ? "alert" : "status"}
+            aria-label="设置保存反馈"
+            aria-live={feedback.state === "error" ? "assertive" : "polite"}
+          >
+            {feedback.message}
+          </div>
+        )}
         <div className="settings-actions">
           <button className="primary" disabled={busy} type="submit">
             <Check size={16} />

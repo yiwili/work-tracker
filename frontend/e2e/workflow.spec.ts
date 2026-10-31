@@ -88,7 +88,8 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
   await expect(
     page.getByText("3 passed in 1.23s", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "模型分析" }).click();
   await expect(
     page.getByLabel("我了解发送范围，显式开启模型分析"),
   ).toBeChecked();
@@ -142,7 +143,8 @@ test("provider presets, encrypted key input, test connection and CCSwitch option
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "模型分析" }).click();
   await page.getByLabel("AI 分析供应商").selectOption("deepseek");
   await expect(page.getByLabel("完整 API 接口 URL")).toHaveValue(
     "https://api.deepseek.com/chat/completions",
@@ -176,7 +178,8 @@ test("connection feedback stays beside button during failure and successful retr
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "模型分析" }).click();
   await page.getByLabel("AI 分析供应商").selectOption("deepseek");
   await page
     .getByLabel("API Key（留空保留已保存的密钥）")
@@ -224,7 +227,8 @@ test("settings save failure shows local reason and does not test the unsaved con
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "模型分析" }).click();
   await page.getByLabel("AI 分析供应商").selectOption("deepseek");
   const key = page.getByLabel("API Key（留空保留已保存的密钥）");
   await key.fill("unsaved-fixture-key");
@@ -249,28 +253,23 @@ test("settings save failure shows local reason and does not test the unsaved con
   expect(tested).toBe(false);
 });
 
-for (const invalid of ["url", "mapping"] as const) {
-  test(`invalid ${invalid} settings explain why connection testing did not start`, async ({
-    page,
-  }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: "偏好设置" }).click();
-    await page.getByLabel("AI 分析供应商").selectOption("deepseek");
-    if (invalid === "url")
-      await page.getByLabel("完整 API 接口 URL").fill("invalid-url");
-    else await page.getByLabel("目录到项目名称映射（JSON）").fill("[]");
-    let writes = 0;
-    page.on("request", (request) => {
-      if (request.method() !== "GET") writes++;
-    });
-    await page.getByRole("button", { name: "保存并测试连接" }).click();
-    const feedback = page.getByRole("alert", { name: "模型连接反馈" });
-    await expect(feedback).toContainText(
-      invalid === "url" ? "无效字段" : "项目映射需为路径到名称",
-    );
-    expect(writes).toBe(0);
+test("invalid url settings explain why connection testing did not start", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "模型分析" }).click();
+  await page.getByLabel("AI 分析供应商").selectOption("deepseek");
+  await page.getByLabel("完整 API 接口 URL").fill("invalid-url");
+  let writes = 0;
+  page.on("request", (request) => {
+    if (request.method() !== "GET") writes++;
   });
-}
+  await page.getByRole("button", { name: "保存并测试连接" }).click();
+  const feedback = page.getByRole("alert", { name: "模型连接反馈" });
+  await expect(feedback).toContainText("无效字段");
+  expect(writes).toBe(0);
+});
 
 test("AI time allocation preserves pinned communication and remains a draft", async ({
   page,
@@ -322,7 +321,8 @@ test("AI time allocation preserves pinned communication and remains a draft", as
   ).toHaveCount(0);
   await page.reload();
   await expect(page.getByText("AI工时分配草稿", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "提示词与风格" }).click();
   await page.getByText("业务工作项归并与标题", { exact: true }).click();
   await page
     .getByLabel("业务工作项归并与标题补充提示词")
@@ -330,7 +330,7 @@ test("AI time allocation preserves pinned communication and remains a draft", as
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
     page
-      .getByRole("status", { name: "模型连接反馈" })
+      .getByRole("status", { name: "设置保存反馈" })
       .filter({ hasText: "设置已保存" }),
   ).toBeVisible();
 });
@@ -385,7 +385,8 @@ test("file import generates reusable style template and Gitee sync enters histor
   page,
 }) => {
   await page.goto("/?date=2026-10-20");
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "提示词与风格" }).click();
   await page
     .getByLabel("历史文件（JSON / CSV / Excel，最大20MB）")
     .setInputFiles({
@@ -426,7 +427,8 @@ test("file import generates reusable style template and Gitee sync enters histor
     await page.request.get("/api/tasks?date=2026-10-20").then((r) => r.json()),
   ).toEqual([]);
   await page.reload();
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await page.getByRole("tab", { name: "提示词与风格" }).click();
   await expect(
     page.getByText("查看历史库（2 条）", { exact: true }),
   ).toBeVisible();
@@ -507,7 +509,8 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
   page,
 }) => {
   await page.goto("/?date=2026-10-18");
-  await page.getByRole("button", { name: "偏好设置", exact: true }).click();
+  await page.getByRole("button", { name: "系统设置", exact: true }).click();
+  await page.getByRole("tab", { name: "企业同步" }).click();
   await page.getByRole("button", { name: "读取企业列表", exact: true }).click();
   await page.getByLabel("目标企业", { exact: true }).selectOption("7");
   await page.getByRole("button", { name: "读取企业项目", exact: true }).click();
@@ -528,7 +531,8 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
     page.getByRole("status").filter({ hasText: "企业项目和映射已保存" }),
   ).toBeVisible();
   await page.reload();
-  await page.getByRole("button", { name: "偏好设置", exact: true }).click();
+  await page.getByRole("button", { name: "系统设置", exact: true }).click();
+  await page.getByRole("tab", { name: "企业同步" }).click();
   await expect(page.getByLabel("映射文字 2", { exact: true })).toHaveValue(
     "批量打印",
   );
@@ -648,16 +652,25 @@ test("Git author selection overrides wrong config and filters previously collect
     },
   });
   await page.goto("/?date=2026-10-24");
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
   await expect(
     page.getByRole("heading", { name: "Git 提交用户" }),
   ).toBeVisible();
   const author = page.getByLabel(`Git 提交作者 ${repo.root}`, { exact: true });
+  const expandRepo = async () => {
+    await page
+      .getByRole("button", { name: "展开 git-user-project 设置", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "展开 git-user-project 设置", exact: true }),
+    ).toHaveAttribute("aria-expanded", "true");
+  };
+  await expandRepo();
   await expect(author).toHaveValue("inherit");
   const save = async () => {
     await page.getByRole("button", { name: "保存设置", exact: true }).click();
     await expect(
-      page.getByRole("status", { name: "模型连接反馈" }),
+      page.getByRole("status", { name: "设置保存反馈" }),
     ).toContainText("设置已保存");
     await expect(
       page.getByRole("button", { name: "保存设置", exact: true }),
@@ -670,7 +683,11 @@ test("Git author selection overrides wrong config and filters previously collect
     .fill("wrong@example.invalid");
   await save();
   await page.reload();
-  await page.getByRole("button", { name: "偏好设置" }).click();
+  await page.getByRole("button", { name: "系统设置" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Git 提交用户" }),
+  ).toBeVisible();
+  await expandRepo();
   await expect(author).toHaveValue("custom");
   await expect(page.getByLabel("git-user-project 作者邮箱")).toHaveValue(
     "wrong@example.invalid",
@@ -715,4 +732,104 @@ test("Git author selection overrides wrong config and filters previously collect
       .map((e: { summary: string }) => e.summary),
   ).toEqual(["Local User fixture work"]);
   await page.request.put("/api/settings", { data: settings });
+});
+
+test("collect details modal lets the user adopt a Git commit as a work item", async ({
+  page,
+}) => {
+  const repositories = await (
+    await page.request.get("/api/repositories")
+  ).json();
+  const repo = repositories.find(
+    (r: { project: string }) => r.project === "git-user-project",
+  );
+  expect(repo).toBeTruthy();
+  const original = await (await page.request.get("/api/settings")).json();
+  await page.request.put("/api/settings", {
+    data: {
+      ...original,
+      git_roots: [repo.root],
+      git_author: null,
+      git_author_overrides: {},
+    },
+  });
+  try {
+    await page.goto("/?date=2026-10-24");
+    await page
+      .getByRole("button", { name: "采集当天数据", exact: true })
+      .click();
+    const toast = page.locator(".job-toast");
+    await expect(toast).toContainText("采集完成");
+    await toast.getByRole("button", { name: "查看采集详情" }).click();
+    const dialog = page.getByRole("dialog", { name: "采集详情" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Git 本地提交")).toBeVisible();
+    await expect(
+      dialog.getByLabel("选择提交 Local User fixture work"),
+    ).not.toBeChecked();
+    await dialog.getByLabel("选择提交 Local User fixture work").check();
+    await dialog.getByRole("button", { name: "添加选中 1 条" }).click();
+    await expect(dialog.getByText("已添加 1 个工作项")).toBeVisible();
+    await expect(dialog.getByText("已加入工作项")).toBeVisible();
+    await expect(
+      dialog.getByLabel("选择提交 Local User fixture work"),
+    ).toBeDisabled();
+    await dialog.getByRole("button", { name: "关闭采集详情" }).click();
+    await expect(
+      page.getByRole("button", {
+        name: "Local User fixture work",
+        exact: true,
+      }),
+    ).toBeVisible();
+  } finally {
+    await page.request.put("/api/settings", { data: original });
+  }
+});
+
+test("deferred AI analysis waits for the user to review and import candidates", async ({
+  page,
+}) => {
+  const original = await (await page.request.get("/api/settings")).json();
+  await page.request.put("/api/settings", {
+    data: { ...original, auto_import_analysis: false },
+  });
+  try {
+    await page.goto("/?date=2026-10-25");
+    await page
+      .getByRole("button", { name: "采集当天数据", exact: true })
+      .click();
+    const collectToast = page.locator(".job-toast");
+    await expect(collectToast).toContainText("采集完成");
+    await collectToast.getByRole("button", { name: "关闭提示" }).click();
+    await expect(page.locator("tbody tr")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "AI 分析全天对话", exact: true })
+      .click();
+    const analysisToast = page.locator(".job-toast");
+    await expect(analysisToast).toContainText("AI 分析完成");
+    await expect(analysisToast).toContainText("尚未写入今日清单");
+    await expect(
+      analysisToast.getByRole("button", { name: "前往查看" }),
+    ).toBeVisible();
+    await analysisToast.getByRole("button", { name: "关闭提示" }).click();
+    await expect(page.locator("tbody tr")).toHaveCount(0);
+    await page.getByRole("button", { name: "分析结果（1）" }).click();
+    const dialog = page.getByRole("dialog", { name: "AI 分析结果" });
+    await expect(dialog).toBeVisible();
+    const rowCheckbox = dialog.getByLabel("导入 修复订单查询接口超时");
+    await expect(rowCheckbox).toBeChecked();
+    await dialog.getByLabel("工作项标题").fill("优化档案检索筛选条件");
+    await dialog.getByRole("button", { name: "导入选中的 1 项" }).click();
+    await expect(dialog.getByText("已导入 1 项工作")).toBeVisible();
+    await dialog.getByRole("button", { name: "关闭分析结果" }).click();
+    await expect(
+      page.getByRole("button", {
+        name: "优化档案检索筛选条件",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "分析结果" })).toBeVisible();
+  } finally {
+    await page.request.put("/api/settings", { data: original });
+  }
 });

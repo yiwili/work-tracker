@@ -81,8 +81,12 @@ export function EnterpriseSettings({
       <p>
         用于把本地工作项创建到公司企业项目。预先设置标题与项目映射，日报中即可一键预览并提交。普通仓库历史抓取使用上方独立配置。
       </p>
+      <p className="muted">
+        企业版请求通过 Gitee 官方 mcp-gitee-ent
+        客户端转发（需本机安装 Node.js 18+），令牌只通过子进程环境变量传递，不写入命令行或日志。
+      </p>
       <label>
-        企业版 Token（留空保留）
+        MCP 企业令牌（留空保留）
         <input
           type="password"
           autoComplete="new-password"
@@ -91,7 +95,7 @@ export function EnterpriseSettings({
           placeholder={
             configured
               ? "企业版凭据已配置"
-              : "填写具有企业项目读取和工作项创建权限的Token"
+              : "填写个人设置中生成的 MCP 企业令牌"
           }
         />
       </label>

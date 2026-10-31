@@ -89,10 +89,13 @@ export type Settings = {
   step_minutes: number;
   claude_code: SourceConfig;
   codex: SourceConfig;
-  workbuddy: SourceConfig;
+  workbuddy_cn: SourceConfig;
+  workbuddy_intl: SourceConfig;
   deepseek_harness: SourceConfig;
-  qoder: SourceConfig;
-  trae: SourceConfig;
+  qoder_cn: SourceConfig;
+  qoder_intl: SourceConfig;
+  trae_cn: SourceConfig;
+  trae_intl: SourceConfig;
   git_roots: string[];
   git_author: GitAuthor | null;
   git_author_overrides: Record<string, GitAuthor>;
@@ -106,6 +109,7 @@ export type Settings = {
   llm_provider: "deepseek" | "glm" | "glm-coding" | "ccswitch" | "custom";
   llm_protocol: "openai" | "anthropic";
   ccswitch_config_path: string;
+  auto_import_analysis: boolean;
   analysis_sources: string[];
   agent_prompts: Record<string, string>;
   title_examples: string[];
@@ -126,6 +130,18 @@ export type Settings = {
     since: string;
   };
   gitee_enterprise: GiteeEnterpriseConfig;
+};
+
+export type PendingTask = {
+  fingerprint: string;
+  title: string;
+  details: string;
+  project: string;
+  category: string;
+  status: string;
+  confidence: string;
+  evidence_level: string;
+  evidence_ids: string[];
 };
 
 export type ConversationOverview = {
@@ -166,6 +182,24 @@ export type ConversationOverview = {
     provider: string;
     tasks: number;
     model_requests: number;
+    pending_tasks?: PendingTask[];
+    auto_imported?: boolean;
+    imported_at?: string | null;
+    usage?: null | {
+      calls: number;
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      estimated: boolean;
+      stages: {
+        stage: string;
+        label: string;
+        calls: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+        estimated: boolean;
+      }[];
+    };
     scope?: {
       work_user_messages: number;
       excluded_user_messages: number;

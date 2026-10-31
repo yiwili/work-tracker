@@ -1,18 +1,14 @@
 import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import type { Settings } from "./types";
-import { HistoryPanel } from "./HistoryPanel";
-import { EnterpriseSettings } from "./EnterpriseSettings";
 type Agent = { name: string; default: string; effective: string };
 
 export function WorkflowSettings({
   settings: s,
   onChange,
-  onImported,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
-  onImported: () => void;
 }) {
   const [agents, setAgents] = useState<Record<string, Agent>>({});
   useEffect(() => {
@@ -53,23 +49,6 @@ export function WorkflowSettings({
           </label>
         </details>
       ))}
-      <HistoryPanel settings={s} onChange={onChange} onImported={onImported} />
-      <EnterpriseSettings settings={s} onChange={onChange} />
-      <label>
-        活跃片段的相邻消息阈值（分钟）
-        <input
-          type="number"
-          min="1"
-          max="30"
-          value={s.activity_gap_minutes}
-          onChange={(e) =>
-            onChange({ ...s, activity_gap_minutes: Number(e.target.value) })
-          }
-        />
-      </label>
-      <p>
-        仅作低置信度时间参考，超过阈值的空闲间隔不累计；并行片段取并集。跨度或工具运行时长不等于人的实际投入。
-      </p>
     </section>
   );
 }

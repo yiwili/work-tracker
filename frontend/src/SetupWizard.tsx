@@ -6,6 +6,8 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   ExternalLink,
   FolderGit2,
@@ -20,7 +22,10 @@ import {
 import type { GiteeProgram, Settings } from "./types";
 import { api } from "./api";
 import { enterpriseApi } from "./EnterpriseSettings";
+import { GitSettings } from "./GitSettings";
 import { ModelSelect, presets } from "./ModelSettings";
+import { SourcePicker, sourceKeys, sourceLabels } from "./SourcePicker";
+import { SourceIcon } from "./SourceIcon";
 
 type Doctor = {
   paths: { source: string; path: string; exists: boolean }[];
@@ -43,32 +48,8 @@ type EnterpriseStatus = {
 type Company = { id: number; name: string };
 type Feedback = { tone: "ok" | "error" | "info"; text: string };
 
-const stepKeys = [
-  "sources",
-  "model",
-  "git",
-  "gitee",
-  "enterprise",
-  "done",
-] as const;
+const stepKeys = ["sources", "model", "git", "gitee", "done"] as const;
 type StepKey = (typeof stepKeys)[number];
-
-const sourceLabels: Record<string, string> = {
-  codex: "Codex",
-  claude_code: "Claude Code",
-  workbuddy: "WorkBuddy（国内外版）",
-  deepseek_harness: "DeepSeek Harness",
-  qoder: "Qoder（国内外版）",
-  trae: "Trae（会话摘要）",
-};
-const sourceKeys = [
-  "claude_code",
-  "codex",
-  "workbuddy",
-  "deepseek_harness",
-  "qoder",
-  "trae",
-] as const;
 
 export function SetupWizard({
   settings,
@@ -83,12 +64,7 @@ export function SetupWizard({
   const [maxStep, setMaxStep] = useState(0);
   const [s, setS] = useState(settings);
   const [apiKey, setApiKey] = useState("");
-  const [gitText, setGitText] = useState(settings.git_roots.join("\n"));
-  const [mapText, setMapText] = useState(
-    Object.entries(settings.project_mappings)
-      .map(([path, name]) => `${path}=${name}`)
-      .join("\n"),
-  );
+  const [detectedSources, setDetectedSources] = useState<string[]>([]);
   const [giteeToken, setGiteeToken] = useState("");
   const [entToken, setEntToken] = useState("");
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -99,6 +75,9 @@ export function SetupWizard({
   const [giteeStatus, setGiteeStatus] = useState<GiteeStatus | null>(null);
   const [entStatus, setEntStatus] = useState<EnterpriseStatus | null>(null);
   const [skipped, setSkipped] = useState<Partial<Record<StepKey, boolean>>>({});
+  const [summaryOpen, setSummaryOpen] = useState<
+    Partial<Record<StepKey, boolean>>
+  >({});
 
   const loadStatus = async () => {
     const [d, m, g, e] = await Promise.all([
@@ -119,7 +98,12 @@ export function SetupWizard({
     );
   }, []);
 
-  const sourcesReady = !!doctor?.paths.some((p) => p.exists);
+  const sourceDetected = (key: (typeof sourceKeys)[number]) =>
+    detectedSources.includes(key) ||
+    !!doctor?.paths.some((item) => item.source === key && item.exists);
+  const sourcesReady = sourceKeys.some(
+    (key) => s[key].enabled && sourceDetected(key),
+  );
   const modelReady = !!(modelStatus?.configured && s.llm_enabled);
   const gitReady = s.git_roots.filter(Boolean).length > 0;
   const giteeReady = !!giteeStatus?.configured;
@@ -130,25 +114,132 @@ export function SetupWizard({
     sources: sourcesReady,
     model: modelReady,
     git: gitReady,
-    gitee: giteeReady,
-    enterprise: entReady,
+    gitee: giteeReady || entReady,
     done: false,
   };
   const hints: Record<StepKey, string> = {
-    sources: sourcesReady ? "已就绪" : "待确认",
+    sources: sourcesReady ? "已就绪" : "待检测",
     model: modelReady ? "已开启" : "唯一必填",
     git: gitReady ? `${s.git_roots.filter(Boolean).length} 个仓库` : "可选",
-    gitee: giteeReady ? "已配置" : "可选",
-    enterprise: entReady ? "已配置" : "可选",
+    gitee: giteeReady || entReady ? "已配置" : "可选",
     done: "查看结果",
   };
   const titles: Record<StepKey, string> = {
     sources: "采集来源",
     model: "AI 模型",
     git: "Git 仓库",
-    gitee: "Gitee 历史",
-    enterprise: "企业工作项",
+    gitee: "Gitee 接入",
     done: "完成",
+  };
+
+  const summaryDetail = (key: StepKey) => {
+    switch (key) {
+      case "sources": {
+        const active = sourceKeys.filter(
+          (item) => s[item].enabled && sourceDetected(item),
+        );
+        if (!active.length) return <p>没有启用任何已检测到的来源。</p>;
+        return active.map((item) => (
+          <p key={item}>
+            <strong className="source-check-name">
+              <SourceIcon source={item} size={15} />
+              {sourceLabels[item]}
+            </strong>
+            <code>{s[item].paths.filter(Boolean).join("；") || "默认路径"}</code>
+          </p>
+        ));
+      }
+      case "model":
+        return (
+          <>
+            <p>
+              <strong>连接</strong>
+              <code>
+                {modelStatus?.configured
+                  ? `${modelStatus.model} · ${modelStatus.endpoint}`
+                  : modelStatus?.error || "尚未保存连接配置"}
+              </code>
+            </p>
+            <p>
+              <strong>分析开关</strong>
+              <span>{s.llm_enabled ? "已开启" : "未开启"}</span>
+            </p>
+            <p>
+              <strong>填入方式</strong>
+              <span>
+                {s.auto_import_analysis
+                  ? "分析后直接写入今日清单"
+                  : "先生成候选，确认后导入"}
+              </span>
+            </p>
+          </>
+        );
+      case "git": {
+        const roots = s.git_roots.filter(Boolean);
+        return (
+          <>
+            {roots.length ? (
+              roots.map((root) => {
+                const mapping = Object.entries(s.project_mappings).find(
+                  ([path]) =>
+                    path.replace(/[\\/]+$/, "").toLowerCase() ===
+                    root.replace(/[\\/]+$/, "").toLowerCase(),
+                );
+                return (
+                  <p key={root}>
+                    <strong>
+                      {mapping?.[1] ||
+                        root.split(/[\\/]/).filter(Boolean).at(-1) ||
+                        root}
+                    </strong>
+                    <code>{root}</code>
+                  </p>
+                );
+              })
+            ) : (
+              <p>未添加 Git 仓库。</p>
+            )}
+            <p>
+              <strong>提交作者</strong>
+              <span>
+                {s.git_author
+                  ? [s.git_author.name, s.git_author.email && `<${s.git_author.email}>`]
+                      .filter(Boolean)
+                      .join(" ") || "已自定义"
+                  : "自动使用各仓库本地 Git 身份"}
+              </span>
+            </p>
+            <p>
+              <strong>仓库级覆盖</strong>
+              <span>
+                {Object.keys(s.git_author_overrides).length
+                  ? `${Object.keys(s.git_author_overrides).length} 个仓库已单独指定`
+                  : "无"}
+              </span>
+            </p>
+          </>
+        );
+      }
+      case "gitee":
+        return (
+          <>
+            <p>
+              <strong>历史 Issue</strong>
+              <span>{giteeReady ? "私人令牌已保存" : "未配置"}</span>
+            </p>
+            <p>
+              <strong>企业工作项</strong>
+              <span>
+                {entReady
+                  ? `企业 ID ${s.gitee_enterprise.enterprise_id}`
+                  : "未配置"}
+              </span>
+            </p>
+          </>
+        );
+      default:
+        return null;
+    }
   };
 
   const go = (next: number) => {
@@ -178,9 +269,14 @@ export function SetupWizard({
   };
   const saveSources = () =>
     run("正在保存采集来源", async () => {
-      // 启用了哪个来源就把它纳入分析，否则采到了也不会参与归纳。
       const enabled = sourceKeys.filter((key) => s[key].enabled);
-      if (!enabled.length) throw new Error("请至少启用一个会话来源");
+      if (!enabled.length)
+        throw new Error("请至少勾选一个采集来源");
+      const missing = enabled.filter((key) => !sourceDetected(key));
+      if (missing.length)
+        throw new Error(
+          `以下来源未检测到路径：${missing.map((key) => sourceLabels[key]).join("、")}。请展开填写路径后重新检测，或取消勾选。`,
+        );
       const next = {
         ...s,
         analysis_sources: [
@@ -194,7 +290,7 @@ export function SetupWizard({
       go(1);
       setFeedback({
         tone: "ok",
-        text: "采集来源已保存，已启用的来源会参与 AI 分析。Git 提交证据可在下一步添加。",
+        text: "采集来源已保存，已勾选的来源会参与 AI 分析。Git 提交证据可在下一步添加。",
       });
     });
   const saveModel = () =>
@@ -229,49 +325,13 @@ export function SetupWizard({
         text: "模型连接测试成功，已开启模型分析。",
       });
     });
-  const parseMappings = () => {
-    const mappings: Record<string, string> = {};
-    for (const raw of mapText.split("\n")) {
-      const line = raw.trim();
-      const at = line.indexOf("=");
-      if (at <= 0) continue;
-      const path = line.slice(0, at).trim(),
-        name = line.slice(at + 1).trim();
-      if (path && name) mappings[path] = name;
-    }
-    return mappings;
-  };
   const saveGit = () =>
     run("正在保存仓库配置", async () => {
-      const next = {
-        ...s,
-        git_roots: gitText
-          .split("\n")
-          .map((x) => x.trim())
-          .filter(Boolean),
-        project_mappings: parseMappings(),
-      };
-      await saveSettings(next);
+      await saveSettings(s);
       go(3);
       setFeedback({
         tone: "ok",
-        text: "Git 仓库与项目映射已保存。提交只作为证据，不按条生成工作项。",
-      });
-    });
-  const saveGitee = () =>
-    run("正在保存 Gitee 凭据", async () => {
-      if (giteeToken.trim())
-        await api("/gitee/token", "POST", { api_key: giteeToken.trim() });
-      await saveSettings(s);
-      setGiteeToken("");
-      const status = await loadStatus();
-      const configured = !!giteeToken.trim() || !!status.gitee.configured;
-      if (configured) go(4);
-      setFeedback({
-        tone: configured ? "ok" : "error",
-        text: configured
-          ? "Gitee 历史抓取配置已保存。"
-          : "尚未保存 Token，历史 Issue 导入仍不可用。",
+        text: "Git 仓库与项目名称已保存。提交只作为证据，不按条生成工作项。",
       });
     });
   const saveEntToken = () =>
@@ -293,33 +353,33 @@ export function SetupWizard({
           : "Token 有效但没有可访问的企业，请确认企业成员身份与 API 权限。",
       });
     });
-  const saveEnterprise = () =>
-    run("正在保存企业配置", async () => {
+  const saveGitee = () =>
+    run("正在保存 Gitee 配置", async () => {
+      if (giteeToken.trim())
+        await api("/gitee/token", "POST", { api_key: giteeToken.trim() });
+      if (entToken.trim())
+        await enterpriseApi("token", { api_key: entToken.trim() });
       await saveSettings(s);
-      await loadStatus();
-      go(5);
+      setGiteeToken("");
+      setEntToken("");
+      const status = await loadStatus();
+      const configured =
+        status.gitee.configured || status.enterprise.configured;
+      go(4);
       setFeedback({
-        tone: "ok",
-        text: "企业配置已保存；标题与项目映射可在「企业工作项」页面继续完善。",
+        tone: configured ? "ok" : "info",
+        text: configured
+          ? "Gitee 接入配置已保存，可在系统设置或企业工作项页面继续完善。"
+          : "尚未填写 Gitee 凭据，可稍后在系统设置中补充。",
       });
     });
 
-  const pathText = (source: (typeof sourceKeys)[number]) =>
-    s[source].paths.join("\n");
-  const setPaths = (
-    source: (typeof sourceKeys)[number],
-    value: string,
-  ) =>
-    setS({
-      ...s,
-      [source]: {
-        ...s[source],
-        paths: value
-          .split("\n")
-          .map((x) => x.trim())
-          .filter(Boolean),
-      },
-    });
+  useEffect(() => {
+    if (step !== 3 || !entStatus?.configured || companies.length) return;
+    enterpriseApi("enterprises", undefined, "GET")
+      .then((list) => setCompanies(list as Company[]))
+      .catch(() => undefined);
+  }, [step, entStatus?.configured, companies.length]);
 
   const footer = (options: {
     next: number;
@@ -373,59 +433,14 @@ export function SetupWizard({
               <ScanLine size={18} /> 第 1 步 · 确认采集来源
             </h3>
             <p>
-              工具只读取本机已有的 AI 对话记录，不会修改源文件。默认路径已经填好，确认目录存在即可；没有用到的来源可以关闭。
+              工具只读取本机已有的 AI 对话记录，不会修改源文件。所有 Agent
+              都会列出，勾选要采集的来源；未检测到的展开后可填写路径。
             </p>
-            {doctor?.paths.length ? (
-              <div className="setup-status">
-                {doctor.paths.map((item) => (
-                  <div
-                    key={item.source + item.path}
-                    className={item.exists ? "ok" : "warn"}
-                  >
-                    <span>{sourceLabels[item.source] || item.source}</span>
-                    <code>{item.path}</code>
-                    <em>{item.exists ? "已找到" : "路径不存在"}</em>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">正在检查默认路径…</p>
-            )}
-            {sourceKeys.map((source) => (
-              <div key={source} className="setup-source">
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={s[source].enabled}
-                    onChange={(e) =>
-                      setS({
-                        ...s,
-                        [source]: { ...s[source], enabled: e.target.checked },
-                      })
-                    }
-                  />
-                  采集 {sourceLabels[source]} 会话
-                </label>
-                <label>
-                  {sourceLabels[source]} 记录目录（每行一个）
-                  <textarea
-                    rows={2}
-                    value={pathText(source)}
-                    onChange={(e) => setPaths(source, e.target.value)}
-                  />
-                </label>
-              </div>
-            ))}
-            <p className="muted">
-              路径不存在不会影响其他来源；Git 提交作为证据在第 3 步配置。
-            </p>
-            {footer({
-              current: "sources",
-              next: 1,
-              nextLabel: "保存并继续",
-              onNext: saveSources,
-              skippable: true,
-            })}
+            <SourcePicker
+              settings={s}
+              onChange={setS}
+              onDetected={setDetectedSources}
+            />
           </>
         );
       case 1:
@@ -595,6 +610,19 @@ export function SetupWizard({
                 </label>
               </>
             )}
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={s.auto_import_analysis}
+                onChange={(e) =>
+                  setS({ ...s, auto_import_analysis: e.target.checked })
+                }
+              />
+              AI 分析完成后直接填入今日工作清单
+            </label>
+            <p className="muted">
+              默认关闭：分析只生成候选，可在每日日报的「分析结果」中查看、修改后再导入。
+            </p>
             <div className="setup-status">
               <div className={modelReady ? "ok" : "warn"}>
                 <span>当前状态</span>
@@ -615,13 +643,6 @@ export function SetupWizard({
             <p className="muted">
               保存并测试只发送一句简短探测消息，不发送工作对话。测试成功后自动开启模型分析。
             </p>
-            {footer({
-              current: "model",
-              next: 2,
-              nextLabel: "保存并测试连接",
-              onNext: saveModel,
-              skippable: true,
-            })}
           </>
         );
       case 2:
@@ -631,192 +652,153 @@ export function SetupWizard({
               <FolderGit2 size={18} /> 第 3 步 · Git 仓库（可选）
             </h3>
             <p>
-              填写本地仓库根目录后，采集会把当天提交作为工作证据的佐证。Git
+              选择项目上级目录后自动扫描 Git 仓库，提交会作为工作证据的佐证。Git
               提交不会按条生成工作项，也不会推送到任何远端。
             </p>
-            <label>
-              仓库根目录（每行一个）
-              <textarea
-                rows={4}
-                value={gitText}
-                onChange={(e) => setGitText(e.target.value)}
-                placeholder={"D:\\work\\project-a\nD:\\work\\project-b"}
-              />
-            </label>
-            <label>
-              项目名称映射（可选，每行「路径=项目名」）
-              <textarea
-                rows={3}
-                value={mapText}
-                onChange={(e) => setMapText(e.target.value)}
-                placeholder={"D:\\work\\project-a=项目 A"}
-              />
-            </label>
-            <p className="muted">
-              只读取当前分支、提交摘要和文件增删行；不会读取完整 diff，也不会修改仓库。
-            </p>
-            {footer({
-              current: "git",
-              next: 3,
-              nextLabel: "保存并继续",
-              onNext: saveGit,
-              skippable: true,
-            })}
+            <GitSettings settings={s} onChange={setS} />
           </>
         );
       case 3:
         return (
           <>
             <h3>
-              <GitBranch size={18} /> 第 4 步 · Gitee 历史 Issue（可选）
+              <GitBranch size={18} /> 第 4 步 · Gitee 接入（可选）
             </h3>
             <p>
-              只读抓取你负责或创建的历史 Issue，用于学习标题风格。不会创建、修改或关闭任何
-              Issue。
+              历史 Issue 用于学习标题风格，企业工作项用于把日报推送到公司项目。两项凭据分开保存，可以只配置其中一项。
             </p>
-            <div className="setup-help">
-              <strong>获取私人令牌</strong>
-              <ul>
-                <li>登录 Gitee → 头像 → 账号设置</li>
-                <li>左侧「安全设置 → 私人令牌」→「生成新令牌」</li>
-                <li>勾选 projects 等只读权限，复制生成的令牌</li>
-              </ul>
-              <a
-                href="https://gitee.com/profile/personal_access_tokens"
-                target="_blank"
-                rel="noreferrer"
-              >
-                打开 Gitee 私人令牌页面 <ExternalLink size={13} />
-              </a>
-            </div>
-            <label>
-              Gitee 私人令牌（GITEE_ACCESS_TOKEN）
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={giteeToken}
-                onChange={(e) => setGiteeToken(e.target.value)}
-                placeholder={
-                  giteeReady ? "已保存，留空表示保留" : "粘贴私人令牌"
-                }
-              />
-            </label>
-            <label className="check-label">
-              <input
-                type="checkbox"
-                checked={s.gitee.enabled}
-                onChange={(e) =>
-                  setS({
-                    ...s,
-                    gitee: { ...s.gitee, enabled: e.target.checked },
-                  })
-                }
-              />
-              启用服务运行期间的定时同步
-            </label>
-            <p className="muted">
-              企业工作项使用单独的企业版凭据，不使用这里的私人令牌。
-            </p>
-            {footer({
-              current: "gitee",
-              next: 4,
-              nextLabel: "保存并继续",
-              onNext: saveGitee,
-              skippable: true,
-            })}
-          </>
-        );
-      case 4:
-        return (
-          <>
-            <h3>
-              <Building2 size={18} /> 第 5 步 · Gitee 企业工作项（可选）
-            </h3>
-            <p>
-              把日报里审核过的工作项创建到公司企业项目。需要企业版成员账号，并且该企业已开通工作项 API
-              权限。
-            </p>
-            <div className="setup-help">
-              <strong>获取企业版 Token</strong>
-              <ul>
-                <li>登录 Gitee 后打开企业版令牌页面</li>
-                <li>选择目标企业，生成具有项目读取与工作项创建权限的令牌</li>
-                <li>令牌必须属于该企业成员；个人账号无法读取企业列表</li>
-              </ul>
-              <a
-                href="https://gitee.com/profile/mcp_gitee_ent_access_tokens"
-                target="_blank"
-                rel="noreferrer"
-              >
-                打开企业版令牌页面 <ExternalLink size={13} />
-              </a>
-            </div>
-            <label>
-              企业版 Token（与私人令牌分开保存）
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={entToken}
-                onChange={(e) => setEntToken(e.target.value)}
-                placeholder={
-                  entStatus?.configured ? "已保存，留空表示保留" : "粘贴企业版 Token"
-                }
-              />
-            </label>
-            <div className="setup-inline">
-              <button
-                type="button"
-                className="outline"
-                disabled={!!busy || (!entToken && !entStatus?.configured)}
-                onClick={saveEntToken}
-              >
-                保存并读取企业列表
-              </button>
-              <span className="muted">
-                {entStatus?.configured ? "企业凭据已配置" : "尚未保存企业凭据"}
-              </span>
-            </div>
-            {companies.length > 0 ? (
-              <label>
-                目标企业
-                <select
-                  value={s.gitee_enterprise.enterprise_id || ""}
-                  onChange={(e) =>
-                    setS({
-                      ...s,
-                      gitee_enterprise: {
-                        ...s.gitee_enterprise,
-                        enterprise_id: Number(e.target.value),
-                      },
-                    })
-                  }
-                >
-                  <option value="">请选择企业</option>
-                  {companies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.name}（{company.id}）
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              s.gitee_enterprise.enterprise_id > 0 && (
-                <p className="muted">
-                  当前目标企业 ID：{s.gitee_enterprise.enterprise_id}
-                  。如需切换，请先读取企业列表。
+            <div className="gitee-cards">
+              <div className="config-card">
+                <h3>
+                  <GitBranch size={16} /> 历史 Issue
+                </h3>
+                <p>
+                  只读抓取你负责或创建的历史 Issue，不会创建、修改或关闭任何
+                  Issue。
                 </p>
-              )
-            )}
-            <p className="muted">
-              标题与项目映射、工作项类型和发布预览在左侧「企业工作项」页面完成；创建前始终需要预览并确认。
-            </p>
-            {footer({
-              current: "enterprise",
-              next: 5,
-              nextLabel: "保存并查看结果",
-              onNext: saveEnterprise,
-              skippable: true,
-            })}
+                <div className="quick-help">
+                  <span>
+                    头像 → 账号设置 → 安全设置 → 私人令牌，勾选 projects
+                    只读权限后生成并复制。
+                  </span>
+                  <a
+                    href="https://gitee.com/profile/personal_access_tokens"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    获取私人令牌 <ExternalLink size={12} />
+                  </a>
+                </div>
+                <label>
+                  Gitee 私人令牌
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={giteeToken}
+                    onChange={(e) => setGiteeToken(e.target.value)}
+                    placeholder={
+                      giteeReady ? "已保存，留空表示保留" : "粘贴私人令牌"
+                    }
+                  />
+                </label>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={s.gitee.enabled}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        gitee: { ...s.gitee, enabled: e.target.checked },
+                      })
+                    }
+                  />
+                  启用服务运行期间的定时同步
+                </label>
+              </div>
+              <div className="config-card">
+                <h3>
+                  <Building2 size={16} /> 企业工作项
+                </h3>
+                <p>
+                  把日报里审核过的工作项创建到公司企业项目，需要企业版成员账号和已开通的工作项
+                  API 权限。
+                </p>
+                <div className="quick-help">
+                  <span>
+                    个人设置 → MCP 企业令牌，选择目标企业并授予项目读取、工作项创建权限。与私人令牌不通用。
+                  </span>
+                  <a
+                    href="https://gitee.com/profile/mcp_gitee_ent_access_tokens"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    获取 MCP 企业令牌 <ExternalLink size={12} />
+                  </a>
+                </div>
+                <label>
+                  MCP 企业令牌（与私人令牌分开保存）
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={entToken}
+                    onChange={(e) => setEntToken(e.target.value)}
+                    placeholder={
+                      entStatus?.configured
+                        ? "已保存，留空表示保留"
+                        : "粘贴 MCP 企业令牌"
+                    }
+                  />
+                </label>
+                <div className="setup-inline">
+                  <button
+                    type="button"
+                    className="outline small"
+                    disabled={
+                      !!busy || (!entToken && !entStatus?.configured)
+                    }
+                    onClick={saveEntToken}
+                  >
+                    保存并读取企业列表
+                  </button>
+                  <span className="muted">
+                    {entStatus?.configured
+                      ? "企业凭据已配置"
+                      : "尚未保存企业凭据"}
+                  </span>
+                </div>
+                {companies.length > 0 ? (
+                  <label>
+                    目标企业
+                    <select
+                      value={s.gitee_enterprise.enterprise_id || ""}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          gitee_enterprise: {
+                            ...s.gitee_enterprise,
+                            enterprise_id: Number(e.target.value),
+                          },
+                        })
+                      }
+                    >
+                      <option value="">请选择企业</option>
+                      {companies.map((company) => (
+                        <option key={company.id} value={company.id}>
+                          {company.name}（{company.id}）
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  s.gitee_enterprise.enterprise_id > 0 && (
+                    <p className="muted">
+                      当前目标企业 ID：{s.gitee_enterprise.enterprise_id}
+                      。如需切换，请先读取企业列表。
+                    </p>
+                  )
+                )}
+              </div>
+            </div>
           </>
         );
       default:
@@ -825,50 +807,120 @@ export function SetupWizard({
             <h3>
               <Sparkles size={18} /> 配置完成
             </h3>
-            <p>下面是当前状态。未配置的可选项可以随时回到引导或偏好设置补充。</p>
+            <p>
+              下面是当前状态，点击每一项可以展开查看实际配置。未配置的可选项可以随时回到引导或系统设置补充。
+            </p>
             <ul className="setup-summary">
               {(
                 [
                   ["sources", sourcesReady, sourcesReady ? "已找到本地对话记录" : "未找到可采集目录"],
                   ["model", modelReady, modelReady ? modelStatus?.model || "已开启" : "未开启，AI 功能暂不可用"],
                   ["git", gitReady, gitReady ? `${s.git_roots.filter(Boolean).length} 个仓库` : "未配置（可选）"],
-                  ["gitee", giteeReady, giteeReady ? "私人令牌已保存" : "未配置（可选）"],
-                  ["enterprise", entReady, entReady ? `企业 ID ${s.gitee_enterprise.enterprise_id}` : "未配置（可选）"],
+                  ["gitee", giteeReady || entReady, giteeReady && entReady ? "私人令牌与企业凭据已保存" : giteeReady ? "私人令牌已保存" : entReady ? `企业 ID ${s.gitee_enterprise.enterprise_id}` : "未配置（可选）"],
                 ] as [StepKey, boolean, string][]
-              ).map(([key, ok, text]) => (
-                <li key={key} className={ok ? "ok" : "todo"}>
-                  {ok ? <CheckCircle2 size={17} /> : <Circle size={17} />}
-                  <strong>{titles[key]}</strong>
-                  <span>{text}</span>
-                </li>
-              ))}
+              ).map(([key, ok, text]) => {
+                const expanded = !!summaryOpen[key];
+                return (
+                  <li key={key} className={ok ? "ok" : "todo"}>
+                    <button
+                      type="button"
+                      className="summary-head"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setSummaryOpen((current) => ({
+                          ...current,
+                          [key]: !current[key],
+                        }))
+                      }
+                    >
+                      {ok ? (
+                        <CheckCircle2 size={17} />
+                      ) : (
+                        <Circle size={17} />
+                      )}
+                      <strong>{titles[key]}</strong>
+                      <span>{text}</span>
+                      <span className="summary-chevron" aria-hidden="true">
+                        {expanded ? (
+                          <ChevronDown size={15} />
+                        ) : (
+                          <ChevronRight size={15} />
+                        )}
+                      </span>
+                    </button>
+                    {expanded && (
+                      <div className="summary-body">{summaryDetail(key)}</div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             <p className="muted">
               下一步：到「每日日报」选择日期并采集，然后点击 AI 分析全天对话。
             </p>
-            <div className="setup-actions">
-              <button
-                type="button"
-                className="outline"
-                disabled={!!busy}
-                onClick={() =>
-                  run("正在重新检查", async () => {
-                    await loadStatus();
-                    setFeedback({ tone: "ok", text: "状态已刷新。" });
-                  })
-                }
-              >
-                重新检查
-              </button>
-              <button
-                type="button"
-                className="primary spacer"
-                onClick={onClose}
-              >
-                <Check size={16} /> 完成
-              </button>
-            </div>
           </>
+        );
+    }
+  };
+
+  const renderActions = () => {
+    switch (step) {
+      case 0:
+        return footer({
+          current: "sources",
+          next: 1,
+          nextLabel: "保存并继续",
+          onNext: saveSources,
+          skippable: true,
+        });
+      case 1:
+        return footer({
+          current: "model",
+          next: 2,
+          nextLabel: "保存并测试连接",
+          onNext: saveModel,
+          skippable: true,
+        });
+      case 2:
+        return footer({
+          current: "git",
+          next: 3,
+          nextLabel: "保存并继续",
+          onNext: saveGit,
+          skippable: true,
+        });
+      case 3:
+        return footer({
+          current: "gitee",
+          next: 4,
+          nextLabel: "保存并查看结果",
+          onNext: saveGitee,
+          skippable: true,
+        });
+      default:
+        return (
+          <div className="setup-actions">
+            <button
+              type="button"
+              className="outline"
+              disabled={!!busy}
+              onClick={() =>
+                run("正在重新检查", async () => {
+                  await loadStatus();
+                  setFeedback({ tone: "ok", text: "状态已刷新。" });
+                })
+              }
+            >
+              重新检查
+            </button>
+            <button
+              type="button"
+              className="primary spacer"
+              onClick={onClose}
+            >
+              <Check size={16} /> 完成
+            </button>
+          </div>
         );
     }
   };
@@ -953,7 +1005,9 @@ export function SetupWizard({
             })}
           </ol>
           <div className="setup-main">
-            {renderStep()}
+            <div className="setup-content" key={step}>
+              {renderStep()}
+            </div>
             {feedback && (
               <div
                 className={
@@ -965,6 +1019,7 @@ export function SetupWizard({
                 {feedback.text}
               </div>
             )}
+            {renderActions()}
           </div>
         </div>
       </section>

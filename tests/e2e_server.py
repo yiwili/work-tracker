@@ -24,10 +24,19 @@ rows = [
     {'type':'response_item','timestamp':'2026-10-24T01:03:00Z','payload':{'type':'function_call_output','call_id':'test-call','output':'3 passed in 1.23s'}},
 ]
 log.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),encoding='utf-8')
+# A second day keeps the deferred-analysis browser flow independent from the confirmed 24th.
+log_next = data / 'sample-next.jsonl'
+rows_next = [
+    {'type':'session_meta','payload':{'id':'browser-test-session-2','cwd':str(data/'demo-project')}},
+    {'type':'response_item','timestamp':'2026-10-25T02:00:00Z','payload':{'type':'message','role':'user','content':'优化档案检索筛选条件'}},
+    {'type':'response_item','timestamp':'2026-10-25T02:02:00Z','payload':{'type':'function_call','name':'exec_command','arguments':'pytest','call_id':'test-call-next'}},
+    {'type':'response_item','timestamp':'2026-10-25T02:04:00Z','payload':{'type':'function_call_output','call_id':'test-call-next','output':'4 passed in 0.80s'}},
+]
+log_next.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows_next),encoding='utf-8')
 engine = db.make_engine()
 db.migrate(engine)
 with engine.begin() as conn:
-    service.save_settings(conn, Settings(codex=SourceConfig(paths=[str(log)]),**{key:SourceConfig(paths=[]) for key in CONVERSATION_SOURCES if key!='codex'},llm_enabled=True,llm_model='browser-test-model'))
+    service.save_settings(conn, Settings(codex=SourceConfig(paths=[str(log),str(log_next)]),**{key:SourceConfig(paths=[]) for key in CONVERSATION_SOURCES if key!='codex'},llm_enabled=True,llm_model='browser-test-model',auto_import_analysis=True))
 
 # A real, isolated two-author repository for the Git user selection workflow.
 git_repo=data/'git-user-project';git_repo.mkdir()
@@ -57,17 +66,17 @@ def fake_model(settings, system, text, **kwargs):
 
 model_provider.complete=fake_model
 enterprise_posts=[]
-def fake_enterprise(method,path,params=None,payload=None,credential=None):
-    if method=='POST':
-        assert path=='/7/issues'
-        enterprise_posts.append(payload)
+def fake_enterprise(tool,arguments,credential=None,uncertain=False):
+    if tool=='create_enterprise_issue':
+        enterprise_posts.append(arguments)
         identifier=8000+len(enterprise_posts)
-        return {'id':identifier,'issue_url':f'https://gitee.com/enterprises/e2e/issues/{identifier}'}
-    if path=='/list':return [{'id':7,'name':'测试公司','path':'test-company'}]
-    if path.endswith('/programs'):return [{'id':11,'name':'上海工程技术大学档案系统','ident':'SHGC','status':0},{'id':22,'name':'2026档案系统','ident':'2026','status':0}]
-    if path.endswith('/issue_types'):return [{'id':9,'title':'任务','category':'task'}]
-    raise AssertionError('Unexpected enterprise test route: '+path)
-gitee_enterprise.request=fake_enterprise
+        return {'id':identifier,'ident':f'I{identifier}'}
+    if tool=='list_enterprises':return {'total_count':1,'data':[{'id':7,'name':'测试公司','path':'test-company'}]}
+    if tool=='list_programs':return {'total_count':2,'data':[{'id':11,'name':'上海工程技术大学档案系统','ident':'SHGC','status':0},{'id':22,'name':'2026档案系统','ident':'2026','status':0}]}
+    if tool=='list_issue_types':return {'total_count':1,'data':[{'id':9,'title':'任务','category':'task'}]}
+    if tool=='get_enterprise_issue_detail':return {'id':int(arguments['issue_id']),'program_id':11,'description':''}
+    raise AssertionError('Unexpected enterprise test tool: '+tool)
+gitee_enterprise._tool=fake_enterprise
 gitee_enterprise.token=lambda:'isolated-enterprise-fixture-token'
 gitee.fetch=lambda config:([{'id':987,'title':'优化档案检索功能','created_at':'2026-10-20T00:00:00Z','project_path':'tester/repo'}],{'login':'e2e-tester','name':'Test'})
 model_provider.status=lambda settings,*_a:{'configured':True,'provider':settings.llm_provider,'endpoint':settings.llm_endpoint,'model':settings.llm_model,'error':''}

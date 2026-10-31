@@ -59,21 +59,19 @@ test("setup wizard walks each step, saves the model connection and reports statu
 
     // 第 3 步：Git 仓库
     await expect(dialog.getByText("第 3 步 · Git 仓库（可选）")).toBeVisible();
-    await dialog.getByLabel("仓库根目录（每行一个）").fill(repo.root);
+    await dialog.getByLabel("Git 项目上级目录").fill(repo.root);
+    await dialog.getByRole("button", { name: "扫描目录" }).click();
+    await expect(
+      dialog.getByRole("checkbox", { name: "采集 git-user-project" }),
+    ).toBeChecked();
     await dialog.getByRole("button", { name: "保存并继续" }).click();
 
-    // 第 4 步：Gitee 历史
+    // 第 4 步：Gitee 接入（历史 Issue + 企业工作项）
     await expect(
-      dialog.getByText("第 4 步 · Gitee 历史 Issue（可选）"),
+      dialog.getByText("第 4 步 · Gitee 接入（可选）"),
     ).toBeVisible();
     await dialog.getByLabel(/Gitee 私人令牌/).fill("wizard-fixture-token");
-    await dialog.getByRole("button", { name: "保存并继续" }).click();
-
-    // 第 5 步：企业工作项 —— 跳过
-    await expect(
-      dialog.getByText("第 5 步 · Gitee 企业工作项（可选）"),
-    ).toBeVisible();
-    await dialog.getByRole("button", { name: "跳过此步" }).click();
+    await dialog.getByRole("button", { name: "保存并查看结果" }).click();
 
     // 完成页
     await expect(dialog.getByText("配置完成")).toBeVisible();
@@ -84,8 +82,9 @@ test("setup wizard walks each step, saves the model connection and reports statu
     await dialog.getByRole("button", { name: "完成", exact: true }).click();
     await expect(dialog).toHaveCount(0);
 
-    // 引导保存的配置必须真的落到偏好设置页，而不是只改了弹窗内的副本
-    await page.getByRole("button", { name: "偏好设置" }).click();
+    // 引导保存的配置必须真的落到系统设置页，而不是只改了弹窗内的副本
+    await page.getByRole("button", { name: "系统设置" }).click();
+    await page.getByRole("tab", { name: "模型分析" }).click();
     await expect(page.getByLabel("AI 分析供应商")).toHaveValue("deepseek");
     await expect(page.getByLabel("模型名称")).toHaveValue("deepseek-reasoner");
     await expect(page.getByLabel("完整 API 接口 URL")).toHaveValue(
