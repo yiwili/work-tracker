@@ -14,8 +14,8 @@ from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, CONVERSATION_SOURCES
-from .git_tools import identity_options
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput
+from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import gitee_enterprise
 from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,GiteeResolveInput
@@ -103,12 +103,44 @@ def create_app(engine=None):
         with transaction() as conn:
             return service.save_settings(conn, model_provider.normalize(payload))
 
+    @app.post('/api/sources/check')
+    def source_check(payload: SourceCheckInput):
+        items = []
+        detected = {}
+        for name, paths in payload.sources.items():
+            for raw in paths:
+                path = Path(raw).expanduser()
+                try:
+                    exists = path.exists()
+                except OSError:
+                    exists = False
+                items.append({'source': name, 'path': str(path), 'exists': exists})
+                detected[name] = detected.get(name, False) or exists
+        return {'items': items, 'detected': [name for name, ok in detected.items() if ok]}
+
+    @app.post('/api/git/scan')
+    def git_scan(payload: GitScanInput):
+        return scan_repositories(payload.root)
+
     @app.post('/api/git/identities')
     def git_identities(payload:GitIdentityQuery):
         with engine.connect() as conn:
             settings=service.get_settings(conn)
             roots=[*payload.roots,*settings.git_roots,*conn.execute(select(db.repositories.c.root)).scalars()]
             return identity_options(roots,settings)
+
+    @app.get('/api/git/global-identity')
+    def git_global_identity():
+        return global_author()
+
+    @app.post('/api/git/verify-author')
+    def git_verify_author(payload:GitVerifyQuery):
+        with engine.connect() as conn:
+            settings=service.get_settings(conn)
+            roots=[*payload.roots,*settings.git_roots,*conn.execute(select(db.repositories.c.root)).scalars()]
+        if payload.author is not None:
+            settings=settings.model_copy(update={'git_author':payload.author})
+        return verify_author(roots,settings)
 
     @app.get('/api/doctor')
     def doctor():
@@ -313,6 +345,22 @@ def create_app(engine=None):
             raise
         finally:
             lock.release()
+
+    @app.post('/api/analysis/import')
+    def import_analysis(payload: AnalysisImportInput):
+        lock = analysis_locks.setdefault(payload.date, Lock())
+        if not lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail='该日期正在进行 AI 分析或导入，请稍后重试')
+        try:
+            with transaction() as conn:
+                return daily_analysis.import_pending(conn, payload.date, payload.items)
+        finally:
+            lock.release()
+
+    @app.post('/api/tasks/from-events')
+    def tasks_from_events(payload: TaskFromEventsInput):
+        with transaction() as conn:
+            return service.tasks_from_events(conn, payload.date, payload.event_ids)
 
     @app.get('/api/events')
     def events(date: date):

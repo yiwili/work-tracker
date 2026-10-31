@@ -292,14 +292,30 @@ class WorkBuddyAdapter(JSONLAdapter):
         return []
 
 
+class WorkBuddyCnAdapter(WorkBuddyAdapter):
+    name = "workbuddy_cn"
+
+
+class WorkBuddyIntlAdapter(WorkBuddyAdapter):
+    name = "workbuddy_intl"
+
+
 class QoderAdapter(ClaudeAdapter):
-    """Qoder（国内外版）会话记录：~/.qoder[-cn]/projects/<cwd>/<session>.jsonl。
+    """Qoder 会话记录：~/.qoder[-cn]/projects/<cwd>/<session>.jsonl。
 
     行格式与 Claude Code 基本一致：user/assistant + message.content 的
     text / tool_use / tool_result 块；attachment、active-leaf 等行直接忽略。
     """
 
     name = "qoder"
+
+
+class QoderCnAdapter(QoderAdapter):
+    name = "qoder_cn"
+
+
+class QoderIntlAdapter(QoderAdapter):
+    name = "qoder_intl"
 
 
 class ZstdJSONLAdapter(JSONLAdapter):
@@ -515,3 +531,11 @@ class TraeAdapter(JSONLAdapter):
         if details:
             result += self.make(raw, location, "assistant_message", "\n".join(details), occurred_at, meta)
         return result
+
+
+class TraeCnAdapter(TraeAdapter):
+    name = "trae_cn"
+
+
+class TraeIntlAdapter(TraeAdapter):
+    name = "trae_intl"

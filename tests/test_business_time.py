@@ -15,7 +15,7 @@ def client(tmp_path,monkeypatch):
     monkeypatch.setenv('AWT_DATA_DIR',str(tmp_path/'data'))
     engine=db.make_engine(tmp_path/'test.db')
     with TestClient(create_app(engine)) as c:
-        s=c.get('/api/settings').json();s.update(llm_enabled=True,llm_model='test')
+        s=c.get('/api/settings').json();s.update(llm_enabled=True,llm_model='test',auto_import_analysis=True)
         for key in CONVERSATION_SOURCES:s[key]['paths']=[]
         c.put('/api/settings',json=s).raise_for_status()
         yield c,engine
@@ -155,6 +155,41 @@ def test_scope_failure_keeps_existing_tasks(client,monkeypatch):
     monkeypatch.setattr(model_provider,'complete',lambda *a,**kw:json.dumps({'work_refs':[],'excluded':[],'uncertain_refs':[]}))
     assert c.post('/api/analyze?date=2026-10-24',json={}).status_code==400
     assert c.get('/api/tasks?date=2026-10-24').json()[0]['id']==old
+
+
+def scope_reply(rows,reply,monkeypatch):
+    settings=Settings(activity_gap_minutes=30)
+    records,refs,segments=daily_analysis.transcript(rows,settings)
+    monkeypatch.setattr(model_provider,'complete',lambda *a,**kw:reply)
+    return work_scope.filter_work(records,refs,segments,settings)
+
+
+def test_scope_tolerates_prose_extra_refs_and_trailing_comma(monkeypatch):
+    rows=[knowledge_event(0,0),knowledge_event(1,1,'assistant_message','说明'),
+          knowledge_event(2,2,text='了解挂接功能'),knowledge_event(3,4,text='修复登录问题')]
+    reply='筛选结果如下：\n```json\n{"work_refs":["e4","e2","e4",],"learning_groups":[{"topic":"挂接功能了解","refs":["e3"]}],"excluded":[{"ref":"e1","reason":"知识了解"}],"uncertain_refs":[]}\n```\n以上。'
+    kept,_,scope,_=scope_reply(rows,reply,monkeypatch)
+    assert scope['work_refs']==['e4'] and scope['work_user_messages']==1
+    assert scope['learning_groups'][0]['refs']==['e3']
+    assert {r for r in scope['work_refs']}=={r['ref'] for r in kept if r['kind']=='user_prompt'}
+
+
+def test_scope_conflicts_and_omissions_go_to_manual_review(monkeypatch):
+    rows=[knowledge_event(0,0),knowledge_event(1,2),knowledge_event(2,4)]
+    reply=json.dumps({'work_refs':['e1'],'learning_groups':[],
+                      'excluded':[{'ref':'e1','reason':'私人'},{'ref':'e2','reason':'私人'}],'uncertain_refs':[]})
+    kept,_,scope,_=scope_reply(rows,reply,monkeypatch)
+    assert not kept and not scope['work_refs']
+    assert scope['ambiguous_refs']==['e1'] and scope['unresolved_refs']==['e3']
+    assert set(scope['uncertain_refs'])=={'e1','e3'}
+    assert scope['excluded_user_messages']==1 and scope['uncertain_user_messages']==2
+
+
+def test_scope_rejects_grossly_incomplete_classification(monkeypatch):
+    rows=[knowledge_event(i,i*2) for i in range(4)]
+    reply=json.dumps({'work_refs':['e1'],'learning_groups':[],'excluded':[],'uncertain_refs':[]})
+    with pytest.raises(model_provider.ModelError,match='只覆盖了 1/4'):
+        scope_reply(rows,reply,monkeypatch)
 
 
 def knowledge_event(index,minute,kind='user_prompt',text='继续了解挂接功能的区别'):

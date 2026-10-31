@@ -110,6 +110,26 @@ def test_readonly_identity_endpoint_lists_authors_and_preserves_git_config(clien
     configure(client,excluded_paths=[str(root)])
     assert client.post('/api/git/identities',json={'roots':[str(root)]}).json()==[]
 
+def test_global_identity_and_verify_commit_matching_are_readonly(client,repositories):
+    root,_=repositories[0]('repo');configure(client,git_roots=[str(root)])
+    identity=client.get('/api/git/global-identity').json()
+    assert identity=={'name':'Global User','email':'global@example.invalid','source':'global'}
+    before=(root/'.git/config').read_bytes()
+    response=client.post('/api/git/verify-author',json={'roots':[str(root)],'author':{'email':'alice@example.invalid'}})
+    response.raise_for_status();rows=response.json();assert len(rows)==1
+    row=rows[0];assert row['project']=='repo' and row['scanned']==4 and row['matched']==2
+    assert row['latest'].startswith('2026-10-24T01:01')
+    assert set(row['samples'])=={'Alice work','Alias work'}
+    assert (root/'.git/config').read_bytes()==before
+    bob=client.post('/api/git/verify-author',json={'author':{'email':'bob@example.invalid'}}).json()
+    assert bob[0]['matched']==1
+    auto=client.post('/api/git/verify-author',json={}).json()
+    assert auto[0]['matched']==2 and auto[0]['identity']['email']=='alice@example.invalid'
+    configure(client,git_roots=[])
+    unsaved=client.post('/api/git/verify-author',json={'roots':[str(root)],'author':{'email':'alice@example.invalid'}}).json()
+    assert unsaved[0]['matched']==2
+    assert client.post('/api/git/verify-author',json={'author':{}}).status_code==422
+
 
 def test_old_colleague_events_are_filtered_without_deleting_reviewed_work(client,repositories,monkeypatch):
     root,commits=repositories[0]('repo')

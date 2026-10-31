@@ -11,8 +11,9 @@ from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db
-from .collectors import (ClaudeAdapter, CodexAdapter, DeepSeekHarnessAdapter, QoderAdapter,
-                         TraeAdapter, WorkBuddyAdapter, CollectionCursor, stable)
+from .collectors import (ClaudeAdapter, CodexAdapter, DeepSeekHarnessAdapter, QoderCnAdapter,
+                         QoderIntlAdapter, TraeCnAdapter, TraeIntlAdapter, WorkBuddyCnAdapter,
+                         WorkBuddyIntlAdapter, CollectionCursor, stable)
 from .git_tools import collect_commits, day_bounds, exclusion_prefixes, excluded, resolve_project, filter_git_events
 from .models import Settings, TaskInput
 from .privacy import redact
@@ -126,8 +127,10 @@ def collect(conn, day, progress=None):
     if progress:
         progress({"source": "", "files_done": 0, "files_total": 0, "new_events": 0})
     for cls, config in [(ClaudeAdapter, settings.claude_code), (CodexAdapter, settings.codex),
-                        (WorkBuddyAdapter, settings.workbuddy), (DeepSeekHarnessAdapter, settings.deepseek_harness),
-                        (QoderAdapter, settings.qoder), (TraeAdapter, settings.trae)]:
+                        (WorkBuddyCnAdapter, settings.workbuddy_cn), (WorkBuddyIntlAdapter, settings.workbuddy_intl),
+                        (DeepSeekHarnessAdapter, settings.deepseek_harness),
+                        (QoderCnAdapter, settings.qoder_cn), (QoderIntlAdapter, settings.qoder_intl),
+                        (TraeCnAdapter, settings.trae_cn), (TraeIntlAdapter, settings.trae_intl)]:
         adapter = cls(config.paths, settings.redact_patterns, settings.timezone)
         count, files = 0, 0
         if config.enabled:
@@ -308,6 +311,38 @@ def save_task(conn, payload: TaskInput, task_id=None):
         conn.execute(insert(db.worklogs).values(task_id=task_id, confirmed_minutes=minutes, suggested_minutes=None, time_locked=locked, time_source="manual", is_confirmed=False))
     invalidate(conn, values['date'])
     return task_id
+
+
+def tasks_from_events(conn, day, event_ids):
+    settings = get_settings(conn)
+    ids = list(dict.fromkeys(event_ids))
+    rows = {row['id']: dict(row) for row in conn.execute(
+        select(db.events).where(and_(db.events.c.id.in_(ids), db.events.c.occurred_at >= day_bounds(day, settings.timezone)[0],
+                                     db.events.c.occurred_at < day_bounds(day, settings.timezone)[1]))).mappings()}
+    if set(rows) != set(ids):
+        raise ValueError('部分采集记录不属于当天或已不存在，请刷新采集详情')
+    linked = set(conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.event_id.in_(ids))).scalars())
+    created = []
+    for event_id in ids:
+        if event_id in linked:
+            continue
+        event = rows[event_id]
+        if event['source'] != 'git' or event['kind'] != 'git_commit':
+            raise ValueError('只有 Git 提交可以直接添加为工作项')
+        changes = str(event['metadata'].get('changes') or '')
+        title = redact((event['summary'] or '').strip()[:500], settings.redact_patterns) or 'Git 提交'
+        task_id = uuid4().hex
+        conn.execute(insert(db.tasks).values(
+            id=task_id, date=str(day), title=title, details=changes, project=event['project'] or '未归属项目',
+            category=category(title), status='changed', origin='auto', confidence='Git 提交 · 人工选择',
+            evidence_level='Git 提交', fingerprint='git-adopt:' + event_id, edited=True, deleted=False))
+        conn.execute(insert(db.worklogs).values(task_id=task_id, suggested_minutes=None, confirmed_minutes=0,
+                                                is_confirmed=False, time_locked=False, time_source='manual', time_reason=''))
+        conn.execute(insert(db.evidence).values(task_id=task_id, event_id=event_id))
+        created.append(task_id)
+    if created:
+        invalidate(conn, day)
+    return {'created': len(created), 'skipped': len(ids) - len(created), 'task_ids': created}
 
 
 def delete_task(conn, task_id):

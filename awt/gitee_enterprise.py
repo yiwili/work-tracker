@@ -1,6 +1,7 @@
-"""Gitee Enterprise V8: explicit preview, project matching and guarded creation.
+"""Gitee Enterprise: explicit preview, project matching and guarded creation.
 
-API contract: https://gitee.com/api/v8/swagger (host api.gitee.com/enterprises).
+Gitee only accepts MCP enterprise tokens from the official mcp-gitee-ent
+client, so all calls are relayed through it (see gitee_mcp).
 Only titles, reviewed descriptions, date and estimated minutes leave the app.
 """
 import json
@@ -9,13 +10,11 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from urllib.parse import urlparse
 from uuid import uuid4
-import httpx
 from sqlalchemy import select
-from . import db, gitee
+from . import db, gitee, gitee_mcp
 from .collectors import stable
 from .privacy import redact
 
-API = 'https://api.gitee.com/enterprises'
 publish_lock = Lock()
 
 
@@ -29,50 +28,79 @@ def token():
     return gitee.token('gitee-enterprise')
 
 
-def request(method, path, params=None, payload=None, credential=None):
-    key=credential or token()
+def _friendly(text):
+    detail=''
+    match=re.search(r'API error \((\d{3})\):\s*(.*)$',text,re.S)
+    if match:
+        code=int(match.group(1));body=match.group(2)
+        try:
+            data=json.loads(body)
+        except ValueError:
+            data=None
+        if isinstance(data,dict):
+            detail=str(data.get('message') or data.get('error') or data.get('error_description') or '')[:200]
+        descriptions={401:'Token无效、已撤销，或不是MCP企业令牌（个人设置→MCP企业令牌）',403:'没有该企业、项目或创建工作项的权限',404:'企业或项目不存在',422:'企业工作流或必填字段校验未通过，请在Gitee核对项目要求',429:'请求过于频繁，请稍后重试'}
+        return f'Gitee企业版请求失败（HTTP {code}）：'+descriptions.get(code,'服务暂时不可用')+(f'；Gitee返回：{detail}' if detail else '')
+    if 'Authentication failed' in text:
+        return 'Gitee企业版认证失败：请在系统设置重新保存MCP企业令牌（个人设置→MCP企业令牌，不是第4步的私人令牌）'
+    if 'Network error' in text:
+        return 'Gitee企业版连接失败；创建请求不会自动重发'
+    if 'Only For MCP Gitee Enterprise Application' in text:
+        return 'Gitee只允许官方mcp-gitee-ent客户端使用该令牌；请确认本机已安装Node.js 18+，应用会自动通过官方客户端转发'
+    return text
+
+
+def _clean_credential(value):
+    key=(value or '').strip()
+    changed=True
+    while changed:
+        changed=False
+        if key.lower().startswith('bearer '):
+            key=key[7:];changed=True
+        elif len(key)>=2 and key[0]==key[-1] and key[0] in '"\'':
+            key=key[1:-1];changed=True
+        key=key.strip()
+    return key
+
+
+def _tool(tool, arguments, credential=None, uncertain=False):
+    key=_clean_credential(credential or token())
     if not key:
-        raise EnterpriseError('请先在偏好设置保存Gitee企业版Token；企业版凭据与普通仓库Token分开配置')
+        raise EnterpriseError('请先在系统设置保存Gitee企业版Token（个人设置→MCP企业令牌）；企业版凭据与普通仓库Token分开配置')
     try:
-        with httpx.Client(timeout=httpx.Timeout(45,connect=15),trust_env=False,follow_redirects=False) as client:
-            if method=='GET':
-                response=client.get(API+path,params={**(params or {}),'access_token':key})
-            else:
-                response=client.post(API+path,json={**(payload or {}),'access_token':key})
-        if response.status_code not in (200,201):
-            descriptions={401:'Token无效或过期',403:'没有该企业、项目或创建工作项的权限',404:'企业或项目不存在',422:'企业工作流或必填字段校验未通过，请在Gitee核对项目要求',429:'请求过于频繁，请稍后重试'}
-            raise EnterpriseError(f'Gitee企业版请求失败（HTTP {response.status_code}）：'+descriptions.get(response.status_code,'服务暂时不可用'),uncertain=method=='POST' and (response.status_code>=500 or response.status_code==408))
-        return response.json()
-    except (httpx.HTTPError,json.JSONDecodeError):
-        raise EnterpriseError('Gitee企业版连接失败或返回格式无效；创建请求不会自动重发',uncertain=method=='POST') from None
+        return gitee_mcp.call(tool,arguments,key)
+    except gitee_mcp.MCPError as exc:
+        raise EnterpriseError(_friendly(str(exc)),uncertain=uncertain) from None
 
 
-def pages(path, params=None):
-    rows=[];seen=set()
-    for page in range(1,201):
-        data=request('GET',path,{**(params or {}),'page':page,'per_page':100})
-        if not isinstance(data,list) or any(not isinstance(r,dict) for r in data):
-            raise EnterpriseError('Gitee企业版列表格式无效，请检查Token类型和企业版接口权限')
-        fingerprint=stable(data)
-        if data and fingerprint in seen:
+def _paged(tool, arguments):
+    rows=[];seen=set();page=1
+    while page<=200:
+        data=_tool(tool,{**arguments,'page':page,'per_page':100})
+        if not isinstance(data,dict) or not isinstance(data.get('data'),list) or any(not isinstance(r,dict) for r in data['data']):
+            raise EnterpriseError('Gitee企业版列表格式无效，请检查MCP企业令牌的权限范围')
+        batch=data['data'];fingerprint=stable(batch)
+        if batch and fingerprint in seen:
             raise EnterpriseError('Gitee企业版返回重复分页，未使用不完整列表自动匹配')
-        seen.add(fingerprint);rows.extend(data)
-        if len(data)<100:
+        seen.add(fingerprint);rows.extend(batch)
+        total=data.get('total_count')
+        if len(batch)<100 or (isinstance(total,int) and len(rows)>=total):
             return rows
+        page+=1
     raise EnterpriseError('Gitee列表超过200页，未使用不完整列表自动匹配')
 
 
 def enterprises():
-    return [{'id':r['id'],'name':str(r.get('name','')),'path':str(r.get('path',''))} for r in pages('/list') if type(r.get('id')) is int and r['id']>0]
+    return [{'id':r['id'],'name':str(r.get('name','')),'path':str(r.get('path',''))} for r in _paged('list_enterprises',{}) if type(r.get('id')) is int and r['id']>0]
 
 
 def programs(enterprise_id):
-    rows=pages(f'/{enterprise_id}/programs',{'status':'0,1','sort':'name','direction':'asc'})
+    rows=_paged('list_programs',{'enterprise_id':enterprise_id,'status':'0,1','sort':'name','direction':'asc'})
     return [{'id':r['id'],'name':str(r.get('name','')),'ident':str(r.get('ident') or ''),'status':r.get('status',0)} for r in rows if type(r.get('id')) is int and r['id']>0 and r.get('status',0)!=2]
 
 
 def issue_types(enterprise_id,program_id):
-    rows=pages(f'/{enterprise_id}/issue_types',{'program_id':program_id,'scope':'all'})
+    rows=_paged('list_issue_types',{'enterprise_id':enterprise_id,'program_id':program_id,'scope':'all'})
     return [{'id':r['id'],'name':str(r.get('title','')),'category':str(r.get('category',''))} for r in rows if type(r.get('id')) is int and r['id']>0]
 
 
@@ -154,7 +182,7 @@ def preview(engine,payload):
         settings=get_settings(conn);config=settings.gitee_enterprise
         tasks=task_snapshot(conn,payload.date,payload.task_ids)
     if not config.enterprise_id:
-        raise ValueError('请先在偏好设置选择Gitee企业并保存')
+        raise ValueError('请先在系统设置选择Gitee企业并保存')
     catalog=programs(config.enterprise_id)
     items=[]
     for task in tasks:
@@ -230,7 +258,7 @@ def publish(engine,payload):
                 body['issue_type_id']=target.issue_type_id
                 body.pop('category',None)
             try:
-                value=request('POST',f'/{enterprise_id}/issues',payload=body,credential=publish_key)
+                value=_tool('create_enterprise_issue',{'enterprise_id':enterprise_id,**body},credential=publish_key,uncertain=True)
                 if not isinstance(value,dict) or type(value.get('id')) is not int or value['id']<=0:
                     raise EnterpriseError('创建响应未提供有效工作项ID，请到Gitee核实，系统不会自动重发',uncertain=True)
                 record.update(status='created',issue_id=str(value['id']),url=safe_url(value.get('issue_url')))
@@ -257,7 +285,7 @@ def resolve(engine,payload):
         if not record or record['status'] not in ('pending','uncertain'):
             raise ValueError('此工作项没有需要核对的创建请求')
         record=dict(record)
-    value=request('GET',f'/{payload.enterprise_id}/issues/{payload.issue_id}')
+    value=_tool('get_enterprise_issue_detail',{'enterprise_id':payload.enterprise_id,'issue_id':str(payload.issue_id)})
     marker='<!-- awt-work-item:'+stable('awt-work-item',payload.enterprise_id,payload.task_id)+' -->'
     if not isinstance(value,dict) or value.get('id')!=payload.issue_id or value.get('program_id')!=record['program_id'] or not isinstance(value.get('description'),str) or marker not in value['description']:
         raise ValueError('该Gitee工作项与本次提交的项目或来源标记不匹配，未建立关联')

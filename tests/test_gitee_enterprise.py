@@ -1,6 +1,5 @@
-import json
+import sys
 from datetime import datetime,timedelta,timezone
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select,update
@@ -63,16 +62,16 @@ def test_save_mapping_preview_and_publish_once_without_changing_worklog(client,m
     config={'enterprise_id':7,'include_details':True,'rules':[{'pattern':'2026','mode':'prefix','program_id':11}]}
     c.put('/api/gitee/enterprise/config',json=config).raise_for_status()
     posted=[]
-    def create(method,path,params=None,payload=None,credential=None):
-        assert method=='POST' and path=='/7/issues'
-        assert payload['program_id']==11 and payload['issue_type_id']==9
-        assert payload['duration'] in (90,120)
-        assert payload['plan_started_at']=='2026-10-24T00:00:00'
-        assert 'awt-work-item:' in payload['description'] and 'raw_ref' not in payload
-        assert 'state' not in payload and 'finished_at' not in payload
-        posted.append(payload)
-        return {'id':100+len(posted),'issue_url':f'https://gitee.com/enterprises/demo/issues/{100+len(posted)}'}
-    monkeypatch.setattr(ge,'request',create)
+    def create(tool,arguments,credential=None,uncertain=False):
+        assert tool=='create_enterprise_issue' and arguments['enterprise_id']==7
+        assert arguments['program_id']==11 and arguments['issue_type_id']==9
+        assert arguments['duration'] in (90,120)
+        assert arguments['plan_started_at']=='2026-10-24T00:00:00'
+        assert 'awt-work-item:' in arguments['description'] and 'raw_ref' not in arguments
+        assert 'state' not in arguments and 'finished_at' not in arguments
+        posted.append(arguments)
+        return {'id':100+len(posted),'ident':str(100+len(posted))}
+    monkeypatch.setattr(ge,'_tool',create)
     p=preview(c)
     assert all(i['program_id']==11 for i in p['items']) and posted==[]
     r=publish(c,p);r.raise_for_status()
@@ -87,7 +86,7 @@ def test_save_mapping_preview_and_publish_once_without_changing_worklog(client,m
 
 def test_publish_requires_confirmation_and_rejects_tampered_targets(client,monkeypatch):
     c,_=client;task(c);p=preview(c)
-    monkeypatch.setattr(ge,'request',lambda *a,**kw:pytest.fail('must not create'))
+    monkeypatch.setattr(ge,'_tool',lambda *a,**kw:pytest.fail('must not create'))
     assert publish(c,p,confirmed=False).status_code==422
     assert publish(c,p,program=999).status_code==400
     assert c.post('/api/gitee/enterprise/publish',json={'batch_id':p['batch_id'],'confirmed':True,'targets':[{'task_id':'unrelated','program_id':11}]}).status_code==400
@@ -97,7 +96,7 @@ def test_publish_requires_confirmation_and_rejects_tampered_targets(client,monke
 
 def test_human_edit_and_credential_change_invalidate_preview(client,monkeypatch):
     c,_=client;identifier=task(c);p=preview(c)
-    monkeypatch.setattr(ge,'request',lambda *a,**kw:pytest.fail('must not create'))
+    monkeypatch.setattr(ge,'_tool',lambda *a,**kw:pytest.fail('must not create'))
     c.patch('/api/tasks/'+identifier,json={'confirmed_minutes':120}).raise_for_status()
     assert publish(c,p).status_code==400
     q=preview(c)
@@ -122,7 +121,7 @@ def test_uncertain_write_is_never_resent_even_in_new_preview(client,monkeypatch)
     def timeout(*a,**kw):
         posted.append(a)
         raise ge.EnterpriseError('读取超时，结果未知',uncertain=True)
-    monkeypatch.setattr(ge,'request',timeout)
+    monkeypatch.setattr(ge,'_tool',timeout)
     p=preview(c);r=publish(c,p);r.raise_for_status()
     assert r.json()['uncertain']==1
     publish(c,p).raise_for_status();publish(c,preview(c)).raise_for_status()
@@ -131,11 +130,11 @@ def test_uncertain_write_is_never_resent_even_in_new_preview(client,monkeypatch)
 
 def test_partial_success_retry_only_failed_item(client,monkeypatch):
     c,_=client;task(c);task(c,'【上海工程】沟通附件需求',30);posted=[]
-    def create(method,path,params=None,payload=None,credential=None):
-        posted.append(payload['title'])
+    def create(tool,arguments,credential=None,uncertain=False):
+        posted.append(arguments['title'])
         if len(posted)==2:raise ge.EnterpriseError('HTTP 422：缺少必填字段')
-        return {'id':100+len(posted),'issue_url':'https://gitee.com/enterprises/demo/issues/100'}
-    monkeypatch.setattr(ge,'request',create)
+        return {'id':100+len(posted),'ident':str(100+len(posted))}
+    monkeypatch.setattr(ge,'_tool',create)
     p=preview(c);r=publish(c,p).json()
     assert r['created']==1 and r['failed']==1
     r=publish(c,p).json()
@@ -146,50 +145,95 @@ def test_network_wait_does_not_hold_sqlite_writer_lock(client,monkeypatch):
     c,_=client;identifier=task(c);p=preview(c)
     def create(*a,**kw):
         c.patch('/api/tasks/'+identifier,json={'title':'人工修改后的标题'}).raise_for_status()
-        return {'id':8,'issue_url':'https://gitee.com/enterprises/demo/issues/8'}
-    monkeypatch.setattr(ge,'request',create)
+        return {'id':8,'ident':'I8'}
+    monkeypatch.setattr(ge,'_tool',create)
     publish(c,p).raise_for_status()
     assert c.get('/api/tasks?date=2026-10-24').json()[0]['title']=='人工修改后的标题'
 
 
-def test_http_enterprise_contract_paging_post_and_secret_redaction(monkeypatch,caplog):
-    import logging
+def test_enterprise_tools_follow_official_mcp_contract(monkeypatch):
     monkeypatch.setattr(ge,'token',lambda:'enterprise-private-secret')
-    original=httpx.Client;seen=[]
-    def handler(request):
-        seen.append(request)
-        assert request.url.host=='api.gitee.com'
-        if request.method=='GET':
-            assert request.url.params['access_token']=='enterprise-private-secret'
-            return httpx.Response(200,json=[{'id':1,'name':'Company','path':'company'}])
-        data=json.loads(request.content)
-        assert data['access_token']=='enterprise-private-secret' and data['program_id']==11
-        return httpx.Response(201,json={'id':9})
-    monkeypatch.setattr(ge.httpx,'Client',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
-    with caplog.at_level(logging.INFO,logger='httpx'):
-        assert ge.enterprises()[0]['id']==1
-        assert ge.request('POST','/1/issues',payload={'title':'work','program_id':11})['id']==9
-    assert 'enterprise-private-secret' not in caplog.text
-    assert len(seen)==2
+    seen=[]
+    def call(tool,arguments,token):
+        seen.append((tool,arguments,token))
+        if tool=='list_enterprises':return {'total_count':1,'data':[{'id':1,'name':'Company','path':'company'}]}
+        if tool=='list_programs':return {'total_count':1,'data':[{'id':11,'name':'Project','ident':'P','status':0}]}
+        if tool=='list_issue_types':return {'total_count':1,'data':[{'id':9,'title':'任务','category':'task'}]}
+        if tool=='create_enterprise_issue':return {'id':9,'ident':'I9'}
+        if tool=='get_enterprise_issue_detail':return {'id':123,'program_id':11,'description':'x'}
+    monkeypatch.setattr(ge.gitee_mcp,'call',call)
+    assert ge.enterprises()[0]['id']==1
+    assert ge.programs(1)[0]['id']==11
+    assert ge.issue_types(1,11)[0]['id']==9
+    assert ge._tool('create_enterprise_issue',{'enterprise_id':1,'title':'work'})['id']==9
+    assert [s[0] for s in seen]==['list_enterprises','list_programs','list_issue_types','create_enterprise_issue']
+    assert {s[2] for s in seen}=={'enterprise-private-secret'}
+    assert seen[1][1]['status']=='0,1' and seen[2][1]['program_id']==11
 
 
-def test_http_server_failure_is_uncertain_and_auth_failure_is_retryable(monkeypatch):
+def test_pasted_bearer_prefix_and_quotes_are_normalized(monkeypatch):
+    seen=[]
+    monkeypatch.setattr(ge.gitee_mcp,'call',lambda tool,arguments,token:(seen.append(token) or {'total_count':0,'data':[]}))
+    assert ge._tool('list_enterprises',{},credential=' "Bearer clean-token" ')=={'total_count':0,'data':[]}
+    assert seen==['clean-token']
+
+
+def test_mcp_auth_error_includes_gitee_message(monkeypatch):
     monkeypatch.setattr(ge,'token',lambda:'token')
-    original=httpx.Client
-    for code,uncertain in [(503,True),(403,False),(422,False)]:
-        monkeypatch.setattr(ge.httpx,'Client',lambda **kw:original(transport=httpx.MockTransport(lambda req:httpx.Response(code,json={})),**kw))
-        with pytest.raises(ge.EnterpriseError) as error:
-            ge.request('POST','/1/issues',payload={'title':'work'})
-        assert error.value.uncertain is uncertain
+    def call(*a,**kw):raise ge.gitee_mcp.MCPError('API error (401): {"message":"Only For MCP Gitee Enterprise Application"}')
+    monkeypatch.setattr(ge.gitee_mcp,'call',call)
+    with pytest.raises(ge.EnterpriseError,match='Only For MCP') as error:
+        ge.enterprises()
+    assert error.value.uncertain is False
+
+
+def test_create_failure_is_uncertain_but_listing_is_retryable(monkeypatch):
+    monkeypatch.setattr(ge,'token',lambda:'token')
+    def call(*a,**kw):raise ge.gitee_mcp.MCPError('API error (503): {}')
+    monkeypatch.setattr(ge.gitee_mcp,'call',call)
+    with pytest.raises(ge.EnterpriseError,match='503') as error:
+        ge._tool('list_programs',{})
+    assert error.value.uncertain is False
+    with pytest.raises(ge.EnterpriseError,match='503') as error:
+        ge._tool('create_enterprise_issue',{},uncertain=True)
+    assert error.value.uncertain is True
+
+
+FAKE_SERVER='''
+import json,os,sys
+def send(message):
+    sys.stdout.write(json.dumps(message)+"\\n");sys.stdout.flush()
+for line in sys.stdin:
+    message=json.loads(line)
+    if message.get("method")=="initialize":
+        send({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"0"}}})
+    elif message.get("method")=="tools/call":
+        payload={"tool":message["params"]["name"],"arguments":message["params"]["arguments"],
+                 "token":os.environ.get("GITEE_ENT_MCP_ACCESS_TOKEN"),"base":os.environ.get("GITEE_ENT_API_BASE")}
+        send({"jsonrpc":"2.0","id":message["id"],"result":{"content":[{"type":"text","text":json.dumps({"total_count":1,"data":[{"id":11,"name":"P","ident":"P","status":0}],"echo":payload})}]}})
+'''
+
+
+def test_stdio_client_relays_through_official_command(tmp_path,monkeypatch):
+    script=tmp_path/'fake_server.py'
+    script.write_text(FAKE_SERVER,encoding='utf-8')
+    monkeypatch.setenv('AWT_GITEE_MCP_COMMAND',f'"{sys.executable}" "{script}"')
+    ge.gitee_mcp.reset()
+    try:
+        value=ge.gitee_mcp.call('list_programs',{'enterprise_id':7},'stdio-secret')
+    finally:
+        ge.gitee_mcp.reset()
+    assert value['data'][0]['id']==11
+    assert value['echo']=={'tool':'list_programs','arguments':{'enterprise_id':7},'token':'stdio-secret','base':'https://api.gitee.com/enterprises'}
 
 
 def test_catalog_excludes_closed_and_supports_pagination(monkeypatch):
     pages=[]
-    def request(method,path,params=None,payload=None):
-        pages.append(params['page'])
-        if params['page']==1:return [{'id':i+1,'name':f'Project {i}','status':0,'ident':str(i)} for i in range(100)]
-        return [{'id':200,'name':'Closed','status':2}]
-    monkeypatch.setattr(ge,'request',request)
+    def call(tool,arguments,token):
+        pages.append(arguments['page'])
+        if arguments['page']==1:return {'total_count':101,'data':[{'id':i+1,'name':f'Project {i}','status':0,'ident':str(i)} for i in range(100)]}
+        return {'total_count':101,'data':[{'id':200,'name':'Closed','status':2}]}
+    monkeypatch.setattr(ge.gitee_mcp,'call',call)
     catalog=ge.programs(7)
     assert pages==[1,2] and len(catalog)==100
 
@@ -197,16 +241,16 @@ def test_catalog_excludes_closed_and_supports_pagination(monkeypatch):
 def test_uncertain_result_can_link_only_matching_remote_work_item(client,monkeypatch):
     c,_=client;identifier=task(c);p=preview(c)
     def timeout(*a,**kw):raise ge.EnterpriseError('结果未知',uncertain=True)
-    monkeypatch.setattr(ge,'request',timeout)
+    monkeypatch.setattr(ge,'_tool',timeout)
     publish(c,p).raise_for_status()
     marker='<!-- awt-work-item:'+ge.stable('awt-work-item',7,identifier)+' -->'
-    def lookup(method,path,params=None,payload=None):
-        assert method=='GET' and path=='/7/issues/123'
-        return {'id':123,'program_id':11,'description':marker,'issue_url':'https://gitee.com/enterprises/demo/issues/123'}
-    monkeypatch.setattr(ge,'request',lookup)
+    def lookup(tool,arguments,credential=None,uncertain=False):
+        assert tool=='get_enterprise_issue_detail' and arguments=={'enterprise_id':7,'issue_id':'123'}
+        return {'id':123,'program_id':11,'description':marker}
+    monkeypatch.setattr(ge,'_tool',lookup)
     r=c.post('/api/gitee/enterprise/resolve',json={'enterprise_id':7,'task_id':identifier,'issue_id':123})
     r.raise_for_status();assert r.json()['status']=='created'
-    monkeypatch.setattr(ge,'request',lambda *a,**kw:pytest.fail('already linked, must not post'))
+    monkeypatch.setattr(ge,'_tool',lambda *a,**kw:pytest.fail('already linked, must not post'))
     publish(c,p).raise_for_status()
 
 

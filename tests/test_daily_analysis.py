@@ -18,7 +18,7 @@ def app_client(tmp_path,monkeypatch):
     engine=db.make_engine(tmp_path/'test.db')
     with TestClient(create_app(engine)) as client:
         s=client.get('/api/settings').json()
-        s.update(llm_enabled=True,llm_model='test',analysis_sources=['codex'])
+        s.update(llm_enabled=True,llm_model='test',analysis_sources=['codex'],auto_import_analysis=True)
         for key in CONVERSATION_SOURCES:s[key]['paths']=[]
         client.put('/api/settings',json=s).raise_for_status()
         yield client,engine
@@ -52,6 +52,47 @@ def test_48_prompts_6_sessions_one_semantic_task(app_client,monkeypatch):
     assert tasks[0]['confirmed_minutes']==0 and tasks[0]['suggested_minutes'] is None
     client.post('/api/analyze?date=2026-10-24',json={}).raise_for_status()
     assert len(client.get('/api/tasks?date=2026-10-24').json())==1
+
+
+def test_deferred_analysis_requires_explicit_import(app_client,monkeypatch):
+    client,engine=app_client;add_events(engine,3)
+    settings=client.get('/api/settings').json();settings['auto_import_analysis']=False
+    client.put('/api/settings',json=settings).raise_for_status()
+    monkeypatch.setattr(model_provider,'complete',scope_model(lambda *a,**kw:result()))
+    analyzed=client.post('/api/analyze?date=2026-10-24',json={}).json()
+    assert analyzed['created']==0 and analyzed['pending']==1 and len(analyzed['pending_tasks'])==1
+    assert client.get('/api/tasks?date=2026-10-24').json()==[]
+    overview=client.get('/api/conversations?date=2026-10-24').json()
+    pending=overview['analysis']['pending_tasks']
+    assert len(pending)==1 and len(pending[0]['evidence_ids'])==1
+    imported=client.post('/api/analysis/import',json={'date':'2026-10-24','items':[{'fingerprint':pending[0]['fingerprint'],'title':'修改后导入的标题'}]})
+    imported.raise_for_status();assert imported.json()['created']==1 and imported.json()['remaining']==0
+    tasks=client.get('/api/tasks?date=2026-10-24').json()
+    assert len(tasks)==1 and tasks[0]['title']=='修改后导入的标题' and len(tasks[0]['evidence'])==1
+    assert client.get('/api/conversations?date=2026-10-24').json()['analysis']['pending_tasks']==[]
+
+
+def test_settings_change_keeps_candidates_and_imported_tasks(app_client,monkeypatch):
+    client,engine=app_client;add_events(engine,3)
+    settings=client.get('/api/settings').json();settings['auto_import_analysis']=False
+    client.put('/api/settings',json=settings).raise_for_status()
+    monkeypatch.setattr(model_provider,'complete',scope_model(lambda *a,**kw:result()))
+    client.post('/api/analyze?date=2026-10-24',json={}).raise_for_status()
+    before=client.get('/api/conversations?date=2026-10-24').json()['analysis']['pending_tasks']
+    assert len(before)==1
+    # 关闭某个来源、改分析来源，只是让候选标记过期，不能删候选或今日工作项。
+    changed={**settings,'analysis_sources':['claude_code'],'codex':{**settings['codex'],'enabled':False}}
+    client.put('/api/settings',json=changed).raise_for_status()
+    overview=client.get('/api/conversations?date=2026-10-24').json()
+    assert [p['fingerprint'] for p in overview['analysis']['pending_tasks']]==[p['fingerprint'] for p in before]
+    assert overview['stale'] is True
+    assert client.get('/api/tasks?date=2026-10-24').json()==[]
+    imported=client.post('/api/analysis/import',json={'date':'2026-10-24','items':[{'fingerprint':before[0]['fingerprint'],'title':'保留候选后导入'}]})
+    imported.raise_for_status();assert imported.json()['created']==1
+    client.put('/api/settings',json={**changed,'target_minutes':420}).raise_for_status()
+    tasks=client.get('/api/tasks?date=2026-10-24').json()
+    assert [t['title'] for t in tasks]==['保留候选后导入']
+    assert len(tasks[0]['evidence'])==1
 
 
 def test_replace_only_unreviewed_legacy_after_valid_ai_result(app_client,monkeypatch):
@@ -255,6 +296,114 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_mod
     if model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash') and purpose in ('scope_filter','task_writer'):
         assert captured[0]['reasoning_effort']=='low' and captured[0]['stream']
     else:assert 'reasoning_effort' not in captured[0] and not captured[0]['stream']
+
+
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+@pytest.mark.parametrize('reported',[True,False])
+def test_usage_tracker_records_reported_tokens_or_estimates(monkeypatch,protocol,reported):
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'test-model','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            if protocol=='anthropic':
+                value={'content':[{'type':'text','text':'OK'}],'stop_reason':'end_turn'}
+                if reported:value['usage']={'input_tokens':321,'output_tokens':45}
+            else:
+                value={'choices':[{'message':{'content':'OK'},'finish_reason':'stop'}]}
+                if reported:value['usage']={'prompt_tokens':321,'completion_tokens':45}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    with model_provider.usage_tracker() as calls:
+        assert model_provider.complete(Settings(),'rules','修复登录问题的对话')=='OK'
+    summary=model_provider.usage_summary(calls)
+    assert summary['calls']==1 and summary['stages'][0]['stage']=='general'
+    if reported:
+        assert summary['prompt_tokens']==321 and summary['completion_tokens']==45 and not summary['estimated']
+    else:
+        assert summary['estimated'] and summary['total_tokens']>0
+
+
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+def test_streamed_usage_is_captured(monkeypatch,protocol):
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    if protocol=='anthropic':
+        events=[{'type':'message_start','message':{'usage':{'input_tokens':150,'output_tokens':1}}},
+                {'type':'content_block_start','content_block':{'type':'text','text':''}},
+                {'type':'content_block_delta','delta':{'type':'text_delta','text':'{"tasks":[]}'}},
+                {'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':30}},
+                {'type':'message_stop'}]
+    else:
+        events=[{'choices':[{'delta':{'content':'{"tasks":[]}'},'finish_reason':None}]},
+                {'choices':[{'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':150,'completion_tokens':30}}]
+    body=''.join('data: '+json.dumps(e)+'\n\n' for e in events)
+    if protocol=='openai':body+='data: [DONE]\n\n'
+    def respond(req):return httpx.Response(200,text=body,headers={'content-type':'text/event-stream; charset=utf-8'})
+    base_client=httpx.Client
+    monkeypatch.setattr(model_provider.httpx,'Client',lambda **kw:base_client(transport=httpx.MockTransport(respond),**kw))
+    with model_provider.usage_tracker() as calls:
+        assert model_provider.complete(Settings(),'rules','input',purpose='task_writer')=='{"tasks":[]}'
+    summary=model_provider.usage_summary(calls)
+    assert summary['prompt_tokens']==150 and summary['completion_tokens']==30 and not summary['estimated']
+
+
+def test_assistant_only_refs_are_linked_to_their_user_request(app_client,monkeypatch):
+    client,engine=app_client
+    with engine.begin() as conn:
+        conn.execute(insert(db.events),[
+            {'id':'u1','source':'codex','session_id':'s','occurred_at':'2026-10-24T01:00:00+00:00','kind':'user_prompt','summary':'修复登录接口超时','cwd':'','project':'archive','raw_ref':'local','metadata':{}},
+            {'id':'a1','source':'codex','session_id':'s','occurred_at':'2026-10-24T01:01:00+00:00','kind':'assistant_message','summary':'已定位并修复','cwd':'','project':'archive','raw_ref':'local','metadata':{}},
+        ])
+    def model(settings,system,text,**kw):
+        payload=json.loads(text)
+        if 'required_refs' in payload:
+            return json.dumps({'work_refs':payload['required_refs'],'excluded':[],'uncertain_refs':[],'learning_groups':[]})
+        return json.dumps({'summary':'修复登录超时','tasks':[{'title':'修复登录接口超时问题','details':'定位并完成修复','project':'archive','refs':['e2']}]},ensure_ascii=False)
+    monkeypatch.setattr(model_provider,'complete',model)
+    client.post('/api/analyze?date=2026-10-24',json={}).raise_for_status()
+    tasks=client.get('/api/tasks?date=2026-10-24').json()
+    assert len(tasks)==1 and {e['id'] for e in tasks[0]['evidence']}=={'u1','a1'}
+
+
+def test_failed_analysis_reports_recorded_token_usage(app_client,monkeypatch):
+    client,engine=app_client;add_events(engine,1)
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'test-model','protocol':'openai','endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            payload=json.loads(kw['json']['messages'][-1]['content'])
+            text=json.dumps({'work_refs':payload['required_refs'],'learning_groups':[],'excluded':[],'uncertain_refs':[]}) if 'required_refs' in payload else json.dumps({'summary':'x','tasks':[{'title':'伪造任务','details':'只有不存在的引用','refs':['missing']}]})
+            value={'choices':[{'message':{'content':text},'finish_reason':'stop'}],'usage':{'prompt_tokens':100,'completion_tokens':20}}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    r=client.post('/api/analyze?date=2026-10-24',json={})
+    assert r.status_code==400
+    detail=r.json()['detail']
+    assert '证据引用无效' in detail and '本次已记录模型用量' in detail
+    assert '240 tokens' in detail and '输入 200 / 输出 40' in detail
+
+
+def test_analysis_snapshot_reports_token_usage(app_client,monkeypatch):
+    client,engine=app_client;add_events(engine,3)
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'test-model','protocol':'openai','endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            payload=json.loads(kw['json']['messages'][-1]['content'])
+            text=json.dumps({'work_refs':payload['required_refs'],'learning_groups':[],'excluded':[],'uncertain_refs':[]}) if 'required_refs' in payload else result()
+            value={'choices':[{'message':{'content':text},'finish_reason':'stop'}],'usage':{'prompt_tokens':100,'completion_tokens':20}}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    r=client.post('/api/analyze?date=2026-10-24',json={});r.raise_for_status()
+    usage=r.json()['usage']
+    assert usage['calls']==2 and usage['total_tokens']==240 and not usage['estimated']
+    assert {stage['label'] for stage in usage['stages']}=={'工作相关性筛选','工作项归并'}
+    assert client.get('/api/conversations?date=2026-10-24').json()['analysis']['usage']['total_tokens']==240
 
 
 @pytest.mark.parametrize('protocol',['anthropic','openai'])

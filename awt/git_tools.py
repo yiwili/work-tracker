@@ -94,6 +94,14 @@ def configured_author(root):
     return {**value,'source':'local' if any(local.values()) else 'inherited' if any(value.values()) else 'unavailable'}
 
 
+def global_author():
+    # 只读全局配置文件，不回退到程序自身目录的仓库配置。
+    home=Path.home()
+    name=git(home,'config','--global','--get','user.name')
+    email=git(home,'config','--global','--get','user.email')
+    return {'name':name,'email':email,'source':'global' if (name or email) else 'unavailable'}
+
+
 def author_override_key(root, settings):
     key=root_key(root)
     return next((path for path in settings.git_author_overrides if root_key(path)==key),None)
@@ -154,6 +162,95 @@ def identity_options(roots, settings):
         authors=[{'name':name,'email':email,'commits':count} for (name,email),count in counts.most_common(100)]
         result.append({'root':repo['root'],'project':repo['project'],'override_key':author_override_key(repo['root'],settings),'detected':configured_author(repo['root']),
                        'selected':selected_author(repo['root'],settings),'authors':authors})
+    return result
+
+
+SCAN_SKIP_NAMES = {
+    'node_modules', 'vendor', 'dist', 'build', 'out', 'target', 'obj',
+    '__pycache__', '.venv', 'venv', 'env', '.cache', '.gradle', '.m2',
+    '.npm', '.cargo', '.rustup', '.idea', '.vscode', '.next', '.nuxt',
+    '.svelte-kit', 'coverage', 'tmp', 'temp', 'logs', 'log', 'library',
+    'appdata', 'windows', 'program files', 'program files (x86)',
+    '$recycle.bin', 'system volume information',
+}
+
+
+def scan_repositories(root, max_depth=3, limit=200, max_dirs=4000):
+    """Find Git repositories below a user-picked parent directory.
+
+    Stops descending once a repository is found, follows no links and skips
+    dependency/build/system folders so a home or drive root stays affordable.
+    """
+    base = Path(root).expanduser()
+    if not base.is_dir():
+        return {'root': str(base), 'repos': [], 'truncated': False,
+                'message': '请选择正确git项目目录'}
+    found = []
+    truncated = False
+    stack = [(base, 0)]
+    visited = 0
+    while stack:
+        current, depth = stack.pop()
+        visited += 1
+        if visited > max_dirs:
+            truncated = True
+            break
+        try:
+            if (current / '.git').exists():
+                found.append({'root': str(current), 'name': current.name or str(current),
+                              'relative': '.' if current == base else str(current.relative_to(base))})
+                continue
+        except OSError:
+            continue
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold(), reverse=True)
+        except OSError:
+            continue
+        for child in children:
+            try:
+                if child.is_symlink() or getattr(child, 'is_junction', lambda: False)():
+                    continue
+                if not child.is_dir() or child.name.casefold() in SCAN_SKIP_NAMES:
+                    continue
+            except OSError:
+                continue
+            stack.append((child, depth + 1))
+        if len(found) >= limit:
+            truncated = True
+            break
+    found.sort(key=lambda item: item['root'].casefold())
+    if len(found) > limit:
+        found = found[:limit]
+        truncated = True
+    return {'root': str(base), 'repos': found, 'truncated': truncated,
+            'message': '' if found else '请选择正确git项目目录'}
+
+
+def verify_author(roots, settings, limit=1000):
+    # 用与采集相同的身份解析和精确匹配规则，快速检查最近提交能否匹配上。
+    result=[];seen=set()
+    for root in roots:
+        if not root.strip() or excluded(root,settings):continue
+        _,repo=resolve_project(root,settings)
+        if not repo or repo['root'] in seen:continue
+        seen.add(repo['root'])
+        identity=selected_author(repo['root'],settings)
+        raw=git(repo['root'],'log','--all','-n',str(limit),'--format=%aI%x1f%an%x1f%ae%x1f%s')
+        scanned=matched=0;latest='';samples=[]
+        for line in raw.splitlines():
+            fields=line.split('\x1f',3)
+            if len(fields)!=4:continue
+            authored,name,email,subject=fields
+            scanned+=1
+            if identity.get('name') or identity.get('email'):
+                if not author_matches(identity,name,email):continue
+                matched+=1
+                latest=max(latest,authored)
+                if len(samples)<3:samples.append(subject)
+        result.append({'root':repo['root'],'project':repo['project'],'identity':identity,'scanned':scanned,
+                       'matched':matched,'latest':latest,'samples':samples})
     return result
 
 

@@ -1,10 +1,12 @@
 """Model connections. Credentials never enter settings responses, task prompts, or logs."""
 import base64
+import contextvars
 import ctypes
 import json
 import logging
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -62,6 +64,58 @@ class ModelError(ValueError):
     pass
 
 
+STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并'}
+_usage_calls=contextvars.ContextVar('awt_usage_calls',default=None)
+
+
+@contextmanager
+def usage_tracker():
+    calls=[]
+    token=_usage_calls.set(calls)
+    try:
+        yield calls
+    finally:
+        _usage_calls.reset(token)
+
+
+def _estimate_tokens(text):
+    """Rough local count when a provider omits usage; CJK is about one token each."""
+    text=text or ''
+    cjk=sum(1 for char in text if '\u4e00'<=char<='\u9fff')
+    return max(1,cjk+(len(text)-cjk)//4)
+
+
+def _record_usage(purpose, model, system, input_text, output_text, usage):
+    calls=_usage_calls.get()
+    if calls is None:
+        return
+    prompt=(usage or {}).get('prompt')
+    completion=(usage or {}).get('completion')
+    estimated=prompt is None or completion is None
+    calls.append({'purpose':purpose or 'general','model':model,
+                  'prompt_tokens':prompt if prompt is not None else _estimate_tokens(system)+_estimate_tokens(input_text),
+                  'completion_tokens':completion if completion is not None else _estimate_tokens(output_text),
+                  'estimated':estimated})
+
+
+def usage_summary(calls=None):
+    calls=list(calls if calls is not None else (_usage_calls.get() or []))
+    if not calls:
+        return None
+    stages={}
+    for call in calls:
+        stage=stages.setdefault(call['purpose'],{'stage':call['purpose'],'label':STAGE_LABELS.get(call['purpose'],call['purpose']),
+                                                 'calls':0,'prompt_tokens':0,'completion_tokens':0,'estimated':False})
+        stage['calls']+=1
+        stage['prompt_tokens']+=call['prompt_tokens']
+        stage['completion_tokens']+=call['completion_tokens']
+        stage['estimated']=stage['estimated'] or call['estimated']
+    prompt=sum(call['prompt_tokens'] for call in calls)
+    completion=sum(call['completion_tokens'] for call in calls)
+    return {'calls':len(calls),'prompt_tokens':prompt,'completion_tokens':completion,'total_tokens':prompt+completion,
+            'estimated':any(call['estimated'] for call in calls),'stages':list(stages.values())}
+
+
 def daily_reasoning_model(model, purpose):
     name=model.lower().rsplit('/',1)[-1]
     return purpose in ('scope_filter','task_writer') and bool(re.match(r'^glm-5\.3(?:$|[-\[])',name))
@@ -84,7 +138,7 @@ def truncated(purpose, budget):
 
 def stream_text(lines, protocol, purpose, budget):
     """Read complete SSE messages; discard thinking and reject partial streams."""
-    parts=[];data=[];reason=None;done=False
+    parts=[];data=[];reason=None;done=False;usage={'prompt':None,'completion':None}
     def events():
         for line in lines:
             if not line:
@@ -104,10 +158,21 @@ def stream_text(lines, protocol, purpose, budget):
                     parts.append(value['content_block'].get('text',''))
                 elif kind=='content_block_delta' and value.get('delta',{}).get('type')=='text_delta':
                     parts.append(value['delta']['text'])
-                elif kind=='message_delta':reason=value.get('delta',{}).get('stop_reason',reason)
+                elif kind=='message_start':
+                    reported=value.get('message',{}).get('usage') or {}
+                    if reported.get('input_tokens') is not None:usage['prompt']=reported['input_tokens']
+                    if reported.get('output_tokens') is not None:usage['completion']=reported['output_tokens']
+                elif kind=='message_delta':
+                    reason=value.get('delta',{}).get('stop_reason',reason)
+                    reported=value.get('usage') or {}
+                    if reported.get('output_tokens') is not None:usage['completion']=reported['output_tokens']
                 elif kind=='message_stop':done=True
                 if reason=='max_tokens':raise truncated(purpose,budget)
             else:
+                reported=value.get('usage')
+                if isinstance(reported,dict):
+                    if reported.get('prompt_tokens') is not None:usage['prompt']=reported['prompt_tokens']
+                    if reported.get('completion_tokens') is not None:usage['completion']=reported['completion_tokens']
                 for choice in value.get('choices',[]):
                     content=choice.get('delta',{}).get('content')
                     if content is not None:parts.append(content)
@@ -117,7 +182,7 @@ def stream_text(lines, protocol, purpose, budget):
             raise ModelError('模型流式输出未完整结束；原任务已保留，请稍后重新分析')
         text=''.join(parts)
         if not text.strip():raise ModelError('模型未返回可用文本；原任务已保留')
-        return text
+        return text,usage
     except (ValueError,KeyError,TypeError,AttributeError) as exc:
         if isinstance(exc,ModelError):raise
         raise ModelError('模型流式响应格式不兼容；原任务已保留') from None
@@ -284,19 +349,26 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
             result = client.post(c['endpoint'], headers=headers, json=body)
             result.raise_for_status()
             if body['stream'] and result.headers.get('content-type','').startswith('text/event-stream'):
-                return stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
+                answer,usage=stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
+                _record_usage(purpose,c['model'],system,text,answer,usage)
+                return answer
             value = result.json()
         if c['protocol'] == 'anthropic':
             if require_text and value.get('stop_reason') == 'max_tokens':
                 raise truncated(purpose,max_tokens)
-            text = '\n'.join(block['text'] for block in value.get('content', []) if block.get('type') == 'text')
+            answer = '\n'.join(block['text'] for block in value.get('content', []) if block.get('type') == 'text')
+            reported = value.get('usage') or {}
+            usage = {'prompt':reported.get('input_tokens'),'completion':reported.get('output_tokens')}
         else:
             if require_text and value['choices'][0].get('finish_reason') == 'length':
                 raise truncated(purpose,max_tokens)
-            text = value['choices'][0]['message'].get('content') or ''
-        if require_text and (not isinstance(text, str) or not text.strip()):
+            answer = value['choices'][0]['message'].get('content') or ''
+            reported = value.get('usage') or {}
+            usage = {'prompt':reported.get('prompt_tokens'),'completion':reported.get('completion_tokens')}
+        if require_text and (not isinstance(answer, str) or not answer.strip()):
             raise ModelError('模型未返回可用文本；原任务已保留')
-        return text
+        _record_usage(purpose,c['model'],system,text,answer,usage)
+        return answer
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         descriptions = {401:'密钥无效或已过期',403:'供应商拒绝访问或该套餐不支持此接口',404:'接口地址或模型名称不存在',429:'请求限流或额度不足'}

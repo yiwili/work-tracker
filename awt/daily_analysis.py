@@ -10,17 +10,28 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from . import db, model_provider
 from .collectors import stable
 from .git_tools import excluded
-from .models import CONVERSATION_SOURCES
+from .models import CONVERSATION_SOURCES, SOURCE_FAMILIES
 from .privacy import redact
 
 from . import activity_time, prompts
 from .work_scope import filter_work, POLICY_VERSION
 
 
+def selected_sources(settings):
+    selected = set(settings.analysis_sources)
+    # 旧数据把国内外版记在合并的来源名下；两个新来源都选中时才纳入旧记录，
+    # 避免只选一个版本时混入另一个版本的对话。
+    for legacy, variants in SOURCE_FAMILIES.items():
+        if all(variant in selected for variant in variants):
+            selected.add(legacy)
+    return selected
+
+
 def day_rows(conn, day, settings):
     from .service import visible_events
+    sources = selected_sources(settings)
     return [e for e in visible_events(conn,day,settings)
-            if e['source'] in settings.analysis_sources and not excluded(e['cwd'], settings)]
+            if e['source'] in sources and not excluded(e['cwd'], settings)]
 
 
 def overview(conn, day, settings):
@@ -40,13 +51,14 @@ def overview(conn, day, settings):
             if e['kind'] == 'user_prompt' and not session['preview']:
                 session['preview'] = e['summary'][:200]
     source_stats = []
+    selected_names = selected_sources(settings)
     for source in (*CONVERSATION_SOURCES, 'git'):
         items = [e for e in all_rows if e['source'] == source]
         counts = Counter(e['kind'] for e in items)
-        source_stats.append({'source': source, 'selected': source in settings.analysis_sources,
+        source_stats.append({'source': source, 'selected': source in selected_names,
                              'sessions': len({e['session_id'] for e in items}) if source != 'git' else 0,
                              'user_messages': counts['user_prompt'], 'assistant_messages': counts['assistant_message'], 'events': len(items)})
-    selected = [e for e in all_rows if e['source'] in settings.analysis_sources]
+    selected = [e for e in all_rows if e['source'] in selected_names]
     result = {'date': str(day), 'sources': source_stats,
               'sessions': [{**value, 'projects': sorted(value['projects'])} for value in sessions.values()],
               'session_count': len({(e['source'], e['session_id']) for e in selected if e['source'] != 'git'}),
@@ -173,14 +185,26 @@ def infer_day(records, refs, settings, reviewed, day):
 
 
 def analyze(conn, day):
+    with model_provider.usage_tracker() as usage_calls:
+        try:
+            return _analyze(conn, day, usage_calls)
+        except model_provider.ModelError as exc:
+            usage=model_provider.usage_summary(usage_calls)
+            if not usage:
+                raise
+            prefix='约 ' if usage['estimated'] else ''
+            raise model_provider.ModelError(f"{exc}；本次已记录模型用量{prefix}{usage['total_tokens']:,} tokens（输入 {usage['prompt_tokens']:,} / 输出 {usage['completion_tokens']:,}）") from None
+
+
+def _analyze(conn, day, usage_calls):
     from .service import category, get_settings, invalidate, list_tasks, now, state_for, upsert
     settings = get_settings(conn)
     rows = day_rows(conn, day, settings)
     summary = overview(conn, day, settings)
     if not settings.llm_enabled:
-        return {'created': 0, 'updated': 0, 'archived': 0, 'analysis_required': True, 'warnings': ['已统计全天对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计全天对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
     if not any(e['kind'] in ('user_prompt', 'assistant_message') for e in rows):
-        return {'created': 0, 'updated': 0, 'archived': 0, 'warnings': ['所选来源在当天没有可分析的对话。'], 'conversations': summary, 'merge_suggestions': []}
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': ['所选来源在当天没有可分析的对话。'], 'conversations': summary, 'merge_suggestions': []}
     records, refs, segments = transcript(rows, settings)
     active_tasks = list_tasks(conn, day)
     protected = [t for t in active_tasks if t['origin'] == 'manual' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate')]
@@ -210,7 +234,16 @@ def analyze(conn, day):
     protected_ids = {e['id'] for t in protected for e in t['evidence']}
     deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
     deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
+    owners={}
+    for anchor, events in segments.items():
+        if anchor in refs:
+            for event in events:
+                owners.setdefault(event['id'], anchor)
     generated, warnings = [], []
+    if scope.get('unresolved_refs'):
+        warnings.append(f"工作筛选有 {len(scope['unresolved_refs'])} 条请求未归类，已放入待判断，不计工时：{','.join(scope['unresolved_refs'][:10])}")
+    if scope.get('ambiguous_refs'):
+        warnings.append(f"工作筛选有 {len(scope['ambiguous_refs'])} 条请求归类冲突，已放入待判断，不计工时：{','.join(scope['ambiguous_refs'][:10])}")
     used = set()
     for task in result['tasks']:
         supporting = {refs[r]['id']: refs[r] for r in task['refs']}
@@ -221,6 +254,12 @@ def analyze(conn, day):
         if set(supporting) & (protected_ids | deleted_ids):
             warnings.append(f"已跳过与人工审核/删除记录重叠的候选：{task['title']}")
             continue
+        if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
+            # Assistant replies inherit the work request of their session turn.
+            for event_id in list(supporting):
+                anchor=owners.get(event_id)
+                if anchor:
+                    supporting[refs[anchor]['id']]=refs[anchor]
         if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
             raise model_provider.ModelError('AI 候选只有回复文本，缺少工作请求或行为依据；原任务已保留')
         projects = {e['project'] for e in supporting.values()}
@@ -242,22 +281,92 @@ def analyze(conn, day):
                            'fingerprint': fingerprint, 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None}, supporting))
     # Everything above is validated before replacing any drafts. The caller commits atomically.
     archived = 0
-    protected_task_ids = {t['id'] for t in protected}
-    generated_ids = {t['id'] for t, _ in generated}
-    for t in active_tasks:
-        if t['id'] not in protected_task_ids | generated_ids:
-            conn.execute(update(db.tasks).where(db.tasks.c.id == t['id']).values(deleted=True))
-            archived += 1
-    for task, supporting in generated:
-        upsert(conn, db.tasks, task, 'id')
-        conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
-        for event in supporting.values():
-            conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event['id']).on_conflict_do_nothing())
+    pending_tasks = []
+    if settings.auto_import_analysis:
+        protected_task_ids = {t['id'] for t in protected}
+        generated_ids = {t['id'] for t, _ in generated}
+        for t in active_tasks:
+            if t['id'] not in protected_task_ids | generated_ids:
+                conn.execute(update(db.tasks).where(db.tasks.c.id == t['id']).values(deleted=True))
+                archived += 1
+        for task, supporting in generated:
+            upsert(conn, db.tasks, task, 'id')
+            conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
+            for event in supporting.values():
+                conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event['id']).on_conflict_do_nothing())
+    else:
+        # 默认只保存候选，不触碰今日清单；用户在“分析结果”里确认后再写入。
+        pending_tasks = [{'fingerprint': task['fingerprint'], 'title': task['title'], 'details': task['details'],
+                          'project': task['project'], 'category': task['category'], 'status': task['status'],
+                          'confidence': task['confidence'], 'evidence_level': task['evidence_level'],
+                          'evidence_ids': sorted(supporting)} for task, supporting in generated]
+    usage = model_provider.usage_summary(usage_calls)
     snapshot = {'scope':scope, 'prompt_roles':['scope_filter','task_writer'], 'input_hash': input_hash(rows, settings), 'analyzed_at': now(), 'provider': settings.llm_provider,
+                'usage': usage, 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
                 'model': model_provider.status(settings)['model'], 'summary': redact(result.get('summary', ''), settings.redact_patterns),
                 'session_count': summary['session_count'], 'user_messages': summary['user_messages'], 'assistant_messages': summary['assistant_messages'],
                 'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings}
     upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
+    if settings.auto_import_analysis and (generated or archived):
+        invalidate(conn, day)
+    return {'created': len(generated) if settings.auto_import_analysis else 0, 'updated': 0, 'archived': archived,
+            'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, day, settings), 'merge_suggestions': []}
+
+
+def import_pending(conn, day, selections):
+    from .service import get_settings, invalidate, list_tasks, now, upsert
+    settings = get_settings(conn)
+    snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == str(day))).scalar_one_or_none()
+    if not snapshot or not snapshot.get('pending_tasks'):
+        raise ValueError('没有待导入的分析结果，请先分析当天对话')
+    pending = {item['fingerprint']: item for item in snapshot['pending_tasks']}
+    unknown = [item.fingerprint for item in selections if item.fingerprint not in pending]
+    if unknown:
+        raise ValueError('分析结果已变化，请关闭窗口后重新打开分析结果')
+    active_tasks = list_tasks(conn, day)
+    report_confirmed = conn.execute(select(db.reports.c.confirmed).where(db.reports.c.date == str(day))).scalar_one_or_none()
+    protected = [t for t in active_tasks if report_confirmed or t['origin'] == 'manual' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate')]
+    protected_ids = {e['id'] for t in protected for e in t['evidence']}
+    deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
+    deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
+    generated, warnings = [], []
+    for selection in selections:
+        candidate = pending[selection.fingerprint]
+        evidence_ids = list(candidate.get('evidence_ids', []))
+        rows = {row['id']: dict(row) for row in conn.execute(select(db.events).where(db.events.c.id.in_(evidence_ids))).mappings()} if evidence_ids else {}
+        if len(rows) != len(set(evidence_ids)):
+            raise ValueError('部分依据记录已不存在，请重新分析当天对话')
+        if set(rows) & (protected_ids | deleted_ids):
+            warnings.append(f"已跳过与人工审核/删除记录重叠的候选：{candidate['title']}")
+            continue
+        title = selection.title if selection.title is not None else candidate['title']
+        details = selection.details if selection.details is not None else candidate['details']
+        project = selection.project if selection.project is not None else candidate['project']
+        category_name = selection.category if selection.category is not None else candidate['category']
+        status = selection.status or candidate['status']
+        generated.append(({'id': uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
+                           'details': redact(details, settings.redact_patterns), 'project': project or '未归属项目',
+                           'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
+                           'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核', 'evidence_level': candidate.get('evidence_level', '已有行为证据'),
+                           'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
+                          rows))
+    protected_task_ids = {t['id'] for t in protected}
+    archived = 0
+    for t in active_tasks:
+        if t['id'] not in protected_task_ids:
+            conn.execute(update(db.tasks).where(db.tasks.c.id == t['id']).values(deleted=True))
+            archived += 1
+    for task, rows in generated:
+        upsert(conn, db.tasks, task, 'id')
+        conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
+        for event_id in rows:
+            conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event_id).on_conflict_do_nothing())
+    imported = {task['fingerprint'] for task, _ in generated}
+    remaining = [item for item in snapshot['pending_tasks'] if item['fingerprint'] not in imported]
+    snapshot = {**snapshot, 'pending_tasks': remaining, 'imported_at': now(), 'imported_tasks': len(generated)}
+    upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
     if generated or archived:
         invalidate(conn, day)
-    return {'created': len(generated), 'updated': 0, 'archived': archived, 'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'conversations': overview(conn, day, settings), 'merge_suggestions': []}
+    return {'created': len(generated), 'archived': archived, 'remaining': len(remaining),
+            'imported': sorted(imported), 'warnings': warnings}

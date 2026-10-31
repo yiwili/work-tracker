@@ -93,11 +93,11 @@ def test_terminal_failed_estimate_retains_same_request_and_inputs(context,monkey
 @pytest.mark.parametrize('accept',[False,True])
 def test_terminal_gitee_requires_final_confirmation(context,monkeypatch,accept):
     create(context[0],duration=90);sent=[]
-    def request(method,path,**kw):
-        assert method=='POST' and path=='/7/issues'
-        sent.append(kw['payload'])
-        return {'id':123,'issue_url':'https://gitee.com/enterprises/demo/issues/123'}
-    monkeypatch.setattr(ge,'request',request)
+    def create_tool(tool,arguments,credential=None,uncertain=False):
+        assert tool=='create_enterprise_issue' and arguments['enterprise_id']==7
+        sent.append(arguments)
+        return {'id':123,'ident':'I123'}
+    monkeypatch.setattr(ge,'_tool',create_tool)
     script=Script([''],[False,False,accept]);app,output=terminal(context,script)
     app.publish()
     assert len(sent)==int(accept)

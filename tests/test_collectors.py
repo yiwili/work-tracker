@@ -25,13 +25,26 @@ def test_default_sources_cover_domestic_and_international_editions(tmp_path, mon
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('USERPROFILE', str(tmp_path))
     settings = Settings()
-    assert any('.workbuddy-ai' in path for path in settings.workbuddy.paths)
-    assert any(path.endswith('workbuddy\\projects') or path.endswith('workbuddy/projects') for path in settings.workbuddy.paths)
-    assert any('.qoder-cn' in path for path in settings.qoder.paths)
-    assert any(path.endswith('.qoder\\projects') or path.endswith('.qoder/projects') for path in settings.qoder.paths)
-    assert any('.trae-cn' in path for path in settings.trae.paths)
-    assert any(path.endswith('.trae\\memory\\projects') or path.endswith('.trae/memory/projects') for path in settings.trae.paths)
+    assert any('.workbuddy-ai' in path for path in settings.workbuddy_intl.paths)
+    assert any(path.endswith('workbuddy\\projects') or path.endswith('workbuddy/projects') for path in settings.workbuddy_cn.paths)
+    assert any('.qoder-cn' in path for path in settings.qoder_cn.paths)
+    assert any(path.endswith('.qoder\\projects') or path.endswith('.qoder/projects') for path in settings.qoder_intl.paths)
+    assert any('.trae-cn' in path for path in settings.trae_cn.paths)
+    assert any(path.endswith('.trae\\memory\\projects') or path.endswith('.trae/memory/projects') for path in settings.trae_intl.paths)
     assert any(path.endswith('.dsh\\sessions') or path.endswith('.dsh/sessions') for path in settings.deepseek_harness.paths)
+
+
+def test_legacy_merged_sources_split_into_domestic_and_international():
+    settings = Settings.model_validate({
+        'workbuddy': {'enabled': True, 'paths': ['C:/Users/me/.workbuddy-ai/projects', 'C:/Users/me/.workbuddy/projects']},
+        'qoder': {'enabled': False, 'paths': ['C:/Users/me/.qoder/projects', 'C:/Users/me/.qoder-cn/projects']},
+        'analysis_sources': ['workbuddy', 'qoder', 'git'],
+    })
+    assert settings.workbuddy_intl.paths == ['C:/Users/me/.workbuddy-ai/projects']
+    assert settings.workbuddy_cn.paths == ['C:/Users/me/.workbuddy/projects']
+    assert settings.qoder_intl.enabled is False
+    assert settings.qoder_cn.paths == ['C:/Users/me/.qoder-cn/projects']
+    assert settings.analysis_sources == ['workbuddy_cn', 'workbuddy_intl', 'qoder_cn', 'qoder_intl', 'git']
 
 
 def test_workbuddy_reads_domestic_session_and_strips_system_reminder(tmp_path):

@@ -11,29 +11,55 @@ class SourceConfig(BaseModel):
     paths: list[str] = Field(default_factory=list)
 
 
-CONVERSATION_SOURCES = ('codex', 'claude_code', 'workbuddy', 'deepseek_harness', 'qoder', 'trae')
+CONVERSATION_SOURCES = ('codex', 'claude_code', 'workbuddy_cn', 'workbuddy_intl',
+                        'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl')
+
+# 旧版把国内外版合并成一个来源；读取旧设置时按路径拆到两个新来源。
+SOURCE_FAMILIES = {
+    'workbuddy': ('workbuddy_cn', 'workbuddy_intl'),
+    'qoder': ('qoder_cn', 'qoder_intl'),
+    'trae': ('trae_cn', 'trae_intl'),
+}
 
 
-def _workbuddy_source():
-    # 国内版写在 ~/.workbuddy，国外版 WorkBuddy AI 写在 ~/.workbuddy-ai。
-    home = Path.home()
-    return SourceConfig(paths=[str(home / ".workbuddy-ai" / "projects"), str(home / ".workbuddy" / "projects")])
+def _source(path):
+    return SourceConfig(paths=[str(path)])
+
+
+def _workbuddy_cn_source():
+    return _source(Path.home() / ".workbuddy" / "projects")
+
+
+def _workbuddy_intl_source():
+    return _source(Path.home() / ".workbuddy-ai" / "projects")
 
 
 def _deepseek_harness_source():
-    return SourceConfig(paths=[str(Path.home() / ".dsh" / "sessions")])
+    return _source(Path.home() / ".dsh" / "sessions")
 
 
-def _qoder_source():
-    # 国外版 ~/.qoder，国内版 ~/.qoder-cn；不存在的目录会在采集时提示。
-    home = Path.home()
-    return SourceConfig(paths=[str(home / ".qoder" / "projects"), str(home / ".qoder-cn" / "projects")])
+def _qoder_cn_source():
+    return _source(Path.home() / ".qoder-cn" / "projects")
 
 
-def _trae_source():
+def _qoder_intl_source():
+    return _source(Path.home() / ".qoder" / "projects")
+
+
+def _trae_cn_source():
     # Trae 完整会话库加密，这里读取它落盘的会话摘要。
-    home = Path.home()
-    return SourceConfig(paths=[str(home / ".trae" / "memory" / "projects"), str(home / ".trae-cn" / "memory" / "projects")])
+    return _source(Path.home() / ".trae-cn" / "memory" / "projects")
+
+
+def _trae_intl_source():
+    return _source(Path.home() / ".trae" / "memory" / "projects")
+
+
+def _is_cn_path(family, path):
+    normalized = path.replace('\\', '/')
+    if family == 'workbuddy':
+        return '.workbuddy-ai' not in normalized
+    return f'.{family}-cn' in normalized
 
 
 class GiteeConfig(BaseModel):
@@ -104,6 +130,34 @@ class GitAuthor(BaseModel):
         return self
 
 
+class SourceCheckInput(BaseModel):
+    sources: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator('sources')
+    @classmethod
+    def valid_sources(cls, values):
+        if any(key not in CONVERSATION_SOURCES for key in values):
+            raise ValueError('未知的对话来源')
+        for paths in values.values():
+            if len(paths) > 50:
+                raise ValueError('单个来源的路径不能超过 50 条')
+            if any(not p.strip() or len(p) > 4096 or any(ord(c) < 32 for c in p) for p in paths):
+                raise ValueError('路径为空、过长或包含控制字符')
+        return values
+
+
+class GitScanInput(BaseModel):
+    root: str = Field(min_length=1, max_length=4096)
+
+    @field_validator('root')
+    @classmethod
+    def valid_root(cls, value):
+        value = value.strip()
+        if not value or any(ord(c) < 32 for c in value):
+            raise ValueError('请选择正确git项目目录')
+        return value
+
+
 class GitIdentityQuery(BaseModel):
     roots: list[str] = Field(default_factory=list,max_length=50)
 
@@ -115,16 +169,23 @@ class GitIdentityQuery(BaseModel):
         return values
 
 
+class GitVerifyQuery(GitIdentityQuery):
+    author: GitAuthor | None = None
+
+
 class Settings(BaseModel):
     timezone: str = "Asia/Shanghai"
     target_minutes: int = Field(default=480, ge=1, le=1440)
     step_minutes: int = Field(default=15, ge=1, le=120)
     claude_code: SourceConfig = Field(default_factory=SourceConfig)
     codex: SourceConfig = Field(default_factory=SourceConfig)
-    workbuddy: SourceConfig = Field(default_factory=_workbuddy_source)
+    workbuddy_cn: SourceConfig = Field(default_factory=_workbuddy_cn_source)
+    workbuddy_intl: SourceConfig = Field(default_factory=_workbuddy_intl_source)
     deepseek_harness: SourceConfig = Field(default_factory=_deepseek_harness_source)
-    qoder: SourceConfig = Field(default_factory=_qoder_source)
-    trae: SourceConfig = Field(default_factory=_trae_source)
+    qoder_cn: SourceConfig = Field(default_factory=_qoder_cn_source)
+    qoder_intl: SourceConfig = Field(default_factory=_qoder_intl_source)
+    trae_cn: SourceConfig = Field(default_factory=_trae_cn_source)
+    trae_intl: SourceConfig = Field(default_factory=_trae_intl_source)
     git_roots: list[str] = Field(default_factory=list)
     git_author: GitAuthor | None = None
     git_author_overrides: dict[str,GitAuthor] = Field(default_factory=dict,max_length=100)
@@ -138,7 +199,9 @@ class Settings(BaseModel):
     llm_provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
     llm_protocol: Literal['openai', 'anthropic'] = 'openai'
     ccswitch_config_path: str = ''
-    analysis_sources: list[Literal['codex', 'claude_code', 'workbuddy', 'deepseek_harness', 'qoder', 'trae', 'git']] = Field(default_factory=lambda: ['codex'])
+    # 默认只生成候选，用户在“分析结果”中确认后再写入今日工作清单。
+    auto_import_analysis: bool = False
+    analysis_sources: list[Literal['codex', 'claude_code', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)
     history_reference: dict = Field(default_factory=dict)
@@ -146,6 +209,37 @@ class Settings(BaseModel):
     gitee: GiteeConfig = Field(default_factory=GiteeConfig)
     gitee_enterprise: GiteeEnterpriseConfig = Field(default_factory=GiteeEnterpriseConfig)
     activity_gap_minutes: int = Field(default=5, ge=1, le=30)
+
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_legacy_sources(cls, data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for legacy, (cn_key, intl_key) in SOURCE_FAMILIES.items():
+            if legacy not in data:
+                continue
+            old = data.pop(legacy) or {}
+            paths = [p for p in old.get('paths', []) if isinstance(p, str) and p.strip()]
+            enabled = bool(old.get('enabled', True))
+            data.setdefault(cn_key, {
+                'enabled': enabled,
+                'paths': [p for p in paths if _is_cn_path(legacy, p)],
+            })
+            data.setdefault(intl_key, {
+                'enabled': enabled,
+                'paths': [p for p in paths if not _is_cn_path(legacy, p)],
+            })
+        sources = data.get('analysis_sources')
+        if isinstance(sources, list):
+            mapped = []
+            for value in sources:
+                if value in SOURCE_FAMILIES:
+                    mapped.extend(SOURCE_FAMILIES[value])
+                else:
+                    mapped.append(value)
+            data['analysis_sources'] = list(dict.fromkeys(mapped))
+        return data
 
     @field_validator('git_author_overrides')
     @classmethod
@@ -171,8 +265,7 @@ class Settings(BaseModel):
     @field_validator('analysis_sources')
     @classmethod
     def valid_sources(cls, values):
-        if not values or not any(v in CONVERSATION_SOURCES for v in values):
-            raise ValueError('至少选择一种对话来源；Git 只能作为辅助证据')
+        # 允许全部取消：此时不分析、不采集新对话，由界面提示用户。
         return list(dict.fromkeys(values))
 
     @field_validator("timezone")
@@ -253,6 +346,33 @@ class TaskPatch(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     time_locked: bool | None = None
+
+
+class TaskFromEventsInput(BaseModel):
+    date: Date
+    event_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class AnalysisImportItem(BaseModel):
+    fingerprint: str = Field(min_length=1, max_length=200)
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    details: str | None = Field(default=None, max_length=20000)
+    project: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    status: Literal["requested", "attempted", "changed", "verified", "delivered"] | None = None
+
+
+class AnalysisImportInput(BaseModel):
+    date: Date
+    items: list[AnalysisImportItem] = Field(min_length=1, max_length=100)
+
+    @field_validator('items')
+    @classmethod
+    def unique_items(cls, values):
+        fingerprints = [item.fingerprint for item in values]
+        if len(set(fingerprints)) != len(fingerprints):
+            raise ValueError('同一分析结果不能重复导入')
+        return values
 
 
 class SplitInput(BaseModel):

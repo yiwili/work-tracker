@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
     engine = db.make_engine(tmp_path / 'test.db')
     with TestClient(create_app(engine)) as client:
         s = client.get('/api/settings').json()
+        s['auto_import_analysis'] = True
         for key in CONVERSATION_SOURCES:
             s[key]['paths'] = []
         client.put('/api/settings', json=s).raise_for_status()
@@ -90,6 +91,34 @@ def test_partial_patch_retains_other_fields(client):
     task=client.get('/api/tasks?date='+DAY).json()[0]
     assert task['title']=='与客户确认上线计划' and task['details']=='已沟通'
     assert task['confirmed_minutes']==135
+
+
+def test_settings_change_never_clears_existing_work_items(client):
+    task_id=client.post('/api/tasks',json=manual(60)).json()['id']
+    s=client.get('/api/settings').json()
+    s['analysis_sources']=['claude_code']
+    s['codex']['enabled']=False
+    client.put('/api/settings',json=s).raise_for_status()
+    tasks=client.get('/api/tasks?date='+DAY).json()
+    assert [t['id'] for t in tasks]==[task_id]
+    assert client.get('/api/settings').json()['analysis_sources']==['claude_code']
+
+
+def test_git_commit_can_be_adopted_as_work_item_once(client):
+    engine=client.app.state.engine
+    with engine.begin() as conn:
+        conn.execute(db.events.insert().values(
+            id='git-adopt-1',source='git',session_id='repo',occurred_at='2026-10-24T02:00:00+00:00',
+            kind='git_commit',summary='修复订单接口超时',cwd='D:/project/order',project='订单系统',
+            repo_id='repo',raw_ref='D:/project/order@abc',metadata={'sha':'abc','changes':'order.py | 12 ++++++'}))
+    first=client.post('/api/tasks/from-events',json={'date':DAY,'event_ids':['git-adopt-1']})
+    first.raise_for_status();assert first.json()['created']==1
+    task=client.get('/api/tasks?date='+DAY).json()[0]
+    assert task['title']=='修复订单接口超时' and task['project']=='订单系统'
+    assert [e['id'] for e in task['evidence']]==['git-adopt-1']
+    second=client.post('/api/tasks/from-events',json={'date':DAY,'event_ids':['git-adopt-1']})
+    second.raise_for_status();assert second.json()['created']==0 and second.json()['skipped']==1
+    assert len(client.get('/api/tasks?date='+DAY).json())==1
 
 
 def test_incremental_duplicates_corrupt_and_partial_tail(client,tmp_path):
