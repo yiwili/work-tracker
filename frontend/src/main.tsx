@@ -16,6 +16,7 @@ import {
   FolderGit2,
   GitMerge,
   Layers3,
+  Link2,
   ListFilter,
   LoaderCircle,
   LockKeyhole,
@@ -29,7 +30,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { PendingTask, Report, Settings, Task, WorkEvent } from "./types";
+import type { GiteeSyncResult, PendingTask, Report, Settings, Task, WorkEvent } from "./types";
 import "./style.css";
 import { api } from "./api";
 import { Conversations } from "./Conversations";
@@ -37,6 +38,7 @@ import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal } from "./AllocationModal";
 import { GiteePublishModal } from "./GiteePublishModal";
+import { GiteeDedupModal } from "./GiteeDedupModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
 import { HistoryPanel } from "./HistoryPanel";
 import { GitSettings } from "./GitSettings";
@@ -169,6 +171,8 @@ function App() {
     [editor, setEditor] = useState<Editor | null>(null),
     [allocationOpen, setAllocationOpen] = useState(false),
     [giteeOpen, setGiteeOpen] = useState(false),
+    [giteeDedupOpen, setGiteeDedupOpen] = useState(false),
+    [giteeSyncResult, setGiteeSyncResult] = useState<GiteeSyncResult | null>(null),
     [setupOpen, setSetupOpen] = useState(false),
     [settingsEpoch, setSettingsEpoch] = useState(0),
     [settingsTab, setSettingsTab] = useState<SettingsTab>("sources"),
@@ -802,6 +806,40 @@ function App() {
                   <div className="actions">
                     <button
                       className="outline"
+                      disabled={!!busy}
+                      onClick={async () => {
+                        setBusy("正在同步 Gitee 未完成工作项并去重…");
+                        try {
+                          const res = await api<GiteeSyncResult>(
+                            `/reports/${day}/sync-gitee`,
+                            "POST",
+                            {}
+                          );
+                          setGiteeSyncResult(res);
+                          if (res.ambiguous.length > 0) {
+                            setGiteeDedupOpen(true);
+                          } else if (res.auto_matched.length > 0) {
+                            setNotice(
+                              `已自动通过并关联 ${res.auto_matched.length} 项云端未完成工作项，保留本地工时`
+                            );
+                            await refresh();
+                          } else {
+                            setNotice(
+                              `已检测 ${res.total_remote} 项云端工作项，未发现可匹配的未完成项（${res.discarded_count} 项低置信度已丢弃）`
+                            );
+                          }
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy("");
+                        }
+                      }}
+                    >
+                      <Link2 size={15} />
+                      同步 Gitee 未完成项
+                    </button>
+                    <button
+                      className="outline"
                       disabled={!!busy || !report.tasks.length}
                       onClick={() => setGiteeOpen(true)}
                     >
@@ -1316,6 +1354,16 @@ function App() {
             setPage("enterprise");
           }}
           onApplied={refresh}
+        />
+      )}
+      {giteeDedupOpen && giteeSyncResult && (
+        <GiteeDedupModal
+          day={day}
+          syncResult={giteeSyncResult}
+          onClose={() => setGiteeDedupOpen(false)}
+          onApplied={async () => {
+            await refresh();
+          }}
         />
       )}
       {setupOpen && settings && (

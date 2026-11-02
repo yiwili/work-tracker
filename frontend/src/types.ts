@@ -68,6 +68,53 @@ export type GiteeProjectRule = {
   mode: "prefix" | "contains" | "exact";
   program_id: number;
 };
+export type GiteeDedupConfig = {
+  enabled: boolean;
+  dedup_on_pull: boolean;
+  dedup_on_publish: boolean;
+  threshold_high: number;
+  threshold_low: number;
+  date_weight: number;
+};
+export type GiteeCandidateMatch = {
+  local_task_id: string;
+  local_task: Task;
+  confidence: number;
+  explanation?: Record<string, unknown>;
+};
+export type GiteeAmbiguousItem = {
+  id: string;
+  issue_id?: string;
+  title: string;
+  description?: string;
+  program?: string;
+  project?: string;
+  date?: string;
+  url?: string;
+  source?: string;
+  confidence: number;
+  candidates: GiteeCandidateMatch[];
+};
+export type GiteeSyncResult = {
+  date: string;
+  total_remote: number;
+  auto_matched: {
+    task_id: string;
+    remote_issue_id: string;
+    title: string;
+    previous_title: string;
+    confirmed_minutes: number;
+    confidence: number;
+  }[];
+  ambiguous: GiteeAmbiguousItem[];
+  discarded_count: number;
+  unmatched_local_count: number;
+};
+export type GiteeMatchDecision = {
+  remote_issue_id: string;
+  action: "match" | "create" | "ignore";
+  target_task_id?: string | null;
+};
 export type GiteeEnterpriseConfig = {
   enterprise_id: number;
   rules: GiteeProjectRule[];
@@ -130,6 +177,7 @@ export type Settings = {
     since: string;
   };
   gitee_enterprise: GiteeEnterpriseConfig;
+  gitee_dedup?: GiteeDedupConfig;
 };
 
 export type PendingTask = {

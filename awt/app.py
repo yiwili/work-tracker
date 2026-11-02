@@ -19,7 +19,8 @@ from .git_tools import identity_options, global_author, verify_author, scan_repo
 from . import gitee
 from . import analysis_progress
 from . import gitee_enterprise
-from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,GiteeResolveInput
+from . import gitee_sync as gitee_sync_svc
+from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,GiteeResolveInput,GiteeDedupConfig,GiteeConfirmMatchInput
 
 
 def create_app(engine=None):
@@ -301,6 +302,31 @@ def create_app(engine=None):
     @app.post('/api/gitee/enterprise/resolve')
     def resolve_enterprise(payload:GiteeResolveInput):
         return gitee_enterprise.resolve(engine,payload)
+
+    @app.get('/api/gitee/unfinished')
+    def gitee_unfinished():
+        return gitee_sync_svc.fetch_all_unfinished(engine)
+
+    @app.get('/api/gitee/dedup/config')
+    def get_dedup_config():
+        with engine.connect() as conn:
+            return service.get_settings(conn).gitee_dedup
+
+    @app.put('/api/gitee/dedup/config')
+    def update_dedup_config(payload: GiteeDedupConfig):
+        with transaction() as conn:
+            cfg = service.get_settings(conn)
+            cfg.gitee_dedup = payload
+            service.save_settings(conn, cfg)
+            return cfg.gitee_dedup
+
+    @app.post('/api/reports/{day}/sync-gitee')
+    def sync_gitee_day(day: date):
+        return gitee_sync_svc.sync_gitee_tasks(engine, str(day))
+
+    @app.post('/api/reports/{day}/confirm-gitee-match')
+    def confirm_gitee_match_day(day: date, payload: GiteeConfirmMatchInput):
+        return gitee_sync_svc.apply_user_decisions(engine, str(day), [d.model_dump() for d in payload.decisions])
 
     @app.post('/api/reports/{day}/estimate-time')
     def estimate_time(day:date,payload:AllocationInput=AllocationInput()):

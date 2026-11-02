@@ -104,6 +104,27 @@ class GiteeExportTarget(BaseModel):
     task_id: str
     program_id: int = Field(ge=1, strict=True)
     issue_type_id: int | None = Field(default=None, ge=1, strict=True)
+    existing_issue_id: int | None = Field(default=None, ge=1, strict=True)
+
+
+class GiteeDedupConfig(BaseModel):
+    enabled: bool = True
+    dedup_on_pull: bool = True
+    dedup_on_publish: bool = False
+    threshold_high: float = Field(default=0.80, ge=0.1, le=1.0)
+    threshold_low: float = Field(default=0.40, ge=0.0, le=0.9)
+    date_weight: float = Field(default=0.20, ge=0.0, le=1.0)
+
+
+class GiteeMatchDecision(BaseModel):
+    remote_issue_id: str
+    action: Literal['match', 'create', 'ignore']
+    target_task_id: str | None = None
+
+
+class GiteeConfirmMatchInput(BaseModel):
+    date: Date
+    decisions: list[GiteeMatchDecision] = Field(default_factory=list, max_length=200)
 
 
 class GiteePublishInput(BaseModel):
@@ -208,6 +229,7 @@ class Settings(BaseModel):
     style_template: str = Field(default='', max_length=12000)
     gitee: GiteeConfig = Field(default_factory=GiteeConfig)
     gitee_enterprise: GiteeEnterpriseConfig = Field(default_factory=GiteeEnterpriseConfig)
+    gitee_dedup: GiteeDedupConfig = Field(default_factory=GiteeDedupConfig)
     activity_gap_minutes: int = Field(default=5, ge=1, le=30)
 
     @model_validator(mode='before')

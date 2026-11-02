@@ -104,6 +104,44 @@ def issue_types(enterprise_id,program_id):
     return [{'id':r['id'],'name':str(r.get('title','')),'category':str(r.get('category',''))} for r in rows if type(r.get('id')) is int and r['id']>0]
 
 
+def unfinished_issues(enterprise_id, program_id=None):
+    if not enterprise_id:
+        return []
+    args = {'enterprise_id': enterprise_id, 'state': 'open'}
+    if program_id:
+        args['program_id'] = program_id
+    try:
+        rows = _paged('list_enterprise_issues', args)
+    except EnterpriseError:
+        try:
+            raw_args = {'enterprise_id': enterprise_id}
+            if program_id:
+                raw_args['program_id'] = program_id
+            rows = _paged('list_enterprise_issues', raw_args)
+            rows = [r for r in rows if str(r.get('state') or '').lower() not in ('closed', 'finished', 'resolved', 'done', '已关闭', '已解决', '已完成')]
+        except EnterpriseError:
+            return []
+    items = []
+    for r in rows:
+        if type(r.get('id')) is int and r['id'] > 0:
+            ident = str(r.get('ident') or r['id'])
+            date_val = str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
+            items.append({
+                'id': str(r['id']),
+                'issue_id': str(r['id']),
+                'ident': ident,
+                'title': str(r.get('title') or ''),
+                'description': str(r.get('description') or ''),
+                'state': str(r.get('state') or 'open'),
+                'program_id': r.get('program_id'),
+                'program': str(r.get('program_name') or ''),
+                'date': date_val,
+                'url': safe_url(r.get('issue_url')),
+                'source': 'gitee_enterprise',
+            })
+    return items
+
+
 def normalized(text):
     return re.sub(r'[\W_]+','',text.casefold())
 
@@ -185,6 +223,41 @@ def preview(engine,payload):
         raise ValueError('请先在系统设置选择Gitee企业并保存')
     catalog=programs(config.enterprise_id)
     items=[]
+    dedup=settings.gitee_dedup
+    matched_issues={}
+    if dedup.enabled and dedup.dedup_on_publish:
+        from . import matching
+        try:
+            remote_issues=unfinished_issues(config.enterprise_id)
+            if remote_issues:
+                match_res=matching.match_tasks_with_remote(
+                    tasks,
+                    remote_issues,
+                    threshold_high=dedup.threshold_high,
+                    threshold_low=dedup.threshold_low,
+                    date_weight=dedup.date_weight,
+                )
+                for m in match_res['auto_matched']:
+                    matched_issues[m['local_task']['id']]={
+                        'issue_id':int(m['remote_issue']['issue_id']),
+                        'title':m['remote_issue']['title'],
+                        'confidence':m['confidence'],
+                        'status':'auto_matched',
+                        'url':m['remote_issue']['url'],
+                    }
+                for amb in match_res['ambiguous']:
+                    for cand in amb.get('candidates',[]):
+                        tid=cand['local_task_id']
+                        if tid not in matched_issues:
+                            matched_issues[tid]={
+                                'issue_id':int(amb['remote_issue']['issue_id']),
+                                'title':amb['remote_issue']['title'],
+                                'confidence':cand['confidence'],
+                                'status':'ambiguous',
+                                'url':amb['remote_issue']['url'],
+                            }
+        except Exception:
+            pass
     for task in tasks:
         program_id,reason=match_program(task,catalog,config.rules)
         description=f"工作日期：{task['date']}\n预估工时：{task['confirmed_minutes']/60:g}h（待人工核对）"
@@ -193,7 +266,8 @@ def preview(engine,payload):
         marker=stable('awt-work-item',config.enterprise_id,task['id'])
         description+=f'\n\n<!-- awt-work-item:{marker} -->'
         items.append({'task_id':task['id'],'title':redact(task['title'],settings.redact_patterns),'description':description,
-                      'minutes':task['confirmed_minutes'],'prefix':prefix(task),'program_id':program_id,'match_reason':reason})
+                      'minutes':task['confirmed_minutes'],'prefix':prefix(task),'program_id':program_id,'match_reason':reason,
+                      'matched_issue':matched_issues.get(task['id'])})
     snapshot={'date':str(payload.date),'created_at':now(),'enterprise_id':config.enterprise_id,'account':stable(token()),
               'tasks':tasks,'config':config.model_dump(mode='json'),'programs':catalog,'items':items}
     batch_id=uuid4().hex
@@ -252,18 +326,28 @@ def publish(engine,payload):
                 record={'id':identity,'enterprise_id':enterprise_id,'task_id':target.task_id,'program_id':target.program_id,
                         'status':'pending','issue_id':'','url':'','error':'','updated_at':now()}
                 upsert(conn,db.gitee_links,record,'id');conn.commit()
-            body={'title':item['title'],'description':item['description'],'program_id':target.program_id,
-                  'duration':item['minutes'],'plan_started_at':snapshot['date']+'T00:00:00','category':'task'}
-            if target.issue_type_id is not None:
-                body['issue_type_id']=target.issue_type_id
-                body.pop('category',None)
-            try:
-                value=_tool('create_enterprise_issue',{'enterprise_id':enterprise_id,**body},credential=publish_key,uncertain=True)
-                if not isinstance(value,dict) or type(value.get('id')) is not int or value['id']<=0:
-                    raise EnterpriseError('创建响应未提供有效工作项ID，请到Gitee核实，系统不会自动重发',uncertain=True)
-                record.update(status='created',issue_id=str(value['id']),url=safe_url(value.get('issue_url')))
-            except EnterpriseError as exc:
-                record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
+            if target.existing_issue_id:
+                update_body={'enterprise_id':enterprise_id,'issue_id':str(target.existing_issue_id),
+                             'duration':item['minutes'],'description':item['description']}
+                try:
+                    value=_tool('update_enterprise_issue',update_body,credential=publish_key,uncertain=True)
+                    url_val=safe_url(value.get('issue_url') if isinstance(value,dict) else '')
+                    record.update(status='created',issue_id=str(target.existing_issue_id),url=url_val)
+                except EnterpriseError as exc:
+                    record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
+            else:
+                body={'title':item['title'],'description':item['description'],'program_id':target.program_id,
+                      'duration':item['minutes'],'plan_started_at':snapshot['date']+'T00:00:00','category':'task'}
+                if target.issue_type_id is not None:
+                    body['issue_type_id']=target.issue_type_id
+                    body.pop('category',None)
+                try:
+                    value=_tool('create_enterprise_issue',{'enterprise_id':enterprise_id,**body},credential=publish_key,uncertain=True)
+                    if not isinstance(value,dict) or type(value.get('id')) is not int or value['id']<=0:
+                        raise EnterpriseError('创建响应未提供有效工作项ID，请到Gitee核实，系统不会自动重发',uncertain=True)
+                    record.update(status='created',issue_id=str(value['id']),url=safe_url(value.get('issue_url')))
+                except EnterpriseError as exc:
+                    record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
             record['updated_at']=now()
             with engine.begin() as conn:
                 upsert(conn,db.gitee_links,record,'id')

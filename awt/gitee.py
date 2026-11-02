@@ -99,6 +99,56 @@ def fetch(config):
         raise ValueError('工作项超过500页，请缩小日期范围后重试；未保存不完整结果')
 
 
+def fetch_unfinished(config=None):
+    key = token()
+    if not key:
+        return []
+    def get(client, path, params=None):
+        try:
+            response = client.get(API + path, params={**(params or {}), 'access_token': key})
+            if response.status_code != 200:
+                return []
+            return response.json()
+        except (httpx.HTTPError, json.JSONDecodeError):
+            return []
+    rows = []
+    with httpx.Client(headers={'Accept': 'application/json'}, timeout=30, follow_redirects=False, trust_env=False) as client:
+        seen = set()
+        filter_mode = config.filter if config else 'all'
+        repo_filter = config.repository if config else ''
+        for page in range(1, 20):
+            items = get(client, '/user/issues', {'filter': filter_mode, 'state': 'open', 'sort': 'updated', 'direction': 'desc',
+                                                 'page': page, 'per_page': 100})
+            if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
+                break
+            sig = stable(items)
+            if sig in seen:
+                break
+            seen.add(sig)
+            for item in items:
+                repo = item.get('repository') or {}
+                repo_name = repo.get('full_name') or repo.get('path_with_namespace') or ''
+                if repo_filter and repo_name.lower() != repo_filter.lower():
+                    continue
+                url = item.get('html_url') or ''
+                created_at = item.get('created_at') or ''
+                rows.append({
+                    'id': str(item.get('id')),
+                    'issue_id': str(item.get('number') or item.get('id')),
+                    'title': str(item.get('title') or ''),
+                    'description': str(item.get('body') or ''),
+                    'state': str(item.get('state') or 'open'),
+                    'project': repo_name,
+                    'program': repo_name,
+                    'date': created_at[:10] if created_at else '',
+                    'url': url,
+                    'source': 'gitee_v5',
+                })
+            if len(items) < 100:
+                break
+    return rows
+
+
 def sync(engine):
     from .service import get_settings,upsert,now
     if not lock.acquire(blocking=False):

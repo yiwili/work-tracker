@@ -19,6 +19,13 @@ type Item = {
   program_id: number | null;
   match_reason: string;
   existing: Link | null;
+  matched_issue?: {
+    issue_id: number;
+    title: string;
+    confidence: number;
+    status: string;
+    url?: string;
+  } | null;
 };
 type Preview = {
   batch_id: string;
@@ -262,6 +269,11 @@ export function GiteePublishModal({
                       前缀：{item.prefix || "未提供"} · {item.match_reason} ·
                       预估工时 {Number((item.minutes / 60).toFixed(2))}h
                     </p>
+                    {item.matched_issue && (
+                      <div style={{ fontSize: "12px", color: "#137333", background: "#e6f4ea", padding: "4px 8px", borderRadius: "4px", margin: "4px 0" }}>
+                        已匹配云端未完成工作项 #{item.matched_issue.issue_id}（置信度 {Math.round(item.matched_issue.confidence * 100)}%）：将补充工时与内容，避免重复创建
+                      </div>
+                    )}
                     <details>
                       <summary>查看将发送的工作内容</summary>
                       <pre className="publish-description">
@@ -393,11 +405,15 @@ export function GiteePublishModal({
                   const r = await enterpriseApi("publish", {
                     batch_id: preview.batch_id,
                     confirmed: true,
-                    targets: [...selected].map((id) => ({
-                      task_id: id,
-                      program_id: targets[id],
-                      issue_type_id: chosenTypes[id] || null,
-                    })),
+                    targets: [...selected].map((id) => {
+                      const item = preview.items.find((i) => i.task_id === id);
+                      return {
+                        task_id: id,
+                        program_id: targets[id],
+                        issue_type_id: chosenTypes[id] || null,
+                        existing_issue_id: item?.matched_issue?.issue_id || null,
+                      };
+                    }),
                   });
                   const links = Object.fromEntries(
                     r.items.map((link: Link) => [link.task_id, link]),

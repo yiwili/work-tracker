@@ -305,6 +305,101 @@ export function EnterpriseSettings({
         />
         提交时包含工作内容详情（预览中可核对）
       </label>
+
+      {/* Gitee 云端去重与工时匹配设置 */}
+      <div style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)" }}>
+        <h3>云端未完成工作项去重与工时匹配</h3>
+        <p style={{ fontSize: "13px", color: "var(--muted)", margin: "4px 0 12px 0" }}>
+          对云端已有未完成工作项进行智能去重：高置信度自动通过并继承本地工时，模糊区间由用户确认，低置信度自动丢弃。
+        </p>
+
+        {(() => {
+          const dedup = settings.gitee_dedup || {
+            enabled: true,
+            dedup_on_pull: true,
+            dedup_on_publish: false,
+            threshold_high: 0.8,
+            threshold_low: 0.4,
+            date_weight: 0.2,
+          };
+          const updateDedup = (patch: Partial<typeof dedup>) => {
+            onChange({
+              ...settings,
+              gitee_dedup: { ...dedup, ...patch },
+            });
+          };
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={dedup.enabled}
+                  onChange={(e) => updateDedup({ enabled: e.target.checked })}
+                />
+                启用云端去重与工时匹配机制
+              </label>
+
+              {dedup.enabled && (
+                <div style={{ paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={dedup.dedup_on_pull}
+                      onChange={(e) => updateDedup({ dedup_on_pull: e.target.checked })}
+                    />
+                    从 Gitee 同步未完成项到今日清单时进行去重（优先使用云端工作项并保留本地工时）
+                  </label>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={dedup.dedup_on_publish}
+                      onChange={(e) => updateDedup({ dedup_on_publish: e.target.checked })}
+                    />
+                    “提交到 Gitee”前检查云端未完成项（若存在则直接关联并补充工时，避免重复创建）
+                  </label>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginTop: "8px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                      <span>自动通过阈值：{Math.round(dedup.threshold_high * 100)}%</span>
+                      <input
+                        type="range"
+                        min="50"
+                        max="95"
+                        step="5"
+                        value={Math.round(dedup.threshold_high * 100)}
+                        onChange={(e) => updateDedup({ threshold_high: Number(e.target.value) / 100 })}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                      <span>自动丢弃阈值：{Math.round(dedup.threshold_low * 100)}%</span>
+                      <input
+                        type="range"
+                        min="10"
+                        max="50"
+                        step="5"
+                        value={Math.round(dedup.threshold_low * 100)}
+                        onChange={(e) => updateDedup({ threshold_low: Number(e.target.value) / 100 })}
+                      />
+                    </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px" }}>
+                      <span>日期相关权重：{Math.round(dedup.date_weight * 100)}%</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        step="5"
+                        value={Math.round(dedup.date_weight * 100)}
+                        onChange={(e) => updateDedup({ date_weight: Number(e.target.value) / 100 })}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </div>
       <p>
         只发送核对过的标题、详情、日期和预估工时，不上传原始对话或证据日志。创建工作项不代表登记实际工时或自动关闭任务。
       </p>
@@ -316,8 +411,15 @@ export function EnterpriseSettings({
           run(async () => {
             await saveKey();
             await enterpriseApi("config", config, "PUT");
+            if (settings.gitee_dedup) {
+              await fetch("/api/gitee/dedup/config", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(settings.gitee_dedup),
+              });
+            }
             setMessage(
-              "企业项目和映射已保存，日报中的“提交到 Gitee”将优先使用这些规则。",
+              "企业项目与云端去重设置已保存，日报与提交将优先使用这些规则。",
             );
           })
         }
