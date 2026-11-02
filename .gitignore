@@ -22,3 +22,14 @@ playwright-report/
 *-credentials.json
 .DS_Store
 Thumbs.db
+
+# AOCI agent host integration (machine-bound; do not commit)
+.mcp.json
+.mcp.json.backup.*
+.codex/config.toml
+.codex/config.toml.backup.*
+
+# AOCI additional host configuration (machine-bound)
+/.agents/mcp_config.json
+/.mcp.json
+

@@ -1,5 +1,6 @@
 import json
 import os
+from contextlib import contextmanager
 from datetime import date
 
 import pytest
@@ -282,6 +283,11 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_mod
     captured=[]
     monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
     class Client:
+        @contextmanager
+        def stream(self, method, url, **kw):
+            response = self.post(url, **kw)
+            response.read = lambda: None
+            yield response
         def __init__(self,**kw):pass
         def __enter__(self):return self
         def __exit__(self,*a):pass
@@ -416,6 +422,11 @@ def test_truncation_reports_stage_keeps_original_tasks_and_does_not_retry(app_cl
     monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'glm-5.3','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'never-log-this-secret'})
     captured=[]
     class Client:
+        @contextmanager
+        def stream(self, method, url, **kw):
+            response = self.post(url, **kw)
+            response.read = lambda: None
+            yield response
         def __init__(self,**kw):pass
         def __enter__(self):return self
         def __exit__(self,*a):pass
@@ -470,3 +481,60 @@ def test_daily_stream_requires_complete_end_discards_thinking_and_never_retries(
         with pytest.raises(model_provider.ModelError) as exc:model_provider.complete(Settings(),'rules','input',purpose='task_writer')
         assert '原任务已保留' in str(exc.value) and 'must not echo' not in str(exc.value)
     assert len(sent)==1 and sent[0]['stream'] and sent[0]['max_tokens']==32768
+
+
+def test_analysis_progress_visible_while_running_isolated_and_retained_on_failure(app_client, monkeypatch):
+    client, engine = app_client
+    add_events(engine, 1)
+    assert client.get('/api/analysis/progress?date=2026-10-24').json()['state'] == 'idle'
+    def respond(settings, system, text, **kwargs):
+        progress = client.get('/api/analysis/progress?date=2026-10-24').json()
+        assert progress['state'] == 'running'
+        assert any('归纳工作项' in row['message'] for row in progress['logs'])
+        assert client.get('/api/analysis/progress?date=2026-10-25').json()['logs'] == []
+        return result()
+    monkeypatch.setattr(model_provider, 'complete', scope_model(respond))
+    client.post('/api/analyze?date=2026-10-24', json={}).raise_for_status()
+    progress = client.get('/api/analysis/progress?date=2026-10-24').json()
+    assert progress['state'] == 'success'
+    assert any('筛选' in row['message'] for row in progress['logs'])
+    def fail(*args, **kwargs):
+        raise model_provider.ModelError('private upstream error')
+    monkeypatch.setattr(model_provider, 'complete', fail)
+    assert client.post('/api/analyze?date=2026-10-24', json={}).status_code == 400
+    progress = client.get('/api/analysis/progress?date=2026-10-24').json()
+    assert progress['state'] == 'error' and 'private upstream error' not in json.dumps(progress)
+    assert len(client.get('/api/tasks?date=2026-10-24').json()) == 1
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+def test_progress_arrives_before_stream_finishes_without_exposing_reasoning(monkeypatch, protocol):
+    from awt.analysis_progress import Progress, track
+    progress = Progress()
+    monkeypatch.setattr(model_provider, 'connection', lambda s: {
+        'model': 'test-model', 'protocol': protocol, 'endpoint': 'http://localhost/test', 'auth': 'api_key', 'key': 'private-key'})
+    if protocol == 'anthropic':
+        first = {'type': 'content_block_delta', 'delta': {'type': 'thinking_delta', 'thinking': 'private-reasoning'}}
+        rest = [{'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': 'OK'}},
+                {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}}, {'type': 'message_stop'}]
+    else:
+        first = {'choices': [{'delta': {'reasoning_content': 'private-reasoning'}}]}
+        rest = [{'choices': [{'delta': {'content': 'OK'}, 'finish_reason': 'stop'}]}]
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield ('data: ' + json.dumps(first) + '\n\n').encode()
+            snapshot = json.dumps(progress.snapshot(), ensure_ascii=False)
+            assert '思考已接收 17 字符' in snapshot
+            assert 'private-reasoning' not in snapshot and 'private-key' not in snapshot
+            for item in rest:
+                yield ('data: ' + json.dumps(item) + '\n\n').encode()
+            if protocol == 'openai': yield b'data: [DONE]\n\n'
+    base_client = httpx.Client
+    def respond(request):
+        assert json.loads(request.content)['stream']
+        return httpx.Response(200, stream=Stream(), headers={'content-type': 'text/event-stream'})
+    monkeypatch.setattr(model_provider.httpx, 'Client', lambda **kw: base_client(transport=httpx.MockTransport(respond), **kw))
+    with track(progress):
+        assert model_provider.complete(Settings(), 'private-prompt', 'private-input', purpose='task_writer') == 'OK'
+    snapshot = json.dumps(progress.snapshot())
+    assert all(secret not in snapshot for secret in ('private-prompt', 'private-input', 'private-reasoning', 'private-key'))

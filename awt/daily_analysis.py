@@ -152,6 +152,7 @@ def parse_result(text, valid_refs):
 
 
 def infer_day(records, refs, settings, reviewed, day):
+    from .analysis_progress import emit
     # Every stored conversation message is included. Large days use contiguous chronological batches,
     # followed by a final all-day semantic consolidation; no per-message task generation.
     chunks, current, size = [], [], 0
@@ -168,18 +169,21 @@ def infer_day(records, refs, settings, reviewed, day):
     system=prompts.prompt(settings,'task_writer')
     common = {'date': str(day), 'timezone': settings.timezone, 'reviewed': reviewed, 'style_examples':settings.title_examples}
     if len(chunks) == 1:
+        emit(f'归纳工作项：第 1/1 批，{len(records)} 条记录')
         text = model_provider.complete(settings, system, json.dumps({**common, 'conversations': chunks[0]}, ensure_ascii=False),purpose='task_writer')
         return parse_result(text, refs), 1
     if len(chunks) > 30:
         raise model_provider.ModelError('当天记录过多，请缩小对话来源或排除无关目录；未发送不完整的全天分析')
     partials = []
     for i, chunk in enumerate(chunks):
+        emit(f'归纳工作项：第 {i+1}/{len(chunks)} 批，{len(chunk)} 条记录')
         text = model_provider.complete(settings, system + '\n这是全天连续片段，保留工作目标与refs，最后还会统一合并。', json.dumps({**common, 'part': i+1, 'parts': len(chunks), 'conversations': chunk}, ensure_ascii=False),purpose='task_writer')
         chunk_refs = {r['ref']: refs[r['ref']] for r in chunk}
         for record in chunk:
             for activity in record.get('activities', []):
                 chunk_refs.update({ref: refs[ref] for ref in activity['refs']})
         partials.append(parse_result(text, chunk_refs))
+    emit(f'合并全天结果：汇总 {len(chunks)} 批候选工作项')
     text = model_provider.complete(settings, system + '\n请将这些连续片段的候选任务按全天实际目标再次合并去重，尤其合并同一目标的跨片段追问。refs只能使用片段已有引用。', json.dumps({**common, 'daily_parts': partials}, ensure_ascii=False),purpose='task_writer')
     return parse_result(text, refs), len(chunks)+1
 

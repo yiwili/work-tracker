@@ -7,6 +7,7 @@ import logging
 import os
 import re
 from contextlib import contextmanager
+from time import monotonic
 from pathlib import Path
 
 import httpx
@@ -14,6 +15,7 @@ import httpx
 from . import db
 from .collectors import stable
 from .models import Settings
+from .analysis_progress import current, emit
 
 GLM_MODELS = [
     {'id': 'glm-5.3-flash', 'label': 'GLM-5.3-Flash'},
@@ -139,6 +141,9 @@ def truncated(purpose, budget):
 def stream_text(lines, protocol, purpose, budget):
     """Read complete SSE messages; discard thinking and reject partial streams."""
     parts=[];data=[];reason=None;done=False;usage={'prompt':None,'completion':None}
+    thinking_chars = 0
+    output_chars = 0
+    last_update = 0
     def events():
         for line in lines:
             if not line:
@@ -152,6 +157,20 @@ def stream_text(lines, protocol, purpose, budget):
             value=json.loads(payload)
             if value.get('type')=='error' or 'error' in value:
                 raise ModelError('模型流式响应发生错误；原任务已保留，不会自动重复请求')
+            # Expose counters and activity only, never internal reasoning or task JSON.
+            if protocol == 'anthropic':
+                delta = value.get('delta', {})
+                block = value.get('content_block', {})
+                thinking_chars += len(delta.get('thinking', '') or '') + len(block.get('thinking', '') or '')
+                output_chars += len(delta.get('text', '') or '') + len(block.get('text', '') or '')
+            else:
+                for choice in value.get('choices', []):
+                    delta = choice.get('delta', {})
+                    thinking_chars += len(delta.get('reasoning_content', '') or '')
+                    output_chars += len(delta.get('content', '') or '')
+            if monotonic() - last_update >= 1:
+                emit(f'模型正在{"输出结果" if output_chars else "思考" if thinking_chars else "处理请求"}：思考已接收 {thinking_chars} 字符，结果已接收 {output_chars} 字符', replace=True)
+                last_update = monotonic()
             if protocol=='anthropic':
                 kind=value.get('type')
                 if kind=='content_block_start' and value.get('content_block',{}).get('type')=='text':
@@ -182,6 +201,7 @@ def stream_text(lines, protocol, purpose, budget):
             raise ModelError('模型流式输出未完整结束；原任务已保留，请稍后重新分析')
         text=''.join(parts)
         if not text.strip():raise ModelError('模型未返回可用文本；原任务已保留')
+        emit(f'模型输出完成：思考 {thinking_chars} 字符，结果 {output_chars} 字符')
         return text,usage
     except (ValueError,KeyError,TypeError,AttributeError) as exc:
         if isinstance(exc,ModelError):raise
@@ -328,7 +348,7 @@ def _provider_message(response):
 
 
 def complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
-    c = connection(settings, key)
+    c = connection(settings) if key is None else connection(settings, key)
     max_tokens=output_budget(c['model'],max_tokens,purpose)
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
@@ -343,16 +363,33 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
         # uses its supported light effort without disabling forced thinking.
         body['reasoning_effort']='low'
         body['stream']=True
+    if current.get() is not None and purpose in ('scope_filter', 'task_writer'):
+        body['stream'] = True
+    started = monotonic()
+    emit(f'请求模型 {c["model"]}，输入 {len(system) + len(text)} 字符，等待响应')
     # Slow reasoning providers may not emit a non-stream response for a while. No automatic paid retry.
     try:
         with httpx.Client(timeout=httpx.Timeout(300, connect=15), follow_redirects=False, trust_env=False) as client:
-            result = client.post(c['endpoint'], headers=headers, json=body)
-            result.raise_for_status()
-            if body['stream'] and result.headers.get('content-type','').startswith('text/event-stream'):
-                answer,usage=stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
-                _record_usage(purpose,c['model'],system,text,answer,usage)
-                return answer
-            value = result.json()
+            if body['stream'] and hasattr(client, 'stream'):
+                with client.stream('POST', c['endpoint'], headers=headers, json=body) as result:
+                    result.raise_for_status()
+                    emit(f'模型已响应（{monotonic() - started:.1f} 秒），正在接收内容')
+                    if result.headers.get('content-type','').startswith('text/event-stream'):
+                        answer,usage=stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
+                        emit(f'本次模型请求完成，耗时 {monotonic() - started:.1f} 秒')
+                        _record_usage(purpose,c['model'],system,text,answer,usage)
+                        return answer
+                    result.read()
+                    value = result.json()
+            else:
+                result = client.post(c['endpoint'], headers=headers, json=body)
+                result.raise_for_status()
+                if body['stream'] and result.headers.get('content-type','').startswith('text/event-stream'):
+                    answer,usage=stream_text(result.iter_lines(),c['protocol'],purpose,max_tokens)
+                    emit(f'本次模型请求完成，耗时 {monotonic() - started:.1f} 秒')
+                    _record_usage(purpose,c['model'],system,text,answer,usage)
+                    return answer
+                value = result.json()
         if c['protocol'] == 'anthropic':
             if require_text and value.get('stop_reason') == 'max_tokens':
                 raise truncated(purpose,max_tokens)
@@ -367,6 +404,7 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
             usage = {'prompt':reported.get('prompt_tokens'),'completion':reported.get('completion_tokens')}
         if require_text and (not isinstance(answer, str) or not answer.strip()):
             raise ModelError('模型未返回可用文本；原任务已保留')
+        emit(f'本次模型请求完成，耗时 {monotonic() - started:.1f} 秒，返回 {len(answer)} 字符')
         _record_usage(purpose,c['model'],system,text,answer,usage)
         return answer
     except httpx.HTTPStatusError as exc:

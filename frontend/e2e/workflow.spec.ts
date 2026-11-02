@@ -23,6 +23,8 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .getByRole("button", { name: "修复订单查询接口超时", exact: true })
     .click();
   let dialog = page.getByRole("dialog");
+  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
+  await expect(page.getByLabel("AI 分析日志")).toContainText("工作相关性筛选");
   await dialog.getByLabel("确认工时分钟 1").fill("360");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
@@ -832,4 +834,38 @@ test("deferred AI analysis waits for the user to review and import candidates", 
   } finally {
     await page.request.put("/api/settings", { data: original });
   }
+test("analysis log updates during a pending request and isolates dates", async ({ page }) => {
+  let state = "idle";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/analysis/progress?*", async (route) => {
+    const selected = new URL(route.request().url()).searchParams.get("date") === "2026-10-24";
+    const current = selected ? state : "idle";
+    await route.fulfill({ json: {
+      state: current, elapsed_seconds: current === "idle" ? 0 : 12,
+      logs: current === "idle" ? [] : [{ seconds: 1, message: "工作相关性筛选：第 1/2 批" },
+        { seconds: 12, message: current === "running" ? "模型正在思考：思考已接收 128 字符，结果已接收 0 字符" : "分析完成，结果已保存" }],
+    } });
+  });
+  await page.route("**/api/analyze?*", async (route) => {
+    state = "running";
+    await gate;
+    state = "success";
+    await route.continue();
+  });
+  await page.goto("/");
+  await page.getByLabel("工作日期").fill("2026-10-24");
+  await page.getByRole("button", { name: "采集当天数据", exact: true }).click();
+  await page.getByRole("button", { name: "AI 分析全天对话", exact: true }).click();
+  try {
+    await expect(page.getByLabel("AI 分析日志")).toContainText("思考已接收 128 字符");
+    await expect(page.getByLabel("AI 分析日志")).toContainText("已耗时 12 秒");
+  } finally { release(); }
+  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
+  await page.reload();
+  await page.getByLabel("工作日期").fill("2026-10-24");
+  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
+  await page.getByLabel("工作日期").fill("2026-10-25");
+  await expect(page.getByLabel("AI 分析日志")).toHaveCount(0);
+});
 });

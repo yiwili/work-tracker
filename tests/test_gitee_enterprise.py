@@ -229,6 +229,7 @@ def test_stdio_client_relays_through_official_command(tmp_path,monkeypatch):
 
 def test_catalog_excludes_closed_and_supports_pagination(monkeypatch):
     pages=[]
+    monkeypatch.setattr(ge,'token',lambda:'test-token')
     def call(tool,arguments,token):
         pages.append(arguments['page'])
         if arguments['page']==1:return {'total_count':101,'data':[{'id':i+1,'name':f'Project {i}','status':0,'ident':str(i)} for i in range(100)]}

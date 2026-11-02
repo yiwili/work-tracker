@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 
 from . import activity_time, model_provider, prompts
+from .analysis_progress import emit
 
 POLICY_VERSION='learning-active-over-60-v1'
 
@@ -106,9 +107,10 @@ def filter_work(records, refs, segments, settings):
         raise model_provider.ModelError('对话过多，未发送不完整的工作筛选，请缩小采集范围')
     work,excluded,uncertain,requests=set(),[],set(),0
     learning=[];unresolved_all=set();ambiguous_all=set()
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks, 1):
         required={r['ref'] for r in chunk if r['ref'] in roots}
         if not required:continue
+        emit(f'工作相关性筛选：第 {index}/{len(chunks)} 批，{len(chunk)} 条记录')
         text=model_provider.complete(settings,prompts.prompt(settings,'scope_filter'),json.dumps({'required_refs':sorted(required),'conversations':chunk},ensure_ascii=False),max_tokens=6000,purpose='scope_filter')
         requests+=1
         try:

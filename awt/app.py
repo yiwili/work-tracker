@@ -17,6 +17,7 @@ from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, Mode
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
+from . import analysis_progress
 from . import gitee_enterprise
 from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,GiteeResolveInput
 
@@ -47,6 +48,7 @@ def create_app(engine=None):
     app.state.engine = engine
     analysis_locks = {}
     collect_states = {}
+    analysis_runs = {}
 
     @contextmanager
     def transaction():
@@ -330,18 +332,37 @@ def create_app(engine=None):
     def collect_status(date: date):
         return collect_states.get(str(date), {"running": False})
 
+    @app.get('/api/analysis/progress')
+    def analysis_status(date: date):
+        progress = analysis_runs.get(date)
+        return progress.snapshot() if progress else {'state': 'idle', 'elapsed_seconds': 0, 'logs': []}
+
     @app.post('/api/analyze')
     def analyze(date: date):
         lock = analysis_locks.setdefault(date, Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail='该日期正在进行 AI 分析，请等待完成后刷新；未重复发送模型请求')
+        progress = analysis_progress.Progress()
+        analysis_runs[date] = progress
+        for old in list(analysis_runs):
+            if len(analysis_runs) > 32 and old != date and analysis_runs[old].state != 'running':
+                del analysis_runs[old]
+        progress.add('开始分析全天对话')
         try:
-            with engine.connect() as conn:
+            with analysis_progress.track(progress), engine.connect() as conn:
                 result = service.analyze(conn, date)
                 conn.commit()
+                progress.add('分析完成，结果已保存')
+                progress.finish('success')
                 return result
         except model_provider.ModelError as exc:
+            progress.add('分析失败，原有记录已保留；请查看页面错误提示')
+            progress.finish('error')
             logging.getLogger('awt.analysis').warning('全天分析失败 date=%s reason=%s',date,str(exc))
+            raise
+        except Exception:
+            progress.add('分析未完成，原有记录已保留')
+            progress.finish('error')
             raise
         finally:
             lock.release()

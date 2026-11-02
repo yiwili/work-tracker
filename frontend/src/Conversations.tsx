@@ -2,6 +2,7 @@ import { Activity, ArrowUpRight, LoaderCircle, Sparkles, Settings2 } from "lucid
 import type { ConversationOverview, Settings } from "./types";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
+import { AnalysisLog } from "./AnalysisLog";
 const formatTokens = (value: number) => value.toLocaleString("zh-CN");
 const names: Record<string, string> = {
   ...sourceLabels,
@@ -89,6 +90,7 @@ export function Conversations({
           </button>
         </div>
       </div>
+      <AnalysisLog day={overview.date} active={overview.running || analyzing} />
       {!settings.auto_import_analysis && pendingCount > 0 && (
         <p className="muted">
           本次分析生成了 {pendingCount} 条候选工作项，尚未写入今日清单；点击「分析结果」可查看、修改后导入。
