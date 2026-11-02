@@ -162,6 +162,7 @@ function App() {
     [events, setEvents] = useState<WorkEvent[]>([]),
     [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState(""),
+    [showBusy, setShowBusy] = useState(false),
     [collectProgress, setCollectProgress] = useState(""),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -228,6 +229,14 @@ function App() {
       active = false;
     };
   }, [day]);
+  useEffect(() => {
+    if (!busy) {
+      setShowBusy(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowBusy(true), 220);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
   useEffect(() => {
     if (!report?.conversations.running) return;
     const timer = window.setInterval(() => {
@@ -439,6 +448,11 @@ function App() {
   return (
     <div className="app">
       <aside className="sidebar">
+        <div className="window-controls" aria-hidden="true">
+          <span className="dot close" />
+          <span className="dot minimize" />
+          <span className="dot expand" />
+        </div>
         <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
           <span className="brand-mark">
             <Layers3 size={23} />
@@ -606,7 +620,7 @@ function App() {
               </button>
             </div>
           )}
-          {busy && (
+          {busy && showBusy && (
             <div className="busy" role="status">
               <LoaderCircle className="spin" size={14} />
               {busy}…
@@ -657,44 +671,6 @@ function App() {
           )}
           {page === "daily" && report && (
             <>
-              {settings && (
-                <Conversations
-                  overview={report.conversations}
-                  settings={settings}
-                  busy={collecting || analyzing}
-                  analyzing={analyzing}
-                  pendingCount={
-                    report.conversations.analysis?.pending_tasks?.length || 0
-                  }
-                  legacyCount={report.legacy_count}
-                  onAnalyze={analyzeDay}
-                  onSettings={() => setPage("settings")}
-                  onViewPending={openAnalysisResults}
-                  onSources={(values) =>
-                    run("正在更新采集与分析范围", async () => {
-                      const next: Settings = {
-                        ...settings,
-                        analysis_sources: values,
-                      };
-                      for (const key of sourceKeys)
-                        next[key] = {
-                          ...next[key],
-                          enabled: values.includes(key),
-                        };
-                      await api("/settings", "PUT", next);
-                      await refresh();
-                    })
-                  }
-                  onView={(source, session) => {
-                    setSource(source);
-                    setSessionFilter(session);
-                    setTaskFilter("");
-                    setProject("");
-                    setSearch("");
-                    setPage("timeline");
-                  }}
-                />
-              )}
               <div className="stats">
                 <div className="stat time-stat">
                   <div className="stat-label">
@@ -758,9 +734,62 @@ function App() {
                     }
                     <span> 种</span>
                   </div>
-                  <small>Claude Code / Codex</small>
+                  <small>
+                    {report.conversations.sources
+                      .filter(
+                        (s) =>
+                          s.selected && s.source !== "git" && s.sessions > 0,
+                      )
+                      .map((s) => sources[s.source] || s.source)
+                      .slice(0, 2)
+                      .join(" / ") || "支持 9 种本地 Agent 与 Git"}
+                  </small>
                 </div>
               </div>
+              {settings && (
+                <Conversations
+                  overview={report.conversations}
+                  settings={settings}
+                  busy={collecting || analyzing}
+                  analyzing={analyzing}
+                  pendingCount={
+                    report.conversations.analysis?.pending_tasks?.length || 0
+                  }
+                  legacyCount={report.legacy_count}
+                  onAnalyze={analyzeDay}
+                  onSettings={() => setPage("settings")}
+                  onViewPending={openAnalysisResults}
+                  onSources={async (values) => {
+                    const prev = settings;
+                    const next: Settings = {
+                      ...settings,
+                      analysis_sources: values,
+                    };
+                    for (const key of sourceKeys)
+                      next[key] = {
+                        ...next[key],
+                        enabled: values.includes(key),
+                      };
+                    setSettings(next);
+                    setError("");
+                    try {
+                      await api("/settings", "PUT", next);
+                      await refresh();
+                    } catch (e) {
+                      setSettings(prev);
+                      setError((e as Error).message);
+                    }
+                  }}
+                  onView={(source, session) => {
+                    setSource(source);
+                    setSessionFilter(session);
+                    setTaskFilter("");
+                    setProject("");
+                    setSearch("");
+                    setPage("timeline");
+                  }}
+                />
+              )}
               <section className="task-section">
                 <div className="section-head">
                   <div>
@@ -1079,62 +1108,66 @@ function App() {
           {page === "timeline" && (
             <>
               <div className="timeline-toolbar">
-                <ListFilter size={18} />
-                <input
-                  aria-label="搜索时间线"
-                  placeholder="搜索活动内容…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-                <select
-                  aria-label="来源筛选"
-                  value={source}
-                  onChange={(e) => setSource(e.target.value)}
-                >
-                  <option value="">全部来源</option>
-                  {Object.entries(sources).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="会话筛选"
-                  value={sessionFilter}
-                  onChange={(e) => setSessionFilter(e.target.value)}
-                >
-                  <option value="">全部会话</option>
-                  {report?.conversations.sessions
-                    .filter((s) => !source || s.source === source)
-                    .map((s) => (
-                      <option key={s.source + s.id} value={s.id}>
-                        {s.preview.slice(0, 25) || s.id}
+                <div className="timeline-search">
+                  <ListFilter size={18} />
+                  <input
+                    aria-label="搜索时间线"
+                    placeholder="搜索活动内容…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <div className="timeline-filters">
+                  <select
+                    aria-label="来源筛选"
+                    value={source}
+                    onChange={(e) => setSource(e.target.value)}
+                  >
+                    <option value="">全部来源</option>
+                    {Object.entries(sources).map(([v, l]) => (
+                      <option key={v} value={v}>
+                        {l}
                       </option>
                     ))}
-                </select>
-                <select
-                  aria-label="项目筛选"
-                  value={project}
-                  onChange={(e) => setProject(e.target.value)}
-                >
-                  <option value="">全部项目</option>
-                  {[...new Set(events.map((e) => e.project))].map((p) => (
-                    <option key={p}>{p}</option>
-                  ))}
-                </select>
-                <select
-                  aria-label="任务筛选"
-                  value={taskFilter}
-                  onChange={(e) => setTaskFilter(e.target.value)}
-                >
-                  <option value="">全部任务</option>
-                  {report?.tasks.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.title}
-                    </option>
-                  ))}
-                </select>
-                <span>{filtered.length} 条活动</span>
+                  </select>
+                  <select
+                    aria-label="会话筛选"
+                    value={sessionFilter}
+                    onChange={(e) => setSessionFilter(e.target.value)}
+                  >
+                    <option value="">全部会话</option>
+                    {report?.conversations.sessions
+                      .filter((s) => !source || s.source === source)
+                      .map((s) => (
+                        <option key={s.source + s.id} value={s.id}>
+                          {s.preview.slice(0, 25) || s.id}
+                        </option>
+                      ))}
+                  </select>
+                  <select
+                    aria-label="项目筛选"
+                    value={project}
+                    onChange={(e) => setProject(e.target.value)}
+                  >
+                    <option value="">全部项目</option>
+                    {[...new Set(events.map((e) => e.project))].map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="任务筛选"
+                    value={taskFilter}
+                    onChange={(e) => setTaskFilter(e.target.value)}
+                  >
+                    <option value="">全部任务</option>
+                    {report?.tasks.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.title}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="timeline-count">{filtered.length} 条活动</span>
+                </div>
               </div>
               <section className="timeline">
                 {filtered.length === 0 ? (

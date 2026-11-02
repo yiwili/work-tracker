@@ -33,8 +33,16 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
   if (!active && (!progress || progress.state === "idle")) return null;
   return (
     <div className="analysis-log" aria-label="AI 分析日志">
-      <strong>AI 分析日志 · {progress?.state === "error" ? "失败" : progress?.state === "success" && !active ? "完成" : "进行中"}
-        {progress && ` · 已耗时 ${Math.floor(progress.elapsed_seconds)} 秒`}</strong>
+      <div className="analysis-log-head">
+        <span className="analysis-log-lights" aria-hidden="true">
+          <span className="light close" />
+          <span className="light minimize" />
+          <span className="light expand" />
+        </span>
+        <strong>AI 分析日志 · {progress?.state === "error" ? "失败" : progress?.state === "success" && !active ? "完成" : "进行中"}
+          {progress && ` · 已耗时 ${Math.floor(progress.elapsed_seconds)} 秒`}</strong>
+        <span className="analysis-log-signal" aria-hidden="true" />
+      </div>
       {unavailable && <p role="status">暂时无法获取进度，正在重连；不会重复发送分析请求。</p>}
       {!progress?.logs.length && <p>正在等待分析开始…</p>}
       <ol>

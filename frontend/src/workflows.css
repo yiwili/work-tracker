@@ -1,260 +1,753 @@
 /* ==========================================================================
-   Workflows & Modals - Modern Apple Design System
+   Workflows — Allocation, Gitee Enterprise & History Library
+   Apple Vibrancy & Bento Architecture · macOS Sequoia / iPadOS 18
    ========================================================================== */
 
-.allocation-modal {
-  max-width: 780px;
+/* ==========================================================================
+   Shared Modal Shells
+   ========================================================================== */
+
+.modal {
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
-.gitee-publish-modal {
+.modal.allocation-modal,
+.modal.gitee-publish-modal {
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
+
+.modal.allocation-modal {
+  width: 780px;
+}
+
+.modal.gitee-publish-modal {
   width: 860px;
 }
 
-.gitee-publish-modal h2,
-.enterprise-settings h2 {
+.allocation-modal .modal-head h2,
+.gitee-publish-modal .modal-head h2 {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--apple-text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.allocation-modal .modal-head h2 > svg,
+.gitee-publish-modal .modal-head h2 > svg {
+  color: var(--apple-blue);
+  flex-shrink: 0;
+}
+
+.gitee-publish-modal .check-label {
+  align-items: flex-start;
+  line-height: 1.5;
+}
+
+.gitee-publish-modal .check-label > input {
+  margin-top: 2px;
+}
+
+/* Apple primary action for footers whose final action has no .primary class */
+.allocation-modal .modal-footer > button:last-child:not(.outline),
+.gitee-publish-modal .modal-footer > button:last-child:not(.outline) {
+  background: linear-gradient(180deg, #148eff 0%, #0071e3 100%);
+  color: #ffffff;
+  border: 1px solid rgba(0, 90, 190, 0.3);
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow:
+    0 2px 6px rgba(0, 113, 227, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.allocation-modal .modal-footer > button:last-child:not(.outline):hover:not(:disabled),
+.gitee-publish-modal .modal-footer > button:last-child:not(.outline):hover:not(:disabled) {
+  background: linear-gradient(180deg, #2496ff 0%, #0077ed 100%);
+  box-shadow:
+    0 4px 12px rgba(0, 113, 227, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.allocation-modal .modal-footer > button:last-child:not(.outline):active:not(:disabled),
+.gitee-publish-modal .modal-footer > button:last-child:not(.outline):active:not(:disabled) {
+  background: linear-gradient(180deg, #0f84ec 0%, #0068d1 100%);
+  box-shadow:
+    0 1px 3px rgba(0, 113, 227, 0.3),
+    inset 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ==========================================================================
+   Gitee Enterprise Mapping Rules
+   ========================================================================== */
+
+.enterprise-settings {
+  overflow-wrap: anywhere;
+}
+
+.enterprise-settings .actions {
+  gap: 10px;
+  margin: 12px 0 16px;
 }
 
 .enterprise-rule {
   display: grid;
-  grid-template-columns: 120px minmax(120px, 1fr) minmax(160px, 1.2fr) 36px;
-  gap: 10px;
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.2fr) 32px;
+  gap: 12px;
   align-items: end;
-  margin: 14px 0;
-  padding: 12px 14px;
-  background: var(--apple-control-bg);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--apple-border);
-}
-
-.enterprise-settings .actions,
-.gitee-publish-modal .actions,
-.history-panel .actions {
-  flex-wrap: wrap;
+  margin: 12px 0;
+  padding: 14px 16px;
+  min-width: 0;
+  background: linear-gradient(180deg, #fbfbfd 0%, #f6f6f9 100%);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .enterprise-rule label {
-  min-width: 0;
   margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--apple-text-secondary);
 }
 
+.enterprise-rule select,
+.enterprise-rule input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 5px;
+  box-sizing: border-box;
+}
+
+.enterprise-rule .icon-button {
+  justify-self: end;
+  align-self: end;
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.enterprise-rule .icon-button:hover:not(:disabled) {
+  color: var(--apple-red-text);
+  background: var(--apple-red-tint);
+  border-color: var(--apple-red-border);
+}
+
+/* ==========================================================================
+   Gitee Publish Review
+   ========================================================================== */
+
 .publish-items {
-  border: none;
+  border: 0;
   padding: 0;
   margin: 16px 0;
+  min-width: 0;
 }
 
 .publish-item {
-  border: 1px solid var(--apple-border);
+  margin: 0 0 12px;
   padding: 18px 20px;
-  border-radius: var(--radius-md);
-  margin: 14px 0;
-  background: var(--apple-card);
-  box-shadow: var(--shadow-xs);
+  min-width: 0;
+  background: linear-gradient(180deg, #ffffff 0%, #fafafd 100%);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  transition:
+    border-color 0.2s var(--ease-apple),
+    box-shadow 0.2s var(--ease-apple);
+}
+
+.publish-item:last-child {
+  margin-bottom: 0;
+}
+
+.publish-item:hover {
+  border-color: rgba(0, 122, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+}
+
+.publish-item > .check-label {
+  align-items: flex-start;
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--apple-text-primary);
+}
+
+.publish-item > .check-label > input {
+  margin-top: 2px;
+}
+
+.publish-item > .check-label strong {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .publish-target {
   display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 14px;
-  margin: 14px 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 12px 0 0;
+  min-width: 0;
+}
+
+.publish-target label {
+  margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--apple-text-secondary);
+}
+
+.publish-target select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 5px;
+  box-sizing: border-box;
+}
+
+.publish-item > .muted {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--apple-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.publish-item > details {
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.publish-item > details > summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--apple-text-secondary);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.publish-item > details > summary::marker {
+  color: var(--apple-text-quaternary);
 }
 
 .publish-description {
+  width: 100%;
+  max-width: 100%;
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: var(--apple-font);
-  font-size: 12.5px;
-  line-height: 1.6;
-  max-height: 220px;
-  overflow-y: auto;
-  background: var(--apple-control-bg);
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
+  font-family: var(--apple-font-mono);
+  font-size: 12px;
+  line-height: 1.65;
   color: var(--apple-text-secondary);
+  background: var(--apple-control-bg);
   border: 1px solid var(--apple-border);
+  border-radius: 10px;
 }
 
-.publish-failed {
-  color: var(--apple-red);
+.publish-item p[role="status"] {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--apple-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.publish-item p[role="status"] a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--apple-blue);
   font-weight: 500;
 }
 
-@media (max-width: 700px) {
-  .enterprise-rule,
-  .publish-target {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .enterprise-rule .icon-button {
-    justify-self: end;
-  }
+.publish-item p[role="status"] a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
-.allocation-modal h2,
-.history-panel h3 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--apple-text-primary);
+.publish-failed,
+.publish-item p.publish-failed {
+  color: var(--apple-red-text);
+  font-weight: 500;
 }
+
+.publish-item .actions {
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.publish-item .actions label {
+  flex: 1 1 220px;
+  margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.publish-item .actions > button {
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Allocation — Widget Summary
+   ========================================================================== */
 
 .allocation-summary {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin: 20px 0;
+  margin: 18px 0;
 }
 
-.allocation-summary span {
-  background: var(--apple-control-bg);
-  border: 1px solid var(--apple-border);
+.allocation-summary > span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
   padding: 16px;
-  border-radius: var(--radius-md);
   text-align: center;
   font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--apple-text-secondary);
+  background: linear-gradient(180deg, #ffffff 0%, #f5f5f7 100%);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 14px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+  overflow-wrap: anywhere;
 }
 
 .allocation-summary strong {
   display: block;
+  margin: 0;
   font-size: 24px;
   font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums lining-nums;
   color: var(--apple-blue);
-  margin-top: 6px;
-  font-variant-numeric: tabular-nums;
+}
+
+.allocation-summary > span:nth-child(1) strong {
+  color: var(--apple-green-text);
+}
+
+.allocation-summary > span:nth-child(2) strong {
+  color: var(--apple-orange-text);
+}
+
+.allocation-summary > span:nth-child(3) strong {
+  color: var(--apple-blue);
 }
 
 .allocation-reference {
-  padding: 14px 16px;
-  background: var(--apple-control-bg);
-  border: 1px solid var(--apple-border);
-  border-radius: var(--radius-md);
-  font-size: 12.5px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--apple-text-secondary);
+  background: #f9f9fb;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
 }
 
+/* ==========================================================================
+   Allocation — Quick Manual Activities
+   ========================================================================== */
+
 .quick-items {
-  border: 1px solid var(--apple-border);
-  border-radius: var(--radius-lg);
   margin: 18px 0;
   padding: 18px 20px;
-  background: var(--apple-card-subtle);
+  min-width: 0;
+  background: #f9f9fb;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 16px;
 }
 
 .quick-items legend {
-  font-size: 13px;
-  font-weight: 600;
   padding: 0 8px;
+  margin-left: -4px;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--apple-text-primary);
+}
+
+.quick-items > p {
+  margin: 12px 0 2px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--apple-text-tertiary);
 }
 
 .quick-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 16px;
-  font-size: 12.5px;
+  flex-wrap: wrap;
+  margin: 2px 0 14px;
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--apple-text-secondary);
 }
 
+.quick-toolbar > span {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.quick-toolbar .outline {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  font-size: 12px;
+  border-radius: 9px;
+}
+
 .allocation-error {
-  padding: 12px 16px;
-  margin: 16px 0;
+  margin: 14px 0;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--apple-red-text);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 59, 48, 0.09) 0%,
+    rgba(255, 59, 48, 0.05) 100%
+  );
   border: 1px solid var(--apple-red-border);
-  background: var(--apple-red-tint);
-  border-radius: var(--radius-md);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+
+.allocation-error strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
   color: var(--apple-red-text);
 }
 
 .allocation-error p {
-  margin: 4px 0;
-  font-size: 12.5px;
-  line-height: 1.5;
+  margin: 2px 0;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .quick-item {
   display: grid;
-  grid-template-columns: 85px 1fr 115px 32px;
-  align-items: end;
+  grid-template-columns: minmax(72px, 90px) minmax(0, 1fr) minmax(96px, 120px) 32px;
   gap: 10px;
-  margin-bottom: 12px;
+  align-items: end;
+  margin: 0 0 12px;
+  min-width: 0;
 }
 
 .quick-item label {
-  min-width: 0;
   margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--apple-text-secondary);
 }
 
 .quick-item input,
 .quick-item select {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 36px;
+  margin-top: 5px;
+  padding: 8px 10px;
   box-sizing: border-box;
+  font-size: 13px;
 }
 
-.allocation-results > div,
-.history-list > div {
-  border-bottom: 1px solid var(--apple-divider);
-  padding: 14px 0;
+.quick-item .icon-button {
+  justify-self: end;
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.quick-item .icon-button:hover:not(:disabled) {
+  color: var(--apple-red-text);
+  background: var(--apple-red-tint);
+  border-color: var(--apple-red-border);
+}
+
+/* ==========================================================================
+   Allocation — Results
+   ========================================================================== */
+
+.allocation-results {
+  margin: 14px 0;
+  padding: 4px 16px;
+  min-width: 0;
+  background: #f9f9fb;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
 }
 
 .allocation-results > div {
   display: flex;
-  justify-content: space-between;
-  gap: 20px;
   align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  min-width: 0;
+  border-bottom: 1px solid var(--apple-divider);
+}
+
+.allocation-results > div:last-child {
+  border-bottom: 0;
+}
+
+.allocation-results > div > span {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--apple-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.allocation-results small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--apple-text-tertiary);
 }
 
 .allocation-results strong {
-  white-space: nowrap;
-  font-size: 15px;
+  flex-shrink: 0;
+  font-size: 14.5px;
   font-weight: 600;
-  color: var(--apple-text-primary);
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--apple-blue);
+}
+
+/* ==========================================================================
+   History Library
+   ========================================================================== */
+
+.history-panel {
+  overflow-wrap: anywhere;
+}
+
+.history-panel .actions {
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.history-panel .actions > span {
+  font-size: 12px;
+  color: var(--apple-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
-.allocation-results small,
-.history-list small {
-  display: block;
-  font-size: 11.5px;
-  color: var(--apple-text-tertiary);
-  line-height: 1.6;
-  margin-top: 4px;
+.history-list {
+  max-width: 100%;
+  min-width: 0;
 }
 
-.history-list {
-  max-height: 380px;
-  overflow-y: auto;
+.history-list > div {
+  min-width: 0;
+}
+
+.history-list strong,
+.history-list small {
+  overflow-wrap: anywhere;
 }
 
 .history-panel input[type="file"] {
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
+/* ==========================================================================
+   Responsive — Compact Widgets
+   ========================================================================== */
+
 @media (max-width: 700px) {
-  .quick-item {
-    grid-template-columns: 75px minmax(0, 1fr);
+  .modal,
+  .modal.allocation-modal,
+  .modal.gitee-publish-modal {
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
   }
-  .quick-item > .icon-button {
+
+  .enterprise-rule,
+  .publish-target {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .enterprise-rule {
+    align-items: stretch;
+  }
+
+  .enterprise-rule .icon-button {
+    justify-self: end;
+    margin-top: 2px;
+  }
+
+  .quick-item {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .quick-item .icon-button {
     justify-self: end;
   }
+
+  .quick-items {
+    padding: 16px;
+  }
+
   .allocation-summary {
     gap: 8px;
   }
-  .allocation-summary span {
-    padding: 10px;
+
+  .allocation-summary > span {
+    gap: 4px;
+    padding: 12px 8px;
     font-size: 11px;
+    border-radius: 12px;
   }
+
   .allocation-summary strong {
-    font-size: 19px;
+    font-size: 20px;
+  }
+
+  .publish-item {
+    padding: 16px;
+  }
+
+  .allocation-results {
+    padding: 2px 14px;
+  }
+}
+
+@media (max-width: 390px) {
+  .modal,
+  .modal.allocation-modal,
+  .modal.gitee-publish-modal {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .allocation-modal .modal-head h2,
+  .gitee-publish-modal .modal-head h2 {
+    gap: 8px;
+    font-size: 16px;
+  }
+
+  .quick-items {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .quick-item {
+    grid-template-columns: minmax(0, 1fr) 32px;
+    gap: 8px 10px;
+  }
+
+  .quick-item > label {
+    grid-column: 1 / -1;
+  }
+
+  .quick-item > label:nth-child(3) {
+    grid-column: 1;
+  }
+
+  .quick-item .icon-button {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: end;
+    justify-self: end;
+  }
+
+  .quick-toolbar .outline {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .allocation-summary > span {
+    padding: 10px 6px;
+  }
+
+  .allocation-summary strong {
+    font-size: 18px;
+  }
+
+  .allocation-error {
+    padding: 10px 12px;
+  }
+
+  .publish-item {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .publish-target {
+    gap: 10px;
+  }
+
+  .allocation-results > div {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .allocation-results strong {
+    margin-left: auto;
+  }
+
+  .allocation-modal .modal-footer,
+  .gitee-publish-modal .modal-footer {
+    gap: 8px;
+  }
+
+  .allocation-modal .modal-footer > button,
+  .gitee-publish-modal .modal-footer > button {
+    flex: 1 1 auto;
+    max-width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .publish-item {
+    transition: none;
   }
 }

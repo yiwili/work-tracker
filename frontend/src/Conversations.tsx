@@ -108,7 +108,16 @@ export function Conversations({
       )}
       <div className="conversation-sources">
         {overview.sources.map((s) => (
-          <label className="check-label" key={s.source}>
+          <label
+            className={
+              "check-label" +
+              (settings.analysis_sources.includes(s.source) ? " active" : "") +
+              ((s.source === "git" ? s.events : s.sessions) > 0
+                ? " has-data"
+                : "")
+            }
+            key={s.source}
+          >
             <input
               type="checkbox"
               checked={settings.analysis_sources.includes(s.source)}
@@ -124,7 +133,7 @@ export function Conversations({
             <span>
               <span className="source-check-name">
                 <SourceIcon source={s.source} size={16} />
-                {names[s.source]}
+                <span className="source-name">{names[s.source]}</span>
               </span>
               <small>
                 {s.source === "git"
