@@ -834,6 +834,7 @@ test("deferred AI analysis waits for the user to review and import candidates", 
   } finally {
     await page.request.put("/api/settings", { data: original });
   }
+});
 test("analysis log updates during a pending request and isolates dates", async ({ page }) => {
   let state = "idle";
   let release!: () => void;
@@ -867,5 +868,4 @@ test("analysis log updates during a pending request and isolates dates", async (
   await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
   await page.getByLabel("工作日期").fill("2026-10-25");
   await expect(page.getByLabel("AI 分析日志")).toHaveCount(0);
-});
 });

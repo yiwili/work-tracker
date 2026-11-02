@@ -5,6 +5,7 @@ __pycache__/
 data/
 node_modules/
 frontend/dist/
+build/
 test-results/
 playwright-report/
 .env

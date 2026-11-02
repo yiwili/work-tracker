@@ -1,58 +1,90 @@
+/* ==========================================================================
+   Workflows & Modals - Modern Apple Design System
+   ========================================================================== */
+
 .allocation-modal {
   max-width: 780px;
 }
+
 .gitee-publish-modal {
   width: 860px;
 }
+
 .gitee-publish-modal h2,
 .enterprise-settings h2 {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--apple-text-primary);
 }
+
 .enterprise-rule {
   display: grid;
-  grid-template-columns: 120px minmax(120px, 1fr) minmax(160px, 1.2fr) 34px;
+  grid-template-columns: 120px minmax(120px, 1fr) minmax(160px, 1.2fr) 36px;
   gap: 10px;
   align-items: end;
-  margin: 15px 0;
+  margin: 14px 0;
+  padding: 12px 14px;
+  background: var(--apple-control-bg);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--apple-border);
 }
-.enterprise-settings .actions, .gitee-publish-modal .actions, .history-panel .actions { flex-wrap: wrap; }
+
+.enterprise-settings .actions,
+.gitee-publish-modal .actions,
+.history-panel .actions {
+  flex-wrap: wrap;
+}
+
 .enterprise-rule label {
   min-width: 0;
   margin: 0;
 }
+
 .publish-items {
   border: none;
   padding: 0;
-  margin: 15px 0;
+  margin: 16px 0;
 }
+
 .publish-item {
-  border: 1px solid #e1e8de;
-  padding: 16px;
-  border-radius: 10px;
-  margin: 12px 0;
+  border: 1px solid var(--apple-border);
+  padding: 18px 20px;
+  border-radius: var(--radius-md);
+  margin: 14px 0;
+  background: var(--apple-card);
+  box-shadow: var(--shadow-xs);
 }
+
 .publish-target {
   display: grid;
   grid-template-columns: 1.3fr 1fr;
   gap: 14px;
-  margin: 12px 0;
+  margin: 14px 0;
 }
+
 .publish-description {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.7;
-  max-height: 240px;
-  overflow: auto;
-  background: #f6f8f3;
-  padding: 12px;
+  font-family: var(--apple-font);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--apple-control-bg);
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  color: var(--apple-text-secondary);
+  border: 1px solid var(--apple-border);
 }
+
 .publish-failed {
-  color: #9b3f2c;
+  color: var(--apple-red);
+  font-weight: 500;
 }
+
 @media (max-width: 700px) {
   .enterprise-rule,
   .publish-target {
@@ -62,48 +94,68 @@
     justify-self: end;
   }
 }
+
 .allocation-modal h2,
 .history-panel h3 {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--apple-text-primary);
 }
+
 .allocation-summary {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin: 20px 0;
 }
+
 .allocation-summary span {
-  background: #f2f6ee;
-  border: 1px solid #e3e9de;
-  padding: 14px;
-  border-radius: 10px;
+  background: var(--apple-control-bg);
+  border: 1px solid var(--apple-border);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: 12px;
+  color: var(--apple-text-secondary);
 }
+
 .allocation-summary strong {
   display: block;
-  font-size: 23px;
-  color: #285e50;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--apple-blue);
   margin-top: 6px;
+  font-variant-numeric: tabular-nums;
 }
+
 .allocation-reference {
-  padding: 12px;
-  background: #f7f9fc;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.7;
+  padding: 14px 16px;
+  background: var(--apple-control-bg);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--apple-text-secondary);
 }
+
 .quick-items {
-  border: 1px solid #dce3ef;
-  border-radius: 10px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-lg);
   margin: 18px 0;
-  padding: 16px;
+  padding: 18px 20px;
+  background: var(--apple-card-subtle);
 }
+
 .quick-items legend {
   font-size: 13px;
-  padding: 0 6px;
-  color: #62718b;
+  font-weight: 600;
+  padding: 0 8px;
+  color: var(--apple-text-primary);
 }
+
 .quick-toolbar {
   display: flex;
   align-items: center;
@@ -111,64 +163,83 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 16px;
-  font-size: 12px;
+  font-size: 12.5px;
+  color: var(--apple-text-secondary);
 }
+
 .allocation-error {
   padding: 12px 16px;
   margin: 16px 0;
-  border: 1px solid #edc4bc;
-  background: #fff5f2;
-  border-radius: 8px;
-  color: #8d3827;
+  border: 1px solid var(--apple-red-border);
+  background: var(--apple-red-tint);
+  border-radius: var(--radius-md);
+  color: var(--apple-red-text);
 }
+
 .allocation-error p {
-  margin: 6px 0;
-  font-size: 13px;
+  margin: 4px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
+
 .quick-item {
   display: grid;
   grid-template-columns: 85px 1fr 115px 32px;
   align-items: end;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
+
 .quick-item label {
   min-width: 0;
   margin: 0;
 }
+
 .quick-item input,
 .quick-item select {
   width: 100%;
   box-sizing: border-box;
 }
+
 .allocation-results > div,
 .history-list > div {
-  border-bottom: 1px solid #e8ecf3;
-  padding: 12px 0;
+  border-bottom: 1px solid var(--apple-divider);
+  padding: 14px 0;
 }
+
 .allocation-results > div {
   display: flex;
   justify-content: space-between;
   gap: 20px;
+  align-items: flex-start;
 }
+
 .allocation-results strong {
   white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--apple-text-primary);
+  font-variant-numeric: tabular-nums;
 }
+
 .allocation-results small,
 .history-list small {
   display: block;
-  font-size: 12px;
-  color: #6b7890;
-  line-height: 1.7;
-  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--apple-text-tertiary);
+  line-height: 1.6;
+  margin-top: 4px;
 }
+
 .history-list {
-  max-height: 400px;
-  overflow: auto;
+  max-height: 380px;
+  overflow-y: auto;
 }
+
 .history-panel input[type="file"] {
   max-width: 100%;
 }
+
 @media (max-width: 700px) {
   .quick-item {
     grid-template-columns: 75px minmax(0, 1fr);
@@ -177,13 +248,13 @@
     justify-self: end;
   }
   .allocation-summary {
-    gap: 6px;
+    gap: 8px;
   }
   .allocation-summary span {
     padding: 10px;
-    font-size: 12px;
+    font-size: 11px;
   }
   .allocation-summary strong {
-    font-size: 20px;
+    font-size: 19px;
   }
 }
