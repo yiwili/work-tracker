@@ -181,9 +181,6 @@ export function GiteePublishModal({
             <X size={20} />
           </button>
         </div>
-        <p>
-          优先使用预设的标题与项目映射，再按项目前缀唯一匹配。创建记录会保存在本机，重复提交会跳过已创建项。
-        </p>
         {error && (
           <div className="allocation-error" role="alert">
             {error}
@@ -358,9 +355,6 @@ export function GiteePublishModal({
                 );
               })}
             </fieldset>
-            <p>
-              工时写入“预估工时”，工作日期写入计划开始日期；不登记实际工时，不自动关闭任务。只发送预览内容，不上传原始对话或日志。
-            </p>
             <label className="check-label">
               <input
                 type="checkbox"

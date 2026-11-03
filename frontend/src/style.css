@@ -499,6 +499,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  margin-top: 20px;
 }
 
 .nav-item {
@@ -655,7 +656,7 @@ main {
 
 .setup-launch {
   width: 100%;
-  margin: 12px 0 2px;
+  margin: auto 0 2px;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(0, 122, 255, 0.2);
@@ -770,8 +771,8 @@ main {
 }
 
 .content {
-  padding: 28px 36px 64px;
-  max-width: 1380px;
+  padding: 24px 32px 48px;
+  max-width: 1280px;
   margin: 0 auto;
   min-width: 0;
   width: 100%;
@@ -783,9 +784,9 @@ main {
 
 .heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   gap: 22px;
 }
 
@@ -803,7 +804,7 @@ main {
 }
 
 h1 {
-  font-size: 28px;
+  font-size: 24px;
   letter-spacing: -0.03em;
   line-height: 1.2;
   margin: 0;
@@ -950,9 +951,9 @@ button.danger:hover:not(:disabled) {
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   backdrop-filter: blur(16px) saturate(180%);
   border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 14px;
-  padding: 10px 16px;
-  margin-bottom: 20px;
+  border-radius: 12px;
+  padding: 8px 14px;
+  margin-bottom: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.025);
   min-width: 0;
 }
@@ -1041,8 +1042,8 @@ button.danger:hover:not(:disabled) {
 .stats {
   display: grid;
   grid-template-columns: 1.25fr 1fr 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 22px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .stat {
@@ -1051,11 +1052,11 @@ button.danger:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-height: 148px;
+  min-height: 92px;
   background: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 18px;
-  padding: 20px 22px;
+  border-radius: 14px;
+  padding: 14px 18px;
   box-shadow:
     0 4px 16px rgba(0, 0, 0, 0.035),
     0 1px 2px rgba(0, 0, 0, 0.02);
@@ -1107,10 +1108,10 @@ button.danger:hover:not(:disabled) {
 }
 
 .stat-number {
-  font-size: 34px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.035em;
-  margin: 13px 0 7px;
+  margin: 10px 0 4px;
   color: var(--apple-text-primary);
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -1168,17 +1169,17 @@ button.danger:hover:not(:disabled) {
 
 .conversations-panel {
   background: #ffffff;
-  border-radius: 20px;
+  border-radius: 16px;
   border: 1px solid rgba(0, 0, 0, 0.06);
   box-shadow:
     0 6px 24px rgba(0, 0, 0, 0.04),
     0 1px 3px rgba(0, 0, 0, 0.02);
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   overflow: hidden;
 }
 
 .conversations-panel .section-head {
-  padding: 20px 24px 16px;
+  padding: 14px 20px;
   background: linear-gradient(
     180deg,
     rgba(0, 122, 255, 0.035) 0%,
@@ -1234,18 +1235,20 @@ h2 {
 
 .conversation-sources {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
-  gap: 10px;
-  padding: 16px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(205px, 1fr));
+  gap: 8px;
+  padding: 12px 20px;
 }
 
 .conversation-sources .check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: #f5f5f7;
   border: 1px solid rgba(0, 0, 0, 0.05);
-  border-radius: 12px;
-  padding: 10px 13px;
+  border-radius: 10px;
+  padding: 8px 12px;
   margin: 0;
-  align-items: flex-start;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   min-width: 0;
 }
@@ -1274,26 +1277,33 @@ h2 {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
-.conversation-sources .check-label:not(.has-data) .source-check-name {
+.conversation-sources .check-label:not(.has-data) .source-name-text {
   color: var(--apple-text-secondary);
 }
 
-.conversation-sources .check-label > span {
-  min-width: 0;
-  display: block;
+.conversation-sources .check-label > svg {
+  flex-shrink: 0;
+  color: var(--apple-text-secondary);
 }
 
-.conversation-sources .check-label input[type="checkbox"] {
-  margin-top: 1px;
+.conversation-sources .source-name-text {
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--apple-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .conversation-sources small {
-  display: block;
-  margin-top: 3px;
+  margin-left: auto;
+  flex-shrink: 0;
   color: var(--apple-text-tertiary);
-  font-size: 11px;
-  font-weight: 400;
-  line-height: 1.35;
+  font-size: 10.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .source-check-name {
@@ -1307,25 +1317,10 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.conversation-sources .source-check-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.conversation-sources .source-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .conversation-total {
-  margin: 0 24px 16px;
-  padding: 11px 16px;
-  border-radius: 12px;
+  margin: 0 20px 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
   background: linear-gradient(90deg, rgba(0, 122, 255, 0.06) 0%, rgba(88, 86, 214, 0.06) 100%);
   border: 1px solid rgba(0, 122, 255, 0.12);
   display: flex;
@@ -1344,6 +1339,18 @@ h2 {
 .conversation-total strong {
   color: var(--apple-text-primary);
   font-weight: 600;
+}
+
+.conversation-timing {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  color: var(--apple-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .conversation-total button {
@@ -1420,33 +1427,8 @@ h2 {
   font-weight: 500;
 }
 
-.timing-reference {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin: 0 24px 18px;
-  padding: 12px 16px;
-  background: #f5f5f7;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  font-size: 11.5px;
-  color: var(--apple-text-secondary);
-}
-
-.timing-reference strong {
-  color: var(--apple-text-primary);
-  font-weight: 600;
-}
-
-.timing-reference small {
-  flex-basis: 100%;
-  line-height: 1.55;
-  color: var(--apple-text-tertiary);
-  margin-top: 2px;
-}
-
 .session-list {
-  padding: 14px 24px;
+  padding: 10px 20px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
   font-size: 12.5px;
 }
@@ -1673,7 +1655,7 @@ h2 {
    ========================================================================== */
 
 .task-section {
-  border-radius: 20px;
+  border-radius: 16px;
   background: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.06);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.04);
@@ -1681,7 +1663,7 @@ h2 {
 }
 
 .task-section > .section-head {
-  padding: 20px 24px;
+  padding: 16px 20px;
 }
 
 .actions {
@@ -1715,14 +1697,14 @@ thead {
 }
 
 th {
-  padding: 11px 14px;
+  padding: 10px 14px;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   white-space: nowrap;
 }
 
 td {
-  padding: 15px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--apple-divider);
   vertical-align: top;
   transition: background-color 0.18s var(--ease-apple);
@@ -1751,12 +1733,12 @@ tbody tr:last-child td {
 
 td:first-child,
 th:first-child {
-  padding-left: 24px;
+  padding-left: 20px;
 }
 
 td:last-child,
 th:last-child {
-  padding-right: 24px;
+  padding-right: 20px;
 }
 
 .task-main {
@@ -1998,7 +1980,7 @@ th:last-child {
 
 .empty {
   text-align: center;
-  padding: 56px 20px;
+  padding: 44px 20px;
   color: var(--apple-text-secondary);
   min-width: 0;
 }
@@ -2068,11 +2050,11 @@ th:last-child {
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
-  padding: 20px 26px;
+  padding: 16px 20px;
   background: linear-gradient(180deg, #ffffff 0%, #fafafc 100%);
   border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 18px;
-  margin-top: 22px;
+  border-radius: 14px;
+  margin-top: 16px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.05);
 }
 
@@ -2108,7 +2090,7 @@ th:last-child {
 .confirmation h3 {
   font-size: 15px;
   font-weight: 600;
-  margin: 0 0 4px;
+  margin: 0;
   color: var(--apple-text-primary);
   letter-spacing: -0.01em;
 }
@@ -4355,12 +4337,8 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .stat {
-    min-height: 138px;
-  }
-
   .content {
-    padding: 26px 28px 56px;
+    padding: 22px 24px 48px;
   }
 }
 
@@ -4458,16 +4436,12 @@ code {
   }
 
   .content {
-    padding: 22px 18px 56px;
+    padding: 20px 18px 48px;
   }
 
   .heading {
-    margin-bottom: 18px;
-    gap: 16px;
-  }
-
-  h1 {
-    font-size: 24px;
+    margin-bottom: 16px;
+    gap: 12px;
   }
 
   .heading p {
@@ -4477,8 +4451,8 @@ code {
   .datebar {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 8px;
+    padding: 8px 12px;
   }
 
   .day-status {
@@ -4487,18 +4461,16 @@ code {
 
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
   }
 
   .stat {
-    padding: 16px;
-    min-height: auto;
-    border-radius: 16px;
+    padding: 14px 16px;
+    border-radius: 14px;
   }
 
   .stat-number {
     font-size: 28px;
-    margin: 10px 0 6px;
+    margin: 10px 0 4px;
   }
 
   .stat-label svg {
@@ -4508,12 +4480,12 @@ code {
   }
 
   .conversations-panel {
-    border-radius: 18px;
-    margin-bottom: 18px;
+    border-radius: 16px;
+    margin-bottom: 16px;
   }
 
   .conversations-panel .section-head {
-    padding: 18px 16px 14px;
+    padding: 14px 16px;
   }
 
   .conversation-actions {
@@ -4521,8 +4493,8 @@ code {
   }
 
   .conversation-sources {
-    padding: 14px 16px;
-    grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+    padding: 12px 16px;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   }
 
   .conversations-panel > .muted {
@@ -4530,8 +4502,8 @@ code {
   }
 
   .conversation-total {
-    margin: 0 16px 14px;
-    padding: 10px 12px;
+    margin: 0 16px 12px;
+    padding: 8px 12px;
   }
 
   .conversation-total button {
@@ -4543,18 +4515,12 @@ code {
     padding: 16px;
   }
 
-  .timing-reference {
-    margin: 0 16px 14px;
-    padding: 12px 14px;
-    gap: 10px;
-  }
-
   .conversation-hint {
     padding: 11px 16px;
   }
 
   .session-list {
-    padding: 12px 16px;
+    padding: 10px 16px;
   }
 
   .analysis-log {
@@ -4563,14 +4529,14 @@ code {
   }
 
   .section-head {
-    padding: 16px;
+    padding: 14px 16px;
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
   }
 
   .task-section > .section-head {
-    padding: 16px;
+    padding: 14px 16px;
   }
 
   .section-head > .actions,
@@ -4587,8 +4553,8 @@ code {
   }
 
   .confirmation {
-    padding: 18px 16px;
-    gap: 14px;
+    padding: 16px;
+    gap: 12px;
   }
 
   .confirmation > .actions {
@@ -4776,10 +4742,6 @@ code {
 
   .stats {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .stat-number {
-    font-size: 30px;
   }
 
   .date-control {
@@ -5041,7 +5003,7 @@ code {
   }
 
   .datebar {
-    padding: 10px;
+    padding: 8px 12px;
   }
 
   .date-control {
@@ -5067,11 +5029,6 @@ code {
     margin-right: 14px;
   }
 
-  .timing-reference {
-    margin-left: 14px;
-    margin-right: 14px;
-  }
-
   .conversations-panel > .muted {
     margin-left: 14px;
     margin-right: 14px;
@@ -5082,7 +5039,7 @@ code {
   }
 
   .session-list {
-    padding: 12px 14px;
+    padding: 10px 14px;
   }
 
   .analysis-log {

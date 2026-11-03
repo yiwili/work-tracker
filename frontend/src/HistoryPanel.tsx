@@ -92,10 +92,6 @@ export function HistoryPanel({
       <h3>
         <BookOpen size={18} /> 历史工作项与命名风格
       </h3>
-      <p>
-        导入记录保存在本机 SQLite 历史库，作为命名参考。首次导入后由 AI
-        提炼风格模板，后续导入沿用现有模板。
-      </p>
       <label>
         历史文件（JSON / CSV / Excel，最大20MB）
         <input
@@ -124,11 +120,6 @@ export function HistoryPanel({
           onChange={(e) => setSince(e.target.value)}
         />
       </label>
-      <p>
-        全部有效记录入库；指定日期后的标题参与风格提炼。表头支持
-        title/标题、project/项目、date/日期及 Gitee 导出字段。Excel
-        读取第一张工作表。
-      </p>
       <button
         type="button"
         className="outline"
@@ -249,10 +240,6 @@ export function HistoryPanel({
       <h3>
         <Download size={18} /> Gitee API 自动抓取
       </h3>
-      <p>
-        读取本人负责或创建的 Gitee V5
-        Issues，支持所有状态与分页。记录进入历史库并参与命名参考。自动抓取仅在本地服务运行时执行。
-      </p>
       <label>
         Gitee Token（留空保留）
         <input

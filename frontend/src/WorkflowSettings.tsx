@@ -23,9 +23,6 @@ export function WorkflowSettings({
         <Bot size={19} />
         AI 工作流程与提示词
       </h2>
-      <p>
-        专用角色分别负责相关性筛选、业务工作项归并、工时估算、人工事项命名与风格提炼。可补充各自偏好；引用校验、隐私过滤和工时守恒仍由程序执行。
-      </p>
       {Object.entries(agents).map(([key, agent]) => (
         <details className="agent-prompt" key={key}>
           <summary>{agent.name}</summary>

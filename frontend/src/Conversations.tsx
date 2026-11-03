@@ -6,9 +6,11 @@ import { AnalysisLog } from "./AnalysisLog";
 const formatTokens = (value: number) => value.toLocaleString("zh-CN");
 const names: Record<string, string> = {
   ...sourceLabels,
-  workbuddy: "WorkBuddy（旧版合并记录）",
-  qoder: "Qoder（旧版合并记录）",
-  trae: "Trae（旧版合并记录）",
+  trae_cn: "Trae 国内版",
+  trae_intl: "Trae 国际版",
+  workbuddy: "WorkBuddy（旧版）",
+  qoder: "Qoder（旧版）",
+  trae: "Trae（旧版）",
   git: "Git 辅助证据",
 };
 
@@ -49,9 +51,7 @@ export function Conversations({
     <section className="conversations-panel">
       <div className="section-head">
         <div>
-          <div className="eyebrow">CONVERSATIONS FIRST</div>
-          <h2>先看全天对话，再归纳工作任务</h2>
-          <p>会话数、消息数是采集统计，不等于实际完成的任务数。</p>
+          <h2>对话与来源</h2>
         </div>
         <div className="conversation-actions">
           {!settings.auto_import_analysis && (
@@ -107,42 +107,41 @@ export function Conversations({
         </p>
       )}
       <div className="conversation-sources">
-        {overview.sources.map((s) => (
-          <label
-            className={
-              "check-label" +
-              (settings.analysis_sources.includes(s.source) ? " active" : "") +
-              ((s.source === "git" ? s.events : s.sessions) > 0
-                ? " has-data"
-                : "")
-            }
-            key={s.source}
-          >
-            <input
-              type="checkbox"
-              checked={settings.analysis_sources.includes(s.source)}
-              disabled={busy}
-              onChange={(e) =>
-                onSources(
-                  e.target.checked
-                    ? [...settings.analysis_sources, s.source]
-                    : settings.analysis_sources.filter((x) => x !== s.source),
-                )
+        {overview.sources.map((s) => {
+          const count = s.source === "git" ? s.events : s.sessions;
+          return (
+            <label
+              className={
+                "check-label" +
+                (settings.analysis_sources.includes(s.source) ? " active" : "") +
+                (count > 0 ? " has-data" : "")
               }
-            />
-            <span>
-              <span className="source-check-name">
-                <SourceIcon source={s.source} size={16} />
-                <span className="source-name">{names[s.source]}</span>
-              </span>
+              key={s.source}
+            >
+              <input
+                type="checkbox"
+                checked={settings.analysis_sources.includes(s.source)}
+                disabled={busy}
+                onChange={(e) =>
+                  onSources(
+                    e.target.checked
+                      ? [...settings.analysis_sources, s.source]
+                      : settings.analysis_sources.filter((x) => x !== s.source),
+                  )
+                }
+              />
+              <SourceIcon source={s.source} size={15} />
+              <span className="source-name-text">{names[s.source]}</span>
               <small>
-                {s.source === "git"
-                  ? `${s.events} 条提交`
-                  : `${s.sessions} 个会话 · ${s.user_messages + s.assistant_messages} 条对话消息`}
+                {count > 0
+                  ? s.source === "git"
+                    ? `${s.events}`
+                    : `${s.sessions} 会话`
+                  : "0"}
               </small>
-            </span>
-          </label>
-        ))}
+            </label>
+          );
+        })}
       </div>
       <div className="conversation-total">
         <Activity size={17} />
@@ -151,17 +150,16 @@ export function Conversations({
           {overview.user_messages} 条用户消息 + {overview.assistant_messages} 条
           AI 回复
         </span>
+        <span className="conversation-timing">
+          跨度 {overview.timing.session_span_minutes}m
+          {overview.work_timing &&
+            ` · 活跃 ${overview.work_timing.observable_active_minutes}m`}
+        </span>
         <button onClick={onSettings}>
           <Settings2 size={14} />
           配置分析模型
         </button>
       </div>
-      {!settings.llm_enabled && (
-        <p className="conversation-hint">
-          AI 尚未开启。采集只统计对话，不会按每次提问或 Git
-          提交生成任务。接通模型后，统一归纳全天实际工作目标。
-        </p>
-      )}
       {legacyCount > 0 && (
         <p className="conversation-hint warning">
           这里仍有 {legacyCount} 项旧规则草稿，不代表实际任务。AI
@@ -206,19 +204,6 @@ export function Conversations({
           </small>
         </div>
       )}
-      <div className="timing-reference">
-        <strong>对话时间参考（非人工实测）</strong>
-        <span>会话跨度 {overview.timing.session_span_minutes} 分钟</span>
-        <span>
-          {overview.work_timing
-            ? `工作相关活跃片段 ${overview.work_timing.observable_active_minutes} 分钟`
-            : "工作相关时长待AI筛选"}
-        </span>
-        <small>
-          相邻活动超过 {settings.activity_gap_minutes}{" "}
-          分钟的空闲不累计，并行片段取并集；私人/无关对话不作为工作时长依据。
-        </small>
-      </div>
       <details className="session-list">
         <summary>查看本次 {overview.session_count} 个会话</summary>
         {overview.sessions

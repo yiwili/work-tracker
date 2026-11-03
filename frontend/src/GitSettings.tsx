@@ -319,9 +319,6 @@ export function GitSettings({
         <h3>
           <Building2 size={17} /> Git 提交用户
         </h3>
-        <p>
-          自动检测本机 Git 身份，只读取、不修改。按邮箱精确匹配；只填姓名时按姓名精确匹配。无法确定用户时暂停该仓库的提交采集。
-        </p>
         <label>
           Git 默认用户策略
           <select
@@ -415,10 +412,6 @@ export function GitSettings({
         <h3>
           <FolderSearch size={17} /> 扫描 Git 项目
         </h3>
-        <p>
-          选择一个项目上级目录，系统向下检查 3 层，自动列出找到的 Git
-          仓库。找到后会默认加入采集，可单独取消。
-        </p>
         <div className="manual-row">
           <input
             aria-label="Git 项目上级目录"

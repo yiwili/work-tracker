@@ -432,10 +432,6 @@ export function SetupWizard({
             <h3>
               <ScanLine size={18} /> 第 1 步 · 确认采集来源
             </h3>
-            <p>
-              工具只读取本机已有的 AI 对话记录，不会修改源文件。所有 Agent
-              都会列出，勾选要采集的来源；未检测到的展开后可填写路径。
-            </p>
             <SourcePicker
               settings={s}
               onChange={setS}
@@ -449,9 +445,6 @@ export function SetupWizard({
             <h3>
               <Bot size={18} /> 第 2 步 · 接通 AI 模型
             </h3>
-            <p>
-              这是唯一必需的配置。接通后才会把对话归纳成工作项、估算工时；未配置时只能采集和手工录入。
-            </p>
             <label>
               AI 分析供应商
               <select
@@ -590,12 +583,6 @@ export function SetupWizard({
                     </select>
                   </label>
                 </div>
-                {s.llm_provider === "glm" && (
-                  <p className="muted">
-                    GLM-5.x 系列需要账户有可用资源包；余额不足时可选免费的
-                    GLM-4.5-Flash。
-                  </p>
-                )}
                 <label>
                   <span className="setup-key-label">
                     <KeyRound size={14} /> API Key（本机加密保存）
@@ -620,9 +607,6 @@ export function SetupWizard({
               />
               AI 分析完成后直接填入今日工作清单
             </label>
-            <p className="muted">
-              默认关闭：分析只生成候选，可在每日日报的「分析结果」中查看、修改后再导入。
-            </p>
             <div className="setup-status">
               <div className={modelReady ? "ok" : "warn"}>
                 <span>当前状态</span>
@@ -640,9 +624,6 @@ export function SetupWizard({
                 </em>
               </div>
             </div>
-            <p className="muted">
-              保存并测试只发送一句简短探测消息，不发送工作对话。测试成功后自动开启模型分析。
-            </p>
           </>
         );
       case 2:
@@ -651,10 +632,6 @@ export function SetupWizard({
             <h3>
               <FolderGit2 size={18} /> 第 3 步 · Git 仓库（可选）
             </h3>
-            <p>
-              选择项目上级目录后自动扫描 Git 仓库，提交会作为工作证据的佐证。Git
-              提交不会按条生成工作项，也不会推送到任何远端。
-            </p>
             <GitSettings settings={s} onChange={setS} />
           </>
         );
@@ -664,18 +641,11 @@ export function SetupWizard({
             <h3>
               <GitBranch size={18} /> 第 4 步 · Gitee 接入（可选）
             </h3>
-            <p>
-              历史 Issue 用于学习标题风格，企业工作项用于把日报推送到公司项目。两项凭据分开保存，可以只配置其中一项。
-            </p>
             <div className="gitee-cards">
               <div className="config-card">
                 <h3>
                   <GitBranch size={16} /> 历史 Issue
                 </h3>
-                <p>
-                  只读抓取你负责或创建的历史 Issue，不会创建、修改或关闭任何
-                  Issue。
-                </p>
                 <div className="quick-help">
                   <span>
                     头像 → 账号设置 → 安全设置 → 私人令牌，勾选 projects
@@ -719,10 +689,6 @@ export function SetupWizard({
                 <h3>
                   <Building2 size={16} /> 企业工作项
                 </h3>
-                <p>
-                  把日报里审核过的工作项创建到公司企业项目，需要企业版成员账号和已开通的工作项
-                  API 权限。
-                </p>
                 <div className="quick-help">
                   <span>
                     个人设置 → MCP 企业令牌，选择目标企业并授予项目读取、工作项创建权限。与私人令牌不通用。
@@ -807,9 +773,6 @@ export function SetupWizard({
             <h3>
               <Sparkles size={18} /> 配置完成
             </h3>
-            <p>
-              下面是当前状态，点击每一项可以展开查看实际配置。未配置的可选项可以随时回到引导或系统设置补充。
-            </p>
             <ul className="setup-summary">
               {(
                 [
@@ -855,9 +818,6 @@ export function SetupWizard({
                 );
               })}
             </ul>
-            <p className="muted">
-              下一步：到「每日日报」选择日期并采集，然后点击 AI 分析全天对话。
-            </p>
           </>
         );
     }
@@ -957,7 +917,6 @@ export function SetupWizard({
             <h2 id="setup-title">
               <Sparkles size={20} /> 配置引导
             </h2>
-            <p>按步骤接通功能；每一步都可以跳过，之后随时回来补。</p>
           </div>
           <button
             type="button"

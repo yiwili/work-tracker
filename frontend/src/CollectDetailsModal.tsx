@@ -102,16 +102,12 @@ export function CollectDetailsModal({
       >
         <div className="modal-head">
           <div>
-            <div className="eyebrow">LOCAL COLLECTION</div>
             <h2>{day} 采集详情</h2>
           </div>
           <button aria-label="关闭采集详情" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
-        <p className="muted">
-          这里是本机已采集的原始记录。Git 提交需要你主动勾选后才会变成工作项；对话记录只用于 AI 分析。
-        </p>
         {loading ? (
           <div className="collect-loading">
             <LoaderCircle className="spin" size={20} />
@@ -146,7 +142,6 @@ export function CollectDetailsModal({
                   <h3>
                     <GitMerge size={17} /> Git 本地提交
                   </h3>
-                  <p>勾选后按提交逐条添加为今日工作项，原始提交仍保留为证据。</p>
                 </div>
                 {selectable.length > 0 && (
                   <div className="collect-block-actions">

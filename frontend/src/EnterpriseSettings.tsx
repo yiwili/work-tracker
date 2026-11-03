@@ -78,13 +78,6 @@ export function EnterpriseSettings({
         <Building2 size={19} />
         Gitee 企业版项目与工作项
       </h2>
-      <p>
-        用于把本地工作项创建到公司企业项目。预先设置标题与项目映射，日报中即可一键预览并提交。普通仓库历史抓取使用上方独立配置。
-      </p>
-      <p className="muted">
-        企业版请求通过 Gitee 官方 mcp-gitee-ent
-        客户端转发（需本机安装 Node.js 18+），令牌只通过子进程环境变量传递，不写入命令行或日志。
-      </p>
       <label>
         MCP 企业令牌（留空保留）
         <input
@@ -182,10 +175,6 @@ export function EnterpriseSettings({
         读取企业项目
       </button>
       <h3>标题与项目映射</h3>
-      <p>
-        例如前缀“上海工程” → “上海工程技术大学档案系统”；标题包含“消息中间件” →
-        对应学习或集成项目。完整标题优先，其次标题关键词，最后项目前缀；相同优先级按更长的规则匹配。
-      </p>
       <div className="actions">
         <button
           type="button"
@@ -400,9 +389,6 @@ export function EnterpriseSettings({
           );
         })()}
       </div>
-      <p>
-        只发送核对过的标题、详情、日期和预估工时，不上传原始对话或证据日志。创建工作项不代表登记实际工时或自动关闭任务。
-      </p>
       <button
         type="button"
         className="outline"
@@ -419,7 +405,7 @@ export function EnterpriseSettings({
               });
             }
             setMessage(
-              "企业项目与云端去重设置已保存，日报与提交将优先使用这些规则。",
+              "企业项目和映射已保存；云端去重设置也已生效，日报与提交将优先使用这些规则。",
             );
           })
         }

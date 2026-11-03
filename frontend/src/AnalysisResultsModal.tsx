@@ -85,16 +85,12 @@ export function AnalysisResultsModal({
       >
         <div className="modal-head">
           <div>
-            <div className="eyebrow">REVIEW BEFORE IMPORT</div>
             <h2>AI 分析结果 · {day}</h2>
           </div>
           <button aria-label="关闭分析结果" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
-        <p className="muted">
-          默认不会自动写入今日工作清单。勾选需要导入的候选，可直接修改标题、项目、分类和详情后再导入。
-        </p>
         {stale && (
           <div className="alert error" role="alert">
             对话或分析设置已变化，这批候选可能不是最新结果；建议关闭后重新分析。

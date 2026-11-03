@@ -97,8 +97,6 @@ export function AllocationModal({
     );
   const remaining = report.target_minutes - fixed - quick;
   const incompatible = remaining >= 0 && remaining % 30 !== 0;
-  const timing =
-    report.conversations.work_timing || report.conversations.timing;
   const update = (index: number, patch: Partial<Quick>) => {
     requestId.current = crypto.randomUUID();
     setItems(
@@ -172,23 +170,6 @@ export function AllocationModal({
                 AI 分配 <strong>{h(Math.max(0, remaining))}h</strong>
               </span>
             </div>
-            <p>
-              AI
-              将参考相关消息的时间、会话跨度、活跃片段、工具运行时长，以及每项工作的范围、难度与验证情况。
-              生成工时按0.5小时递增，例如1h、1.5h、2h；人工固定时长保持不变。
-            </p>
-            {timing && (
-              <p className="allocation-reference">
-                {report.conversations.work_timing
-                  ? "工作日志参考"
-                  : "采集日志参考（待相关性筛选）"}
-                ：会话跨度 {timing.session_span_minutes} 分钟 · 活跃片段{" "}
-                {timing.observable_active_minutes} 分钟 ·{" "}
-                {report.conversations.user_messages}{" "}
-                条采集用户消息。时间片段会去重，AI
-                估算只使用各工作项关联的有效证据。
-              </p>
-            )}
             <label className="check">
               <input
                 type="checkbox"
@@ -273,7 +254,6 @@ export function AllocationModal({
                     </button>
                   </div>
                 ))}
-                <p>这些时长固定保留，AI 仅分配剩余工时。</p>
               </fieldset>
             )}
             <details className="agent-prompt">
@@ -298,9 +278,6 @@ export function AllocationModal({
                 分钟无法按0.5小时分配。请调整人工工时或每日目标，系统会保留原有工时。
               </p>
             )}
-            <p>
-              分配结果会保存为草稿。日志时间仅作参考，请核对实际投入后确认日报。
-            </p>
             <div className="modal-footer">
               <button
                 type="button"

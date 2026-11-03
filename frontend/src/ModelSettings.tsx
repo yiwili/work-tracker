@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LockKeyhole, PlugZap, LoaderCircle } from "lucide-react";
+import { LockKeyhole, LoaderCircle } from "lucide-react";
 import type { Settings } from "./types";
 type Status = {
   configured: boolean;
@@ -187,14 +187,6 @@ export function ModelSettings({
       </label>
       {s.llm_provider === "ccswitch" ? (
         <>
-          <div className="privacy-info">
-            <PlugZap size={20} />
-            <p>
-              只读复用 CCSwitch 写入的 Claude Code 当前 API
-              配置。支持直连接口或本地代理，每次请求读取最新地址和凭据；不会更改
-              CCSwitch。官方订阅登录凭据不会自动导入。
-            </p>
-          </div>
           <label>
             Claude Code settings.json 路径（留空自动检测）
             <input
@@ -230,12 +222,6 @@ export function ModelSettings({
             value={s.llm_model}
             onChange={(model) => onChange({ ...s, llm_model: model })}
           />
-          {s.llm_provider === "glm" && (
-            <p className="muted">
-              GLM-5.x 系列需要账户有可用资源包；余额不足时可选免费的
-              GLM-4.5-Flash。
-            </p>
-          )}
           <label>
             接口格式
             <select
@@ -268,10 +254,6 @@ export function ModelSettings({
               onChange={(e) => onChange({ ...s, llm_key_env: e.target.value })}
             />
           </label>
-          <p className="muted">
-            网页密钥用 Windows DPAPI
-            加密保存在本机，不写入设置数据库、不回显。切换地址后需为新地址配置密钥。
-          </p>
         </>
       )}
       <div className="model-status">
@@ -320,10 +302,6 @@ export function ModelSettings({
           {feedback.message}
         </div>
       )}
-      <p className="muted">
-        测试只发送简短探测消息，不发送工作对话。正式分析会发送所选日期脱敏后的用户消息、AI
-        回复和工具类型/验证状态；不发送原始工具输出、原始路径引用、环境变量或密钥。
-      </p>
     </>
   );
 }

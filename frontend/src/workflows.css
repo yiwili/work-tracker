@@ -103,12 +103,12 @@
   grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1.2fr) 32px;
   gap: 12px;
   align-items: end;
-  margin: 12px 0;
-  padding: 14px 16px;
+  margin: 10px 0;
+  padding: 12px 14px;
   min-width: 0;
   background: linear-gradient(180deg, #fbfbfd 0%, #f6f6f9 100%);
   border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
     0 1px 2px rgba(0, 0, 0, 0.02);
@@ -152,17 +152,17 @@
 .publish-items {
   border: 0;
   padding: 0;
-  margin: 16px 0;
+  margin: 14px 0;
   min-width: 0;
 }
 
 .publish-item {
-  margin: 0 0 12px;
-  padding: 18px 20px;
+  margin: 0 0 10px;
+  padding: 16px 18px;
   min-width: 0;
   background: linear-gradient(180deg, #ffffff 0%, #fafafd 100%);
   border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 16px;
+  border-radius: 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
   transition:
     border-color 0.2s var(--ease-apple),
@@ -251,7 +251,7 @@
   max-width: 100%;
   max-height: 220px;
   margin: 8px 0 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   overflow-x: hidden;
   overflow-y: auto;
   box-sizing: border-box;
@@ -318,8 +318,8 @@
 .allocation-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 18px 0;
+  gap: 10px;
+  margin: 14px 0;
 }
 
 .allocation-summary > span {
@@ -327,9 +327,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  padding: 16px;
+  padding: 14px;
   text-align: center;
   font-size: 12px;
   font-weight: 500;
@@ -337,7 +337,7 @@
   color: var(--apple-text-secondary);
   background: linear-gradient(180deg, #ffffff 0%, #f5f5f7 100%);
   border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
   overflow-wrap: anywhere;
 }
@@ -345,7 +345,7 @@
 .allocation-summary strong {
   display: block;
   margin: 0;
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.02em;
@@ -365,29 +365,17 @@
   color: var(--apple-blue);
 }
 
-.allocation-reference {
-  margin: 12px 0;
-  padding: 12px 14px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--apple-text-secondary);
-  background: #f9f9fb;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 12px;
-  overflow-wrap: anywhere;
-}
-
 /* ==========================================================================
    Allocation — Quick Manual Activities
    ========================================================================== */
 
 .quick-items {
-  margin: 18px 0;
-  padding: 18px 20px;
+  margin: 14px 0;
+  padding: 16px 18px;
   min-width: 0;
   background: #f9f9fb;
   border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 16px;
+  border-radius: 14px;
 }
 
 .quick-items legend {
@@ -411,7 +399,7 @@
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  margin: 2px 0 14px;
+  margin: 2px 0 12px;
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--apple-text-secondary);
@@ -430,8 +418,8 @@
 }
 
 .allocation-error {
-  margin: 14px 0;
-  padding: 12px 14px;
+  margin: 12px 0;
+  padding: 10px 12px;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--apple-red-text);
@@ -463,7 +451,7 @@
   grid-template-columns: minmax(72px, 90px) minmax(0, 1fr) minmax(96px, 120px) 32px;
   gap: 10px;
   align-items: end;
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   min-width: 0;
 }
 
@@ -505,12 +493,12 @@
    ========================================================================== */
 
 .allocation-results {
-  margin: 14px 0;
-  padding: 4px 16px;
+  margin: 12px 0;
+  padding: 2px 14px;
   min-width: 0;
   background: #f9f9fb;
   border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 16px;
+  border-radius: 14px;
 }
 
 .allocation-results > div {
@@ -518,7 +506,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 13px 0;
+  padding: 12px 0;
   min-width: 0;
   border-bottom: 1px solid var(--apple-divider);
 }
@@ -630,7 +618,7 @@
   }
 
   .quick-items {
-    padding: 16px;
+    padding: 14px;
   }
 
   .allocation-summary {
@@ -649,11 +637,11 @@
   }
 
   .publish-item {
-    padding: 16px;
+    padding: 14px;
   }
 
   .allocation-results {
-    padding: 2px 14px;
+    padding: 2px 12px;
   }
 }
 

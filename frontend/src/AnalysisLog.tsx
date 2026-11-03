@@ -50,7 +50,6 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
           <li key={index}><time>+{row.seconds.toFixed(1)}s</time> {row.message}</li>
         ))}
       </ol>
-      <small>显示分析阶段与模型接收进度；思考内容仅统计字符数。</small>
     </div>
   );
 }

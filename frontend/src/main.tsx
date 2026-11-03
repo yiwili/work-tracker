@@ -19,7 +19,6 @@ import {
   Link2,
   ListFilter,
   LoaderCircle,
-  LockKeyhole,
   Plus,
   ScanLine,
   Settings2,
@@ -465,14 +464,6 @@ function App() {
             拾时<span className="brand-en">WORK TRACKER</span>
           </span>
         </a>
-        <div className="workspace">
-          <span className="avatar">L</span>
-          <div>
-            本地工作空间<small>Personal workspace</small>
-          </div>
-          <LockKeyhole size={14} />
-        </div>
-        <div className="nav-label">工作台</div>
         <nav>
           {(
             [
@@ -493,25 +484,6 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="side-note">
-          <span className="small-label">每一份投入，都有迹可循</span>
-          <p>
-            把分散的 AI 工作记录，
-            <br />
-            整理成清晰的每日成果。
-          </p>
-          <span className="note-symbol">↗</span>
-        </div>
-        <div className="local-status">
-          <span className="green-dot" />
-          <span>
-            本地优先 · 数据由你掌握
-            <small>
-              {settings?.llm_enabled ? "模型分析已显式开启" : "云端模型未开启"}
-            </small>
-          </span>
-          <ShieldCheck size={17} />
-        </div>
         <button
           className={
             "setup-launch" + (settings && !settings.llm_enabled ? " attention" : "")
@@ -519,62 +491,23 @@ function App() {
           onClick={() => setSetupOpen(true)}
         >
           <Sparkles size={18} />
-          <span>
-            配置引导
-            <small>按步骤接通全部功能</small>
-          </span>
+          <span>配置引导</span>
           <ChevronRight size={15} />
         </button>
-        <div className="version">
-          拾时 V1.0 <span>个人工作记录工具</span>
-        </div>
       </aside>
       <main>
-        <header className="topbar">
-          <span>
-            工作空间 <ChevronRight size={14} />{" "}
-            {page === "daily"
-              ? "每日日报"
-              : page === "timeline"
-                ? "活动时间线"
-                : page === "enterprise"
-                  ? "企业工作项"
-                  : "系统设置"}
-          </span>
-          <span className="private">
-            <LockKeyhole size={13} /> 本地 SQLite 存储
-          </span>
-        </header>
         <div className="content">
           <div className="heading">
             <div>
-              <div className="eyebrow">
-                {page === "daily"
-                  ? "YOUR DAY, IN FOCUS"
-                  : page === "timeline"
-                    ? "FOLLOW THE EVIDENCE"
-                    : page === "enterprise"
-                      ? "PUBLISH YOUR WORK"
-                      : "MAKE IT YOURS"}
-              </div>
               <h1>
                 {page === "daily"
-                  ? "每一份工作，清晰记录。"
+                  ? "每日日报"
                   : page === "timeline"
-                    ? "串起今天的工作脉络。"
+                    ? "活动时间线"
                     : page === "enterprise"
-                      ? "把工作项推送到企业项目。"
-                      : "让工具适应你的工作。"}
+                      ? "企业工作项"
+                      : "系统设置"}
               </h1>
-              <p>
-                {page === "daily"
-                  ? "从 AI 对话到线下沟通，把真实投入整理为一份可审核的日报。"
-                  : page === "timeline"
-                    ? "按时间查看会话、工具执行与 Git 活动，回溯任务的每一条依据。"
-                    : page === "enterprise"
-                      ? "先设置企业与标题映射，再核对工作内容并推送到 Gitee 企业工作项。"
-                      : "配置本地数据来源、项目归属与分析方式。"}
-              </p>
             </div>
             {(page === "daily" || page === "timeline") && (
               <div className="heading-actions">
@@ -667,9 +600,6 @@ function App() {
                   className={report?.confirmed ? "green-dot" : "amber-dot"}
                 />
                 {report?.confirmed ? "日报已确认" : "草稿 · 待审核"}
-                <span className="timezone">
-                  {settings?.timezone || "Asia/Shanghai"}
-                </span>
               </span>
             </div>
           )}
@@ -713,7 +643,6 @@ function App() {
                     {report.tasks.length}
                     <span> 项</span>
                   </div>
-                  <small>AI 提取与人工事项</small>
                 </div>
                 <div className="stat">
                   <div className="stat-label">
@@ -723,7 +652,6 @@ function App() {
                     {report.projects}
                     <span> 个</span>
                   </div>
-                  <small>依据本地路径与 Git 归属</small>
                 </div>
                 <div className="stat">
                   <div className="stat-label">
@@ -738,16 +666,6 @@ function App() {
                     }
                     <span> 种</span>
                   </div>
-                  <small>
-                    {report.conversations.sources
-                      .filter(
-                        (s) =>
-                          s.selected && s.source !== "git" && s.sessions > 0,
-                      )
-                      .map((s) => sources[s.source] || s.source)
-                      .slice(0, 2)
-                      .join(" / ") || "支持 9 种本地 Agent 与 Git"}
-                  </small>
                 </div>
               </div>
               {settings && (
@@ -801,7 +719,6 @@ function App() {
                       今日工作清单{" "}
                       <span className="count">{report.tasks.length}</span>
                     </h2>
-                    <p>审核工作内容，按实际投入确认工时。</p>
                   </div>
                   <div className="actions">
                     <button
@@ -884,11 +801,6 @@ function App() {
                       </span>
                     </div>
                     <h3>今天的工作，等你来记录</h3>
-                    <p>
-                      先采集本地对话，再用 AI 归纳工作目标，
-                      <br />
-                      也可以先添加会议、客户沟通等真实事项。
-                    </p>
                     <button
                       className="outline"
                       disabled={!!busy}
@@ -897,9 +809,6 @@ function App() {
                       <Plus size={16} />
                       记录第一项工作
                     </button>
-                    <small>
-                      AI估算需主动点击，分配结果为待审核草稿，固定工时不变。
-                    </small>
                   </div>
                 ) : (
                   <div className="table-wrap">
@@ -951,9 +860,7 @@ function App() {
                               >
                                 {t.title}
                               </button>
-                              <p>
-                                {t.details || "暂无详细说明，点击任务补充。"}
-                              </p>
+                              {t.details && <p>{t.details}</p>}
                               <div className="task-meta">
                                 <span
                                   className={
@@ -984,22 +891,12 @@ function App() {
                                 {t.time_locked
                                   ? "固定工时"
                                   : t.time_source === "ai_estimate"
-                                    ? "AI 分配 · 待审核"
+                                    ? "AI 分配"
                                     : "待分配"}
                               </span>
                               <strong title={t.time_reason}>
                                 {hours(t.confirmed_minutes)} <small>h</small>
                               </strong>
-                              <small>
-                                建议{" "}
-                                {t.suggested_minutes === null
-                                  ? "待估算"
-                                  : hours(t.suggested_minutes) + "h · 低置信"}
-                              </small>
-                              <small>
-                                工作活跃片段{" "}
-                                {t.timing.observable_active_minutes} 分钟
-                              </small>
                               {t.time_reason && (
                                 <details>
                                   <summary>估算依据</summary>
@@ -1038,13 +935,6 @@ function App() {
                     </table>
                   </div>
                 )}
-                <div className="table-footer">
-                  <ShieldCheck size={15} />
-                  <span>
-                    自动分析仅提供候选任务，完成状态和工时请依据真实工作审核。
-                  </span>
-                  <span>{report.tasks.length} 项记录</span>
-                </div>
               </section>
               {report.warnings.length > 0 && (
                 <div className="review-warning">
@@ -1095,11 +985,6 @@ function App() {
                             ? `距离完整日报，还差 ${hours(report.remaining_minutes)}h`
                             : `当前工时超出 ${hours(-report.remaining_minutes)}h`}
                     </h3>
-                    <p>
-                      {report.confirmed
-                        ? "修改任务后，日报将恢复草稿并需要重新确认。"
-                        : "补充真实工作或调整已有任务；系统不会自动填补差额。"}
-                    </p>
                   </div>
                 </div>
                 <div className="actions">
@@ -1133,14 +1018,6 @@ function App() {
                   </button>
                 </div>
               </section>
-              <div className="footnote">
-                <LockKeyhole size={13} />
-                记录保存在你的电脑上。
-                {settings?.llm_enabled
-                  ? "已开启全天模型分析，发送脱敏后的对话与执行状态。"
-                  : "未开启模型：只采集对话，可人工录入和导出。"}
-                <span>LOCAL FIRST, ALWAYS.</span>
-              </div>
             </>
           )}
           {page === "timeline" && (
@@ -1259,15 +1136,7 @@ function App() {
                   <Building2 size={20} />
                   推送到 Gitee 企业工作项
                 </h2>
-                <p>
-                  当前日期 {day}，共 {report.tasks.length}{" "}
-                  个本地工作项。可先在日报中勾选需要推送的项；没有勾选时预览当天全部工作项。
-                </p>
-                <ol>
-                  <li>配置企业版 Token，读取企业和项目。</li>
-                  <li>保存标题或项目前缀对应的项目映射。</li>
-                  <li>预览目标项目、标题和预估工时，明确确认后创建。</li>
-                </ol>
+                <p>共 {report.tasks.length} 个本地工作项</p>
                 <button
                   className="primary"
                   disabled={!!busy || !report.tasks.length}
@@ -1421,7 +1290,6 @@ function App() {
           >
             <div className="modal-head">
               <div>
-                <div className="eyebrow">TRACEABLE EVIDENCE</div>
                 <h2>{proof.title}</h2>
               </div>
               <button aria-label="关闭证据" onClick={() => setProof(null)}>
@@ -1553,7 +1421,6 @@ function TaskEditor({
       >
         <div className="modal-head">
           <div>
-            <div className="eyebrow">WORK, WITH CONTEXT</div>
             <h2>
               {editor.split
                 ? "拆分工作任务"
@@ -1571,11 +1438,6 @@ function TaskEditor({
             <X size={20} />
           </button>
         </div>
-        <p className="muted">
-          {editor.split
-            ? "拆分后确认分钟数合计需与原任务一致；继承证据需人工核对。"
-            : "记录实际做过的工作，确认工时以整数分钟保存。"}
-        </p>
         {parts.map((p, i) => (
           <fieldset key={i}>
             {editor.split && <legend>任务 {i + 1}</legend>}
@@ -1923,21 +1785,12 @@ function SettingsForm({
                   <h2>
                     <FolderGit2 size={19} /> 本地数据来源
                   </h2>
-                  <p>
-                    只读扫描 JSONL
-                    会话文件。所有 Agent 都会列出，勾选要采集的来源；国内版与国际版分开配置，未检测到的展开后填写路径。修改来源只会影响后续采集与 AI
-                    分析，不会删除当天已生成的工作项。
-                  </p>
                   <SourcePicker settings={s} onChange={setS} />
                 </section>
                 <section className="settings-section">
                   <h2>
                     <FolderGit2 size={19} /> Git 仓库
                   </h2>
-                  <p>
-                    选择项目上级目录后扫描，最多向下 3
-                    层。提交只作为证据，不按条生成工作项。
-                  </p>
                   <GitSettings settings={s} onChange={setS} />
                 </section>
               </>
@@ -1985,10 +1838,6 @@ function SettingsForm({
                       />
                     </label>
                   </div>
-                  <p>
-                    默认目标为 480
-                    分钟（8h）；修改目标或时区会撤销已有日报确认，需重新审核。
-                  </p>
                 </section>
                 <section className="settings-section">
                   <h2>
@@ -2009,17 +1858,11 @@ function SettingsForm({
                       }
                     />
                   </label>
-                  <p>
-                    仅作低置信度时间参考，超过阈值的空闲间隔不累计；并行片段取并集。跨度或工具运行时长不等于人的实际投入。
-                  </p>
                 </section>
                 <section className="settings-section">
                   <h2>
                     <ShieldCheck size={19} /> 隐私与脱敏
                   </h2>
-                  <p>
-                    排除的目录不会采集；脱敏正则会从写入本机的对话文本中移除匹配内容。
-                  </p>
                   <label>
                     排除的敏感目录（每行一个）
                     <textarea
@@ -2052,13 +1895,6 @@ function SettingsForm({
                 <h2>
                   <Sparkles size={19} /> 模型分析
                 </h2>
-                <div className="privacy-info">
-                  <LockKeyhole size={19} />
-                  <p>
-                    本地先统计每日会话和消息。开启 AI
-                    后，按实际工作目标归纳全天对话，追问、修改、测试合并处理，不自动凑满工时。
-                  </p>
-                </div>
                 <label className="check-label">
                   <input
                     type="checkbox"
@@ -2091,7 +1927,6 @@ function SettingsForm({
                 <h2>
                   <SlidersHorizontal size={19} /> 操作设置
                 </h2>
-                <p>控制 AI 分析结果如何进入今日工作清单。</p>
                 <label className="check-label">
                   <input
                     type="checkbox"
@@ -2105,9 +1940,6 @@ function SettingsForm({
                   />
                   AI 分析完成后直接填入今日工作清单
                 </label>
-                <p>
-                  未勾选（默认）：分析只生成候选，在日报的「分析结果」中逐条查看、修改后再导入。勾选后沿用直接写入方式，未审核的旧草稿会被替换；人工事项、已审核和固定工时的记录始终保留。
-                </p>
               </section>
             )}
             {tab === "workflow" && (
