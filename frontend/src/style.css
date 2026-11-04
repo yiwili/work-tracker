@@ -3025,6 +3025,50 @@ code {
   margin-top: 4px;
 }
 
+.enterprise-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.enterprise-empty-hint {
+  margin-top: 12px;
+  color: var(--apple-text-tertiary);
+  font-size: 13px;
+}
+
+.enterprise-status-card {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--apple-fill-quaternary);
+  border: 1px solid var(--apple-separator);
+  font-size: 13px;
+}
+
+.enterprise-status-card.muted {
+  color: var(--apple-text-tertiary);
+}
+
+.enterprise-quick-banner {
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--apple-fill-quaternary);
+  border: 1px solid var(--apple-separator);
+  font-size: 13px;
+}
+
+.enterprise-quick-banner button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 .source-icon {
   width: 18px;
   height: 18px;

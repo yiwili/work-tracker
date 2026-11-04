@@ -21,6 +21,7 @@ import {
   LoaderCircle,
   Plus,
   ScanLine,
+  Send,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -67,6 +68,7 @@ const settingsTabs = [
   { key: "model", label: "模型分析", icon: Sparkles },
   { key: "operation", label: "操作设置", icon: SlidersHorizontal },
   { key: "workflow", label: "提示词与风格", icon: Bot },
+  { key: "enterprise_publish", label: "企业工作项", icon: Send },
   { key: "enterprise", label: "企业同步", icon: Building2 },
 ] as const;
 type SettingsTab = (typeof settingsTabs)[number]["key"];
@@ -1161,6 +1163,10 @@ function App() {
               busy={!!busy}
               tab={settingsTab}
               onTab={setSettingsTab}
+              report={report}
+              day={day}
+              selected={selected}
+              onOpenPublish={() => setGiteeOpen(true)}
               onImported={() => {
                 void refresh();
               }}
@@ -1220,7 +1226,8 @@ function App() {
           onClose={() => setGiteeOpen(false)}
           onSettings={() => {
             setGiteeOpen(false);
-            setPage("enterprise");
+            setPage("settings");
+            setSettingsTab("enterprise");
           }}
           onApplied={refresh}
         />
@@ -1613,6 +1620,10 @@ function SettingsForm({
   onTab,
   onSave,
   onImported,
+  report,
+  day,
+  selected = [],
+  onOpenPublish,
 }: {
   onImported: () => void;
   initial: Settings;
@@ -1624,6 +1635,10 @@ function SettingsForm({
     apiKey: string,
     test: boolean,
   ) => Promise<{ ok: boolean; saved: boolean; message: string }>;
+  report?: Report | null;
+  day?: string;
+  selected?: string[];
+  onOpenPublish?: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [feedback, setFeedback] = useState<{
@@ -1952,8 +1967,68 @@ function SettingsForm({
                 />
               </>
             )}
+            {tab === "enterprise_publish" && (
+              <section className="settings-section enterprise-publish-entry">
+                <h2>
+                  <Building2 size={20} />
+                  推送到 Gitee 企业工作项
+                </h2>
+                <p>
+                  当前日期：{day} · 共 {report?.tasks.length ?? 0} 个本地工作项
+                  {selected && selected.length > 0 ? ` · 已勾选 ${selected.length} 项` : ""}
+                </p>
+                <div className="enterprise-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy || !report?.tasks.length}
+                    onClick={onOpenPublish}
+                  >
+                    <Send size={15} />
+                    预览并推送工作项
+                    {selected && selected.length ? `（${selected.length}项）` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className="outline"
+                    onClick={() => onTab("enterprise")}
+                  >
+                    <SlidersHorizontal size={15} />
+                    企业与项目配置
+                  </button>
+                </div>
+                {!report?.tasks.length && (
+                  <p className="enterprise-empty-hint">
+                    当天暂无工作项，请切换日期，或先到每日日报生成、添加事项。
+                  </p>
+                )}
+                {s.gitee_enterprise?.enterprise_id ? (
+                  <div className="enterprise-status-card">
+                    已绑定目标企业 ID：<strong>{s.gitee_enterprise.enterprise_id}</strong> · 已配置 <strong>{s.gitee_enterprise.rules?.length ?? 0}</strong> 条项目映射规则
+                  </div>
+                ) : (
+                  <div className="enterprise-status-card muted">
+                    尚未配置目标企业。点击上方“企业与项目配置”进行设置。
+                  </div>
+                )}
+              </section>
+            )}
             {tab === "enterprise" && (
-              <EnterpriseSettings settings={s} onChange={setS} />
+              <>
+                <div className="enterprise-quick-banner">
+                  <span>
+                    当前所选日期有 <strong>{report?.tasks.length ?? 0}</strong> 项本地工作项
+                  </span>
+                  <button
+                    type="button"
+                    className="outline"
+                    onClick={() => onTab("enterprise_publish")}
+                  >
+                    前往企业工作项推送 →
+                  </button>
+                </div>
+                <EnterpriseSettings settings={s} onChange={setS} />
+              </>
             )}
           </div>
         </div>
@@ -1971,12 +2046,14 @@ function SettingsForm({
             {feedback.message}
           </div>
         )}
-        <div className="settings-actions">
-          <button className="primary" disabled={busy} type="submit">
-            <Check size={16} />
-            保存设置
-          </button>
-        </div>
+        {tab !== "enterprise_publish" && (
+          <div className="settings-actions">
+            <button className="primary" disabled={busy} type="submit">
+              <Check size={16} />
+              保存设置
+            </button>
+          </div>
+        )}
       </fieldset>
     </form>
   );
