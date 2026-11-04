@@ -50,6 +50,7 @@ import { SetupWizard } from "./SetupWizard";
 import { SourcePicker, sourceKeys, sourceLabels } from "./SourcePicker";
 import { CollectDetailsModal } from "./CollectDetailsModal";
 import { AnalysisResultsModal } from "./AnalysisResultsModal";
+import { DeletedRecoveryModal } from "./DeletedRecoveryModal";
 import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
 
@@ -197,6 +198,11 @@ function App() {
     [toast, setToast] = useState<JobToastState | null>(null),
     [reviewAlert, setReviewAlert] = useState<{
       day: string;
+      warnings: string[];
+    } | null>(null),
+    [recoveryModal, setRecoveryModal] = useState<{
+      day: string;
+      tasks: PendingTask[];
       warnings: string[];
     } | null>(null);
   const [source, setSource] = useState(""),
@@ -380,6 +386,18 @@ function App() {
         : "";
       if (!a.created && !a.pending && !a.archived) {
         setNotice(`AI 分析已完成，未发现可归纳的工作项。${usage}`);
+        return;
+      }
+      const deletedPending = (a.pending_tasks || []).filter(
+        (t) => t.previously_deleted,
+      );
+      if (a.auto_imported && deletedPending.length > 0) {
+        // 如果没有分析结果弹窗，在导入前弹出一个专门的弹窗（相似度匹配的弹窗信息也在这里面，不要弹出多个窗口）
+        setRecoveryModal({
+          day: jobDay,
+          tasks: deletedPending,
+          warnings: a.warnings || [],
+        });
         return;
       }
       const warnings = a.warnings.length
@@ -657,12 +675,23 @@ function App() {
                     type="button"
                     className="warning-badge-pill"
                     title="点击查看待审核提示"
-                    onClick={() =>
-                      setReviewAlert({
-                        day,
-                        warnings: [...new Set(report.warnings)],
-                      })
-                    }
+                    onClick={() => {
+                      const deletedPending = (
+                        report.conversations.analysis?.pending_tasks || []
+                      ).filter((t) => t.previously_deleted);
+                      if (deletedPending.length > 0) {
+                        setRecoveryModal({
+                          day,
+                          tasks: deletedPending,
+                          warnings: [...new Set(report.warnings)],
+                        });
+                      } else {
+                        setReviewAlert({
+                          day,
+                          warnings: [...new Set(report.warnings)],
+                        });
+                      }
+                    }}
                   >
                     <AlertCircle size={13} />
                     待审核提示
@@ -1031,45 +1060,6 @@ function App() {
                                     ? "人工补录"
                                     : "AI / Git 提取"}
                                 </span>
-                                {t.confidence?.includes("曾被删除") && (
-                                  <span
-                                    className="tag warning previously-deleted-tag"
-                                    title="此前曾被删除，AI 根据充分实施证据重新恢复"
-                                  >
-                                    曾删除恢复
-                                    <button
-                                      type="button"
-                                      className="tag-action-icon check"
-                                      title="确认保留此工作项"
-                                      aria-label={"确认保留 " + t.title}
-                                      onClick={async (e) => {
-                                        e.stopPropagation();
-                                        try {
-                                          await api(`/tasks/${t.id}`, "PATCH", {
-                                            confidence: "全天 AI 分析 · 待审核",
-                                          });
-                                          await refresh();
-                                        } catch (err) {
-                                          setError((err as Error).message);
-                                        }
-                                      }}
-                                    >
-                                      <Check size={11} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="tag-action-icon cross"
-                                      title="此前曾删除过，若不采纳可快捷删除"
-                                      aria-label={"快捷删除 " + t.title}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        remove(t);
-                                      }}
-                                    >
-                                      <X size={11} />
-                                    </button>
-                                  </span>
-                                )}
                                 <button onClick={() => setProof(t)}>
                                   {t.evidence.length} 条证据{" "}
                                   <ArrowUpRight size={12} />
@@ -1504,16 +1494,21 @@ function App() {
           day={analysisView.day}
           pending={analysisView.pending}
           stale={analysisView.stale}
+          warnings={report?.warnings || []}
           onClose={() => setAnalysisView(null)}
           onImported={async () => {
-            const r = await api<Report>("/reports/" + analysisView.day);
             await refresh(analysisView.day);
-            if (r?.warnings?.length > 0) {
-              setReviewAlert({
-                day: analysisView.day,
-                warnings: [...new Set(r.warnings)],
-              });
-            }
+          }}
+        />
+      )}
+      {recoveryModal && (
+        <DeletedRecoveryModal
+          day={recoveryModal.day}
+          tasks={recoveryModal.tasks}
+          warnings={recoveryModal.warnings}
+          onClose={() => setRecoveryModal(null)}
+          onImported={async () => {
+            await refresh(recoveryModal.day);
           }}
         />
       )}

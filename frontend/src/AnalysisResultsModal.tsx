@@ -1,5 +1,6 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import {
+  AlertCircle,
   Check,
   FolderInput,
   LoaderCircle,
@@ -15,12 +16,14 @@ export function AnalysisResultsModal({
   day,
   pending,
   stale,
+  warnings = [],
   onClose,
   onImported,
 }: {
   day: string;
   pending: PendingTask[];
   stale: boolean;
+  warnings?: string[];
   onClose: () => void;
   onImported: () => Promise<void> | void;
 }) {
@@ -98,6 +101,22 @@ export function AnalysisResultsModal({
         {stale && (
           <div className="alert error" role="alert">
             对话或分析设置已变化，这批候选可能不是最新结果；建议关闭后重新分析。
+          </div>
+        )}
+        {warnings && warnings.length > 0 && (
+          <div className="recovery-warnings-card" style={{ margin: "0 0 16px" }}>
+            <div className="recovery-warnings-title">
+              <AlertCircle size={15} />
+              <span>待审核提示（相似度核对）</span>
+            </div>
+            <div className="recovery-warnings-content">
+              {warnings.map((w, idx) => (
+                <p key={idx}>{w}</p>
+              ))}
+              <p className="recovery-warnings-tip">
+                可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
+              </p>
+            </div>
           </div>
         )}
         {rows.length === 0 ? (

@@ -310,17 +310,13 @@ def _analyze(conn, day, usage_calls):
                 conn.execute(update(db.tasks).where(db.tasks.c.id == t['id']).values(deleted=True))
                 archived += 1
         for task, supporting, previously_deleted in generated:
+            if previously_deleted:
+                # 曾删除候选不直接写入今日清单：进入 pending_tasks，由前台专用弹窗打勾打叉确认后再导入
+                pending_tasks.append(pending_item(task, supporting, True))
+                continue
             imported.append(task)
             upsert(conn, db.tasks, task, 'id')
-            if previously_deleted:
-                # 曾删除候选恢复导入为草稿：重置工时，避免带出删除前的确认分钟数；前台提供勾/叉操作
-                conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0,
-                                                               is_confirmed=False, time_locked=False, time_source='manual', time_reason='')
-                             .on_conflict_do_update(index_elements=[db.worklogs.c.task_id],
-                                                    set_={'suggested_minutes': None, 'confirmed_minutes': 0, 'is_confirmed': False,
-                                                          'time_locked': False, 'time_source': 'manual', 'time_reason': ''}))
-            else:
-                conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
+            conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
             for event in supporting.values():
                 conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event['id']).on_conflict_do_nothing())
     else:
@@ -375,12 +371,12 @@ def import_pending(conn, day, selections):
         project = selection.project if selection.project is not None else candidate['project']
         category_name = selection.category if selection.category is not None else candidate['category']
         status = selection.status or candidate['status']
-        # fingerprint 全局唯一：疑似重复候选恢复时复用原行（同一工作的既有记录），其余候选新建。
+        # fingerprint 全局唯一：曾删除候选恢复时复用原行（同一工作的既有记录），其余候选新建。
         existing = conn.execute(select(db.tasks.c.id).where(db.tasks.c.fingerprint == candidate['fingerprint'])).scalar_one_or_none()
         generated.append(({'id': existing or uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
                            'details': redact(details, settings.redact_patterns), 'project': project or '未归属项目',
                            'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
-                           'origin': 'auto', 'confidence': candidate.get('confidence') or '全天 AI 分析 · 待审核',
+                           'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核',
                            'evidence_level': candidate.get('evidence_level', '已有行为证据'),
                            'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
                           rows))

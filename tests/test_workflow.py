@@ -190,11 +190,18 @@ def test_preserve_edits_and_deleted_on_reanalyze(client,tmp_path,monkeypatch):
     task=client.get('/api/tasks?date='+DAY).json()[0]
     assert task['title']=='审核后的标题' and task['confirmed_minutes']==120
     client.delete('/api/tasks/'+task['id'])
-    client.post('/api/analyze?date='+DAY,json={})
-    # 在直接填入今日清单模式下，高置信度任务恢复导入为草稿并带“曾被删除”标记，重置确认工时
+    res=client.post('/api/analyze?date='+DAY,json={}).json()
+    # 在直接填入模式下，曾被删除的高置信度候选不直接写入今日清单，而是进入待确认候选中
+    assert res['created']==0 and res['pending']==1
+    assert res['pending_tasks'][0]['previously_deleted'] is True
+    assert client.get('/api/tasks?date='+DAY).json()==[]
+    # 经用户打勾确认导入后，写入清单且重置确认工时为0
+    candidate=res['pending_tasks'][0]
+    client.post('/api/analysis/import',json={'date':DAY,'items':[
+        {'fingerprint':candidate['fingerprint'],'title':candidate['title'],'details':candidate['details'],
+         'project':candidate['project'],'category':candidate['category']}]}).raise_for_status()
     tasks=client.get('/api/tasks?date='+DAY).json()
     assert len(tasks)==1
-    assert '曾被删除' in tasks[0]['confidence']
     assert tasks[0]['confirmed_minutes']==0
 
 
@@ -216,13 +223,13 @@ def test_previously_deleted_candidate_flagged_and_restored_by_choice(client,tmp_
     candidate=result['pending_tasks'][0]
     assert candidate['previously_deleted'] is True and '曾被删除' in candidate['confidence']
     assert client.get('/api/tasks?date='+DAY).json()==[]
-    # 用户显式勾选后恢复导入，工时重置为0并保留曾被删除标记
+    # 用户显式勾选后恢复导入，工时重置为0
     imported=client.post('/api/analysis/import',json={'date':DAY,'items':[
         {'fingerprint':candidate['fingerprint'],'title':candidate['title'],'details':candidate['details'],
          'project':candidate['project'],'category':candidate['category']}]}).json()
     assert imported['created']==1
     task=client.get('/api/tasks?date='+DAY).json()[0]
-    assert not task['deleted'] and '曾被删除' in task['confidence']
+    assert not task['deleted']
     assert task['confirmed_minutes']==0
 
 
