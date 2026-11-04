@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  AlertCircle,
   ArrowDownToLine,
   ArrowLeft,
   ArrowRight,
@@ -937,14 +938,19 @@ function App() {
                 )}
               </section>
               {report.warnings.length > 0 && (
-                <div className="review-warning">
-                  <strong>待审核提示</strong>
-                  {[...new Set(report.warnings)].map((w, i) => (
-                    <p key={i}>{w}</p>
-                  ))}
-                  <small>
-                    可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
-                  </small>
+                <div className="review-warning" role="alert">
+                  <AlertCircle size={15} className="review-warning-icon" />
+                  <div className="review-warning-body">
+                    <div className="review-warning-main">
+                      <strong>待审核提示：</strong>
+                      <span className="review-warning-text">
+                        {[...new Set(report.warnings)].join("；")}
+                      </span>
+                    </div>
+                    <span className="review-warning-hint">
+                      可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
+                    </span>
+                  </div>
                 </div>
               )}
               {report.time_allocation && (
