@@ -210,6 +210,7 @@ export type PendingTask = {
   confidence: string;
   evidence_level: string;
   evidence_ids: string[];
+  previously_deleted?: boolean;
 };
 
 export type ConversationOverview = {

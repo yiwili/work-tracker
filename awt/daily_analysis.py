@@ -151,6 +151,13 @@ def parse_result(text, valid_refs):
         raise model_provider.ModelError('AI 返回格式或证据引用无效，未替换原任务；请重新分析或更换模型') from None
 
 
+def pending_item(task, supporting, previously_deleted):
+    return {'fingerprint': task['fingerprint'], 'title': task['title'], 'details': task['details'],
+            'project': task['project'], 'category': task['category'], 'status': task['status'],
+            'confidence': task['confidence'], 'evidence_level': task['evidence_level'],
+            'previously_deleted': previously_deleted, 'evidence_ids': sorted(supporting)}
+
+
 def infer_day(records, refs, settings, reviewed, day):
     from .analysis_progress import emit
     # Every stored conversation message is included. Large days use contiguous chronological batches,
@@ -215,8 +222,8 @@ def _analyze(conn, day, usage_calls):
     protected_ids = {e['id'] for t in protected for e in t['evidence']}
     deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
     deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
-    reviewed = [{'title': t['title'], 'project': t['project'], 'decision': '保留已审核，不重复生成'} for t in protected]
-    reviewed += [{'title': t['title'], 'project': t['project'], 'decision': '用户已删除，不再生成'} for t in deleted]
+    reviewed = [{'title': t['title'], 'project': t['project'], 'decision': '用户已审核保留，不要重复生成'} for t in protected]
+    reviewed += [{'title': t['title'], 'project': t['project'], 'decision': '用户历史曾删除；请结合实施证据与操作历史综合推测置信度：若当天有充分确凿的代码修改、工具调用、提交或明确实施动作（排除误删可能），可作为高置信度候选重新列出；若缺乏实施证据或明确不再需要，则尊重删除决定，不生成'} for t in deleted]
     records, work_refs, scope, filter_requests = filter_work(records,refs,segments,settings)
     refs=work_refs
     if records:
@@ -255,8 +262,8 @@ def _analyze(conn, day, usage_calls):
             for event in segments.get(ref, []):
                 if event['id'] in set(scope['work_event_ids']):
                     supporting[event['id']] = event
-        if set(supporting) & (protected_ids | deleted_ids):
-            warnings.append(f"已跳过与人工审核/删除记录重叠的候选：{task['title']}")
+        if set(supporting) & protected_ids:
+            warnings.append(f"已跳过与人工审核任务证据重叠的候选：{task['title']}")
             continue
         if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
             # Assistant replies inherit the work request of their session turn.
@@ -266,6 +273,12 @@ def _analyze(conn, day, usage_calls):
                     supporting[refs[anchor]['id']]=refs[anchor]
         if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
             raise model_provider.ModelError('AI 候选只有回复文本，缺少工作请求或行为依据；原任务已保留')
+        # 与已删除任务证据重叠的候选进行置信度考量：有具体行为依据的高置信度候选予以保留，纯对话低置信度跳过。
+        is_previously_deleted = bool(set(supporting) & deleted_ids)
+        has_behavior = any(e['kind'] in ('tool_call', 'shell_command', 'git_commit') for e in supporting.values())
+        if is_previously_deleted and not has_behavior:
+            warnings.append(f"已跳过历史曾删除且只有对话描述的弱证据候选：{task['title']}")
+            continue
         projects = {e['project'] for e in supporting.values()}
         project = task.get('project') if task.get('project') in projects else next((e['project'] for e in supporting.values() if e['kind'] == 'user_prompt'), sorted(projects)[0])
         signature = stable(project, task['title'].strip())
@@ -274,36 +287,45 @@ def _analyze(conn, day, usage_calls):
         used.add(signature)
         fingerprint = 'daily-v2:' + stable(str(day), sorted(supporting), task['title'].strip())
         previous = conn.execute(select(db.tasks).where(db.tasks.c.fingerprint == fingerprint)).mappings().first()
-        if previous and previous['edited']:
+        if previous and previous['edited'] and not previous['deleted']:
             continue
         generated.append(({'id': previous['id'] if previous else uuid4().hex, 'date': str(day),
                            'title': redact(task['title'].strip(), settings.redact_patterns),
                            'details': redact(task['details'], settings.redact_patterns), 'project': project,
                            'category': redact(task.get('category') or category(task['title']), settings.redact_patterns)[:100],
-                           'status': state_for(list(supporting.values())), 'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核',
-                           'evidence_level': '已有行为证据' if any(e['kind'] in ('tool_call', 'shell_command', 'git_commit') for e in supporting.values()) else '只有对话描述',
-                           'fingerprint': fingerprint, 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None}, supporting))
+                           'status': state_for(list(supporting.values())), 'origin': 'auto',
+                           'confidence': '全天 AI 分析 · 曾被删除' if is_previously_deleted else '全天 AI 分析 · 待审核',
+                           'evidence_level': '已有行为证据' if has_behavior else '只有对话描述',
+                           'fingerprint': fingerprint, 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
+                          supporting, is_previously_deleted))
     # Everything above is validated before replacing any drafts. The caller commits atomically.
     archived = 0
     pending_tasks = []
+    imported = []
     if settings.auto_import_analysis:
         protected_task_ids = {t['id'] for t in protected}
-        generated_ids = {t['id'] for t, _ in generated}
+        generated_ids = {t['id'] for t, _, _ in generated}
         for t in active_tasks:
             if t['id'] not in protected_task_ids | generated_ids:
                 conn.execute(update(db.tasks).where(db.tasks.c.id == t['id']).values(deleted=True))
                 archived += 1
-        for task, supporting in generated:
+        for task, supporting, previously_deleted in generated:
+            imported.append(task)
             upsert(conn, db.tasks, task, 'id')
-            conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
+            if previously_deleted:
+                # 曾删除候选恢复导入为草稿：重置工时，避免带出删除前的确认分钟数；前台提供勾/叉操作
+                conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0,
+                                                               is_confirmed=False, time_locked=False, time_source='manual', time_reason='')
+                             .on_conflict_do_update(index_elements=[db.worklogs.c.task_id],
+                                                    set_={'suggested_minutes': None, 'confirmed_minutes': 0, 'is_confirmed': False,
+                                                          'time_locked': False, 'time_source': 'manual', 'time_reason': ''}))
+            else:
+                conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
             for event in supporting.values():
                 conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event['id']).on_conflict_do_nothing())
     else:
         # 默认只保存候选，不触碰今日清单；用户在“分析结果”里确认后再写入。
-        pending_tasks = [{'fingerprint': task['fingerprint'], 'title': task['title'], 'details': task['details'],
-                          'project': task['project'], 'category': task['category'], 'status': task['status'],
-                          'confidence': task['confidence'], 'evidence_level': task['evidence_level'],
-                          'evidence_ids': sorted(supporting)} for task, supporting in generated]
+        pending_tasks = [pending_item(task, supporting, previously_deleted) for task, supporting, previously_deleted in generated]
     usage = model_provider.usage_summary(usage_calls)
     snapshot = {'scope':scope, 'prompt_roles':['scope_filter','task_writer'], 'input_hash': input_hash(rows, settings), 'analyzed_at': now(), 'provider': settings.llm_provider,
                 'usage': usage, 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
@@ -311,9 +333,9 @@ def _analyze(conn, day, usage_calls):
                 'session_count': summary['session_count'], 'user_messages': summary['user_messages'], 'assistant_messages': summary['assistant_messages'],
                 'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings}
     upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
-    if settings.auto_import_analysis and (generated or archived):
+    if settings.auto_import_analysis and (imported or archived):
         invalidate(conn, day)
-    return {'created': len(generated) if settings.auto_import_analysis else 0, 'updated': 0, 'archived': archived,
+    return {'created': len(imported), 'updated': 0, 'archived': archived,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
             'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, day, settings), 'merge_suggestions': []}
 
@@ -341,18 +363,25 @@ def import_pending(conn, day, selections):
         rows = {row['id']: dict(row) for row in conn.execute(select(db.events).where(db.events.c.id.in_(evidence_ids))).mappings()} if evidence_ids else {}
         if len(rows) != len(set(evidence_ids)):
             raise ValueError('部分依据记录已不存在，请重新分析当天对话')
-        if set(rows) & (protected_ids | deleted_ids):
-            warnings.append(f"已跳过与人工审核/删除记录重叠的候选：{candidate['title']}")
+        # 只拦截人工审核保留的任务；疑似重复（与已删除任务证据重叠）的候选由用户在此显式勾选恢复。
+        if set(rows) & protected_ids:
+            warnings.append(f"已跳过与人工审核任务证据重叠的候选：{candidate['title']}")
+            continue
+        if not candidate.get('previously_deleted') and set(rows) & deleted_ids:
+            warnings.append(f"已跳过与分析后删除的任务重叠的候选：{candidate['title']}")
             continue
         title = selection.title if selection.title is not None else candidate['title']
         details = selection.details if selection.details is not None else candidate['details']
         project = selection.project if selection.project is not None else candidate['project']
         category_name = selection.category if selection.category is not None else candidate['category']
         status = selection.status or candidate['status']
-        generated.append(({'id': uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
+        # fingerprint 全局唯一：疑似重复候选恢复时复用原行（同一工作的既有记录），其余候选新建。
+        existing = conn.execute(select(db.tasks.c.id).where(db.tasks.c.fingerprint == candidate['fingerprint'])).scalar_one_or_none()
+        generated.append(({'id': existing or uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
                            'details': redact(details, settings.redact_patterns), 'project': project or '未归属项目',
                            'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
-                           'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核', 'evidence_level': candidate.get('evidence_level', '已有行为证据'),
+                           'origin': 'auto', 'confidence': candidate.get('confidence') or '全天 AI 分析 · 待审核',
+                           'evidence_level': candidate.get('evidence_level', '已有行为证据'),
                            'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
                           rows))
     protected_task_ids = {t['id'] for t in protected}
@@ -363,7 +392,12 @@ def import_pending(conn, day, selections):
             archived += 1
     for task, rows in generated:
         upsert(conn, db.tasks, task, 'id')
-        conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0, is_confirmed=False).on_conflict_do_nothing())
+        # 导入即草稿：恢复的行沿用旧 worklog，需重置工时，避免带出删除前的确认分钟数。
+        conn.execute(sqlite_insert(db.worklogs).values(task_id=task['id'], suggested_minutes=None, confirmed_minutes=0,
+                                                       is_confirmed=False, time_locked=False, time_source='manual', time_reason='')
+                      .on_conflict_do_update(index_elements=[db.worklogs.c.task_id],
+                                             set_={'suggested_minutes': None, 'confirmed_minutes': 0, 'is_confirmed': False,
+                                                   'time_locked': False, 'time_source': 'manual', 'time_reason': ''}))
         for event_id in rows:
             conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event_id).on_conflict_do_nothing())
     imported = {task['fingerprint'] for task, _ in generated}

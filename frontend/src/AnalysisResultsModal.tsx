@@ -25,7 +25,11 @@ export function AnalysisResultsModal({
   onImported: () => Promise<void> | void;
 }) {
   const [rows, setRows] = useState<Row[]>(() =>
-    pending.map((item) => ({ ...item, selected: true })),
+    pending.map((item) => ({
+      ...item,
+      // 历史曾删除任务的候选默认不勾选，由用户逐条确认是否恢复。
+      selected: item.previously_deleted ? false : true,
+    })),
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -141,6 +145,11 @@ export function AnalysisResultsModal({
                     }
                   />
                   <div className="analysis-item-body">
+                    {row.previously_deleted && (
+                      <span className="previously-deleted-badge">
+                        历史曾删除
+                      </span>
+                    )}
                     <label>
                       工作项标题
                       <input

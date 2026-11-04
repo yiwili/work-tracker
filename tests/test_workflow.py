@@ -191,6 +191,57 @@ def test_preserve_edits_and_deleted_on_reanalyze(client,tmp_path,monkeypatch):
     assert task['title']=='审核后的标题' and task['confirmed_minutes']==120
     client.delete('/api/tasks/'+task['id'])
     client.post('/api/analyze?date='+DAY,json={})
+    # 在直接填入今日清单模式下，高置信度任务恢复导入为草稿并带“曾被删除”标记，重置确认工时
+    tasks=client.get('/api/tasks?date='+DAY).json()
+    assert len(tasks)==1
+    assert '曾被删除' in tasks[0]['confidence']
+    assert tasks[0]['confirmed_minutes']==0
+
+
+def test_previously_deleted_candidate_flagged_and_restored_by_choice(client,tmp_path,monkeypatch):
+    path=tmp_path/'log.jsonl';write_jsonl(path,codex_rows())
+    config_paths(client,codex=[path],llm_enabled=True,auto_import_analysis=False)
+    model_answer(monkeypatch,[{'title':'修复订单接口超时','details':'修复后测试通过','refs':['e1'],'project':'project-a'}])
+    client.post('/api/collect?date='+DAY,json={})
+    res=client.post('/api/analyze?date='+DAY,json={}).json()
+    candidate=res['pending_tasks'][0]
+    client.post('/api/analysis/import',json={'date':DAY,'items':[
+        {'fingerprint':candidate['fingerprint'],'title':candidate['title'],'details':candidate['details'],
+         'project':candidate['project'],'category':candidate['category']}]}).raise_for_status()
+    task=client.get('/api/tasks?date='+DAY).json()[0]
+    client.delete('/api/tasks/'+task['id'])
+    # 未勾选直接填入模式下，曾被删除候选进入待审核并标记 previously_deleted
+    result=client.post('/api/analyze?date='+DAY,json={}).json()
+    assert result['created']==0 and result['pending']==1
+    candidate=result['pending_tasks'][0]
+    assert candidate['previously_deleted'] is True and '曾被删除' in candidate['confidence']
+    assert client.get('/api/tasks?date='+DAY).json()==[]
+    # 用户显式勾选后恢复导入，工时重置为0并保留曾被删除标记
+    imported=client.post('/api/analysis/import',json={'date':DAY,'items':[
+        {'fingerprint':candidate['fingerprint'],'title':candidate['title'],'details':candidate['details'],
+         'project':candidate['project'],'category':candidate['category']}]}).json()
+    assert imported['created']==1
+    task=client.get('/api/tasks?date='+DAY).json()[0]
+    assert not task['deleted'] and '曾被删除' in task['confidence']
+    assert task['confirmed_minutes']==0
+
+
+def test_previously_deleted_without_behavior_evidence_skipped(client,tmp_path,monkeypatch):
+    path=tmp_path/'claude.jsonl'
+    write_jsonl(path,[
+        {'type':'user','sessionId':'cc','cwd':str(tmp_path),'timestamp':'2026-10-24T01:00:00Z','message':{'content':'修复订单接口超时'}},
+        {'type':'assistant','sessionId':'cc','timestamp':'2026-10-24T01:01:00Z','message':{'content':[{'type':'text','text':'已完成修复。'}]}},
+    ])
+    config_paths(client,claude=[path],analysis_sources=['claude_code'],llm_enabled=True)
+    model_answer(monkeypatch,[{'title':'修复接口','details':'讨论了修复方案，尚无验证证据','refs':['e1'],'project':tmp_path.name}])
+    client.post('/api/collect?date='+DAY,json={})
+    client.post('/api/analyze?date='+DAY,json={})
+    task=client.get('/api/tasks?date='+DAY).json()[0]
+    client.delete('/api/tasks/'+task['id'])
+    # 只有对话描述的弱证据候选直接跳过并提示，不恢复也不进入待审核
+    result=client.post('/api/analyze?date='+DAY,json={}).json()
+    assert result['created']==0 and result['pending']==0
+    assert any('曾删除' in w for w in result['warnings'])
     assert client.get('/api/tasks?date='+DAY).json()==[]
 
 

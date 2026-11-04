@@ -1031,6 +1031,45 @@ function App() {
                                     ? "人工补录"
                                     : "AI / Git 提取"}
                                 </span>
+                                {t.confidence?.includes("曾被删除") && (
+                                  <span
+                                    className="tag warning previously-deleted-tag"
+                                    title="此前曾被删除，AI 根据充分实施证据重新恢复"
+                                  >
+                                    曾删除恢复
+                                    <button
+                                      type="button"
+                                      className="tag-action-icon check"
+                                      title="确认保留此工作项"
+                                      aria-label={"确认保留 " + t.title}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        try {
+                                          await api(`/tasks/${t.id}`, "PATCH", {
+                                            confidence: "全天 AI 分析 · 待审核",
+                                          });
+                                          await refresh();
+                                        } catch (err) {
+                                          setError((err as Error).message);
+                                        }
+                                      }}
+                                    >
+                                      <Check size={11} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="tag-action-icon cross"
+                                      title="此前曾删除过，若不采纳可快捷删除"
+                                      aria-label={"快捷删除 " + t.title}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        remove(t);
+                                      }}
+                                    >
+                                      <X size={11} />
+                                    </button>
+                                  </span>
+                                )}
                                 <button onClick={() => setProof(t)}>
                                   {t.evidence.length} 条证据{" "}
                                   <ArrowUpRight size={12} />

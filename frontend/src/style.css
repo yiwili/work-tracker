@@ -2017,6 +2017,52 @@ th:last-child {
   color: var(--apple-purple-text);
 }
 
+.tag.warning {
+  background: rgba(255, 149, 0, 0.1);
+  border-color: rgba(255, 149, 0, 0.28);
+  color: var(--apple-orange-text);
+}
+
+.previously-deleted-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 5px;
+}
+
+.tag-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tag-action-icon.check {
+  background: rgba(52, 199, 89, 0.2);
+  color: #248a3d;
+}
+
+.tag-action-icon.check:hover {
+  background: rgba(52, 199, 89, 0.4);
+  transform: scale(1.12);
+}
+
+.tag-action-icon.cross {
+  background: rgba(255, 59, 48, 0.18);
+  color: #d70015;
+}
+
+.tag-action-icon.cross:hover {
+  background: rgba(255, 59, 48, 0.35);
+  transform: scale(1.12);
+}
+
 .project-name {
   display: inline-block;
   background: #f2f2f7;
@@ -4273,6 +4319,19 @@ code {
 .analysis-item-body {
   flex: 1;
   min-width: 0;
+}
+
+.previously-deleted-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 149, 0, 0.1);
+  border: 1px solid rgba(255, 149, 0, 0.28);
+  color: var(--apple-orange-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  margin-bottom: 6px;
 }
 
 .analysis-item-body label {
