@@ -1,9 +1,9 @@
 const iconFiles: Record<string, string> = {
   antigravity: "antigravity.svg",
   gemini: "gemini.svg",
-  doubao: "doubao.svg",
+  doubao: "doubao.png",
   claude_code: "claude-code.svg",
-  codex: "codex.svg",
+  codex: "chatgpt.svg",
   workbuddy: "workbuddy.svg",
   workbuddy_cn: "workbuddy.svg",
   workbuddy_intl: "workbuddy.svg",
