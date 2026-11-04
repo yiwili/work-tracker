@@ -19,6 +19,7 @@ import {
   Link2,
   ListFilter,
   LoaderCircle,
+  PieChart,
   Plus,
   ScanLine,
   Send,
@@ -47,6 +48,7 @@ import { SourcePicker, sourceKeys, sourceLabels } from "./SourcePicker";
 import { CollectDetailsModal } from "./CollectDetailsModal";
 import { AnalysisResultsModal } from "./AnalysisResultsModal";
 import { JobToast, type JobToastState } from "./JobToast";
+import { UsageStats } from "./UsageStats";
 
 const statuses: Record<string, string> = {
   requested: "待执行",
@@ -1883,6 +1885,14 @@ function SettingsForm({
                   saved={initial}
                   feedback={feedback}
                 />
+              </section>
+            )}
+            {tab === "model" && (
+              <section className="settings-section">
+                <h2>
+                  <PieChart size={19} /> AI 用量统计
+                </h2>
+                <UsageStats />
               </section>
             )}
             {tab === "operation" && (
