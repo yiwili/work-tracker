@@ -76,7 +76,10 @@ def create_app(engine=None):
                 return JSONResponse({'detail': '拒绝跨站请求'}, status_code=403)
             if request.method in ('POST', 'PUT', 'PATCH') and request.headers.get('content-type', '').split(';')[0] != 'application/json':
                 return JSONResponse({'detail': '请使用 application/json'}, status_code=415)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path in ('/', '/index.html'):
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return response
 
     @app.exception_handler(ValueError)
     async def value_error(request, exc):

@@ -36,38 +36,18 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .getByLabel("详细工作内容")
     .fill("沟通接口变更，确认联调时间和待办事项。");
   await dialog.getByLabel("工作分类").fill("客户沟通");
-  await dialog.getByLabel("确认工时分钟 1").fill("119");
-  await dialog.getByRole("button", { name: "保存记录" }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "确认 8h 日报" }),
-  ).toBeDisabled();
-  await page
-    .getByRole("button", { name: "与客户确认接口联调方案", exact: true })
-    .click();
-  dialog = page.getByRole("dialog");
-  await dialog.getByLabel("确认工时分钟 1").fill("121");
-  await dialog.getByRole("button", { name: "保存记录" }).click();
-  await expect(dialog).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "确认 8h 日报" }),
-  ).toBeDisabled();
-  await page
-    .getByRole("button", { name: "与客户确认接口联调方案", exact: true })
-    .click();
-  dialog = page.getByRole("dialog");
   await dialog.getByLabel("确认工时分钟 1").fill("120");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
-  await page.getByRole("button", { name: "确认 8h 日报" }).click();
   await expect(
-    page.getByRole("button", { name: "已确认", exact: true }),
-  ).toBeDisabled();
+    page.getByRole("button", { name: "预览并推送工作项" }),
+  ).toBeEnabled();
+  await page.request.post("/api/reports/2026-10-24/confirm", { data: {} });
   await page.reload();
   await expect(page.getByLabel("工作日期")).toHaveValue("2026-10-24");
   await expect(
-    page.getByRole("button", { name: "已确认", exact: true }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "预览并推送工作项" }),
+  ).toBeEnabled();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Markdown" }).click();
   const download = await downloadPromise;
@@ -316,11 +296,8 @@ test("AI time allocation preserves pinned communication and remains a draft", as
   await expect(page.getByLabel("固定此项工时，AI分配时保留")).not.toBeChecked();
   await page.getByLabel("关闭编辑").click();
   await expect(
-    page.getByRole("button", { name: "确认 8h 日报" }),
+    page.getByRole("button", { name: "预览并推送工作项" }),
   ).toBeEnabled();
-  await expect(
-    page.getByRole("button", { name: "已确认", exact: true }),
-  ).toHaveCount(0);
   await page.reload();
   await expect(page.getByText("AI工时分配草稿", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "系统设置" }).click();
@@ -605,20 +582,13 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
   ).toBe(210);
 });
 
-test("enterprise navigation remains visible without daily tasks and opens publishing directly", async ({
+test("enterprise publishing button is directly accessible on daily report without separate enterprise page", async ({
   page,
 }) => {
   await page.goto("/?date=2026-10-17");
-  await page.getByRole("button", { name: "企业工作项", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "推送到 Gitee 企业工作项", exact: true }),
-  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "预览并推送工作项", exact: true }),
   ).toBeDisabled();
-  await expect(
-    page.getByRole("button", { name: "读取企业列表", exact: true }),
-  ).toBeVisible();
   await page.request.post("/api/tasks", {
     data: { date: "2026-10-16", title: "终端入口验证事项" },
   });

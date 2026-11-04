@@ -369,7 +369,7 @@ export function SetupWizard({
       setFeedback({
         tone: configured ? "ok" : "info",
         text: configured
-          ? "Gitee 接入配置已保存，可在系统设置或企业工作项页面继续完善。"
+          ? "Gitee 接入配置已保存，可在系统设置「企业同步」中继续完善。"
           : "尚未填写 Gitee 凭据，可稍后在系统设置中补充。",
       });
     });
