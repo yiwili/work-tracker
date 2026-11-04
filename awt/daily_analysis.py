@@ -1,5 +1,6 @@
 """Analyze a day's conversations as a whole, never one task per message/commit."""
 import json
+from pathlib import Path
 import re
 from collections import Counter, defaultdict
 from uuid import uuid4
@@ -34,6 +35,36 @@ def day_rows(conn, day, settings):
             if e['source'] in sources and not excluded(e['cwd'], settings)]
 
 
+def is_source_detected(source, settings, conn=None, rows=None):
+    if source == 'git':
+        if rows and any(e['source'] == 'git' for e in rows):
+            return True
+        for p in settings.git_roots:
+            try:
+                if Path(p).expanduser().exists():
+                    return True
+            except OSError:
+                pass
+        if conn:
+            try:
+                if conn.execute(select(db.repositories.c.root)).first():
+                    return True
+            except Exception:
+                pass
+        return False
+    if rows and any(e['source'] == source for e in rows):
+        return True
+    cfg = getattr(settings, source, None)
+    if cfg and cfg.paths:
+        for p in cfg.paths:
+            try:
+                if Path(p).expanduser().exists():
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def overview(conn, day, settings):
     from .service import visible_events
     all_rows = [e for e in visible_events(conn,day,settings) if not excluded(e['cwd'], settings)]
@@ -55,16 +86,20 @@ def overview(conn, day, settings):
     for source in (*CONVERSATION_SOURCES, 'git'):
         items = [e for e in all_rows if e['source'] == source]
         counts = Counter(e['kind'] for e in items)
-        source_stats.append({'source': source, 'selected': source in selected_names,
+        detected = is_source_detected(source, settings, conn, all_rows)
+        source_stats.append({'source': source, 'selected': source in selected_names and detected,
+                             'detected': detected,
                              'sessions': len({e['session_id'] for e in items}) if source != 'git' else 0,
                              'user_messages': counts['user_prompt'], 'assistant_messages': counts['assistant_message'], 'events': len(items)})
-    selected = [e for e in all_rows if e['source'] in selected_names]
+    detected_sources = {s['source'] for s in source_stats if s['detected']}
+    selected = [e for e in all_rows if e['source'] in selected_names and e['source'] in detected_sources]
     result = {'date': str(day), 'sources': source_stats,
               'sessions': [{**value, 'projects': sorted(value['projects'])} for value in sessions.values()],
               'session_count': len({(e['source'], e['session_id']) for e in selected if e['source'] != 'git'}),
               'user_messages': sum(e['kind'] == 'user_prompt' for e in selected),
               'assistant_messages': sum(e['kind'] == 'assistant_message' for e in selected),
-              'event_count': len(selected), 'selected_sources': settings.analysis_sources}
+              'event_count': len(selected),
+              'selected_sources': [s for s in settings.analysis_sources if s in detected_sources]}
     snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == str(day))).scalar_one_or_none()
     result['analysis'] = snapshot
     for session in result['sessions']:

@@ -153,6 +153,8 @@ export type Settings = {
   timezone: string;
   target_minutes: number;
   step_minutes: number;
+  antigravity: SourceConfig;
+  gemini: SourceConfig;
   claude_code: SourceConfig;
   codex: SourceConfig;
   workbuddy_cn: SourceConfig;
@@ -227,6 +229,7 @@ export type ConversationOverview = {
   sources: {
     source: string;
     selected: boolean;
+    detected?: boolean;
     sessions: number;
     user_messages: number;
     assistant_messages: number;

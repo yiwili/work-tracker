@@ -542,3 +542,26 @@ def test_progress_arrives_before_stream_finishes_with_live_thinking(monkeypatch,
     assert final['thinking_live'] is False
     snapshot = json.dumps(final)
     assert all(secret not in snapshot for secret in ('private-prompt', 'private-input', 'private-key'))
+
+
+def test_overview_filters_undetected_sources_and_marks_detected(app_client, tmp_path):
+    from datetime import date
+    client, engine = app_client
+    with engine.connect() as conn:
+        from awt.daily_analysis import overview
+        settings = Settings()
+        settings.codex.paths = [str(tmp_path)]
+        settings.gemini.paths = [str(tmp_path / 'nonexistent_gemini')]
+        settings.deepseek_harness.paths = [str(tmp_path / 'nonexistent_dsh')]
+        settings.analysis_sources = ['codex', 'gemini', 'deepseek_harness']
+
+        res = overview(conn, date(2026, 10, 24), settings)
+        stats = {s['source']: s for s in res['sources']}
+
+        assert stats['codex']['detected'] is True
+        assert stats['gemini']['detected'] is False
+        assert stats['deepseek_harness']['detected'] is False
+
+        assert 'codex' in res['selected_sources']
+        assert 'gemini' not in res['selected_sources']
+        assert 'deepseek_harness' not in res['selected_sources']

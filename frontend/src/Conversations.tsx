@@ -107,41 +107,48 @@ export function Conversations({
         </p>
       )}
       <div className="conversation-sources">
-        {overview.sources.map((s) => {
-          const count = s.source === "git" ? s.events : s.sessions;
-          return (
-            <label
-              className={
-                "check-label" +
-                (settings.analysis_sources.includes(s.source) ? " active" : "") +
-                (count > 0 ? " has-data" : "")
-              }
-              key={s.source}
-            >
-              <input
-                type="checkbox"
-                checked={settings.analysis_sources.includes(s.source)}
-                disabled={busy}
-                onChange={(e) =>
-                  onSources(
-                    e.target.checked
-                      ? [...settings.analysis_sources, s.source]
-                      : settings.analysis_sources.filter((x) => x !== s.source),
-                  )
+        {overview.sources
+          .filter((s) => s.detected ?? true)
+          .map((s) => {
+            const count = s.source === "git" ? s.events : s.sessions;
+            const isChecked = settings.analysis_sources.includes(s.source);
+            return (
+              <label
+                className={
+                  "check-label" +
+                  (isChecked ? " active" : "") +
+                  (count > 0 ? " has-data" : "")
                 }
-              />
-              <SourceIcon source={s.source} size={15} />
-              <span className="source-name-text">{names[s.source]}</span>
-              <small>
-                {count > 0
-                  ? s.source === "git"
-                    ? `${s.events}`
-                    : `${s.sessions} 会话`
-                  : "0"}
-              </small>
-            </label>
-          );
-        })}
+                key={s.source}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const detectedKeys = new Set(
+                      overview.sources
+                        .filter((item) => item.detected ?? true)
+                        .map((item) => item.source),
+                    );
+                    const updated = e.target.checked
+                      ? [...settings.analysis_sources, s.source]
+                      : settings.analysis_sources.filter((x) => x !== s.source);
+                    onSources(updated.filter((x) => detectedKeys.has(x)));
+                  }}
+                />
+                <SourceIcon source={s.source} size={15} />
+                <span className="source-name-text">{names[s.source] || s.source}</span>
+                <small>
+                  {count > 0
+                    ? s.source === "git"
+                      ? `${s.events}`
+                      : `${s.sessions} 会话`
+                    : "0"}
+                </small>
+              </label>
+            );
+          })}
       </div>
       <div className="conversation-total">
         <Activity size={17} />

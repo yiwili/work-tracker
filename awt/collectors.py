@@ -49,7 +49,7 @@ def tool_context(arguments, cwd):
         args = {}
     explicit = args.get('workdir') or args.get('cwd')
     affected = []
-    for key in ('file_path', 'path', 'filename'):
+    for key in ('file_path', 'path', 'filename', 'Path', 'AbsolutePath'):
         path = args.get(key)
         if isinstance(path, str) and Path(path).is_absolute():
             affected.append(path)
@@ -235,6 +235,206 @@ class ClaudeAdapter(JSONLAdapter):
             elif kind == "tool_result":
                 result += self.make(raw, location, "tool_result", content_text(part.get("content")), row.get("timestamp"), {"tool": self.calls.get(part.get("tool_use_id"), "tool"), "is_error": part.get("is_error", False), **self.call_contexts.get(part.get('tool_use_id'), {})})
         return result
+
+
+class AntigravityAdapter(JSONLAdapter):
+    """Google Antigravity 会话记录（~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl）。
+
+    从 transcript.jsonl 中提取 USER_INPUT、PLANNER_RESPONSE（工具调用与回复）和 GENERIC（工具结果）。
+    通过 conversation_summaries.db 还原工作区路径。
+    """
+
+    name = "antigravity"
+
+    def discover(self):
+        found = {}
+        for configured in self.paths:
+            path = Path(configured).expanduser()
+            if path.is_file() and path.suffix == ".jsonl":
+                found[str(path.resolve())] = path
+            elif path.is_dir():
+                for item in path.rglob("transcript.jsonl"):
+                    found[str(item.resolve())] = item
+            else:
+                self.warnings.append(f"路径不存在：{path}")
+        return [SourceLocation(path, self.name) for path in found.values()]
+
+    def _get_workspace(self, session_id, location_path):
+        import sqlite3
+        import urllib.parse
+        db_candidates = [p / "conversation_summaries.db" for p in location_path.parents]
+        db_candidates.append(Path.home() / ".gemini" / "antigravity" / "conversation_summaries.db")
+        for candidate in db_candidates:
+            if candidate.is_file():
+                try:
+                    with sqlite3.connect(f"file:{candidate}?mode=ro", uri=True) as conn:
+                        row = conn.execute(
+                            "SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?",
+                            (session_id,)
+                        ).fetchone()
+                        if row and row[0]:
+                            uris = json.loads(row[0])
+                            if uris and isinstance(uris, list):
+                                clean = uris[0].removeprefix("file:///")
+                                if clean.startswith("/") and len(clean) > 2 and clean[2] == ":":
+                                    clean = clean.lstrip("/")
+                                return str(Path(urllib.parse.unquote(clean)))
+                except Exception:
+                    pass
+        return ""
+
+    def collect(self, location, cursor):
+        if len(location.path.parents) >= 3 and location.path.parents[1].name == ".system_generated":
+            self.session_id = location.path.parents[2].name
+        else:
+            self.session_id = location.path.parent.name
+        self.cwd = self._get_workspace(self.session_id, location.path)
+        self.calls = {}
+        self.call_contexts = {}
+        with location.path.open("rb") as stream:
+            while True:
+                offset = stream.tell()
+                line = stream.readline()
+                if not line or not line.endswith(b"\n"):
+                    break
+                cursor.offset = stream.tell()
+                try:
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError("not an object")
+                    raw = RawEvent(value, offset)
+                    normalized = self.normalize(raw, location)
+                    if offset >= self.start_offset:
+                        yield from normalized
+                except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                    self.warnings.append(f"{location.path.name}:{offset} 无效或不支持的记录已跳过")
+
+    def normalize(self, raw, location):
+        row = raw.value
+        kind = row.get("type")
+        ts = row.get("created_at")
+        if not ts:
+            return []
+
+        if kind == "USER_INPUT":
+            content = str(row.get("content") or "")
+            requests = re.findall(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.DOTALL)
+            if requests:
+                text = "\n".join(r.strip() for r in requests if r.strip())
+            else:
+                text = re.sub(r"<[A-Z_]+>.*?</[A-Z_]+>", "", content, flags=re.DOTALL).strip()
+            if not text:
+                return []
+            return self.make(raw, location, "user_prompt", text, ts)
+
+        if kind == "PLANNER_RESPONSE":
+            res = []
+            for tc in row.get("tool_calls") or []:
+                name = tc.get("name", "tool")
+                args = tc.get("args", {})
+                context = tool_context(args, self.cwd)
+                if not self.cwd and context.get("event_cwd"):
+                    self.cwd = context["event_cwd"]
+                elif not self.cwd and context.get("affected_paths"):
+                    self.cwd = str(Path(context["affected_paths"][0]).parent)
+                cmd = args.get("CommandLine") if isinstance(args, dict) else ""
+                rendered = f"{name}\n{cmd}" if cmd else f"{name}\n{json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)}"
+                is_shell = str(name).lower() in ("run_command", "bash", "shell", "exec_command", "shell_command")
+                res += self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                                 rendered, ts, {"tool": name, **context})
+            content = str(row.get("content") or "").strip()
+            if content:
+                res += self.make(raw, location, "assistant_message", content, ts)
+            return res
+
+        if kind == "GENERIC":
+            content = str(row.get("content") or "").strip()
+            if content:
+                return self.make(raw, location, "tool_result", content, ts, {"tool": "tool", "event_cwd": self.cwd})
+
+        return []
+
+
+class GeminiAdapter(JSONLAdapter):
+    """Google Gemini 会话记录（~/.gemini/tmp/<hash>/chats/*.jsonl 或 ~/.gemini/sessions/*.jsonl）。
+
+    支持 Gemini CLI 与 Gemini 扩展的 JSONL 会话流。
+    """
+
+    name = "gemini"
+
+    def normalize(self, raw, location):
+        row = raw.value
+        if "session_id" in row or "sessionId" in row:
+            self.session_id = str(row.get("session_id") or row.get("sessionId") or self.session_id)
+        if "cwd" in row or "workdir" in row:
+            self.cwd = str(row.get("cwd") or row.get("workdir") or self.cwd)
+
+        kind = str(row.get("type") or row.get("role") or "").lower()
+        ts = row.get("timestamp") or row.get("created_at") or row.get("time") or row.get("ts")
+        if not ts:
+            return []
+
+        if kind in ("user", "human", "user_input"):
+            text = ""
+            if "content" in row:
+                text = content_text(row["content"])
+            elif "parts" in row:
+                text = content_text(row["parts"])
+            elif "message" in row:
+                text = content_text(row["message"])
+            elif "text" in row:
+                text = str(row["text"])
+            if not text.strip():
+                return []
+            return self.make(raw, location, "user_prompt", text.strip(), ts)
+
+        if kind in ("model", "assistant", "gemini"):
+            res = []
+            text_parts = []
+            parts = row.get("parts")
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, str):
+                        text_parts.append(part)
+                    elif isinstance(part, dict):
+                        if "text" in part:
+                            text_parts.append(str(part["text"]))
+                        elif "functionCall" in part:
+                            fc = part["functionCall"]
+                            fname = fc.get("name", "tool")
+                            fargs = fc.get("args", {})
+                            ctx = tool_context(fargs, self.cwd)
+                            is_shell = str(fname).lower() in ("run_command", "bash", "shell", "exec_command", "shell_command")
+                            res += self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                                             f"{fname}\n{json.dumps(fargs, ensure_ascii=False)}", ts,
+                                             {"tool": fname, **ctx})
+            elif "content" in row:
+                text_parts.append(content_text(row["content"]))
+            elif "message" in row:
+                text_parts.append(content_text(row["message"]))
+            elif "text" in row:
+                text_parts.append(str(row["text"]))
+
+            combined_text = "\n".join(t.strip() for t in text_parts if t.strip())
+            if combined_text:
+                res += self.make(raw, location, "assistant_message", combined_text, ts)
+            return res
+
+        if kind in ("function_call", "tool_call", "functioncall"):
+            name = row.get("name") or (row.get("functionCall") or {}).get("name", "tool")
+            args = row.get("arguments") or row.get("args") or (row.get("functionCall") or {}).get("args", {})
+            ctx = tool_context(args, self.cwd)
+            is_shell = str(name).lower() in ("run_command", "bash", "shell", "exec_command", "shell_command")
+            rendered = f"{name}\n{json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)}"
+            return self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                             rendered, ts, {"tool": name, **ctx})
+
+        if kind in ("function_response", "tool_result", "function_call_result"):
+            output = row.get("response") or row.get("output") or row.get("content", "")
+            return self.make(raw, location, "tool_result", content_text(output), ts, {"tool": "tool", "event_cwd": self.cwd})
+
+        return []
 
 
 # WorkBuddy 会在用户消息前面塞一大段 <system-reminder>，里面是工作区、时间和身份注入。

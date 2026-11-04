@@ -6,7 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from awt.collectors import (CollectionCursor, DeepSeekHarnessAdapter, QoderAdapter, SourceLocation,
+from awt.collectors import (AntigravityAdapter, CollectionCursor, DeepSeekHarnessAdapter,
+                            GeminiAdapter, QoderAdapter, SourceLocation,
                             TraeAdapter, WorkBuddyAdapter, zstandard)
 from awt.models import Settings
 
@@ -164,3 +165,89 @@ def test_trae_reads_session_memory_with_local_timezone(tmp_path):
         assert events[0].cwd == resolved
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+def test_antigravity_reads_transcript_and_parses_tools_and_prompts(tmp_path):
+    brain = tmp_path / 'brain'
+    conv_id = 'conv-uuid-1'
+    transcript_path = brain / conv_id / '.system_generated' / 'logs' / 'transcript.jsonl'
+    write(transcript_path, [
+        {
+            'step_index': 0, 'source': 'USER_EXPLICIT', 'type': 'USER_INPUT',
+            'created_at': '2026-11-04T01:00:00Z',
+            'content': '<USER_REQUEST>\n更新日报组件并测试\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>'
+        },
+        {
+            'step_index': 1, 'source': 'MODEL', 'type': 'PLANNER_RESPONSE',
+            'created_at': '2026-11-04T01:01:00Z',
+            'tool_calls': [
+                {'name': 'run_command', 'args': {'CommandLine': 'pytest', 'WaitMsBeforeAsync': 5000}},
+                {'name': 'read_file', 'args': {'Path': str(tmp_path / 'file.txt')}}
+            ]
+        },
+        {
+            'step_index': 2, 'source': 'MODEL', 'type': 'GENERIC',
+            'created_at': '2026-11-04T01:02:00Z',
+            'content': 'pytest 1 passed'
+        },
+        {
+            'step_index': 3, 'source': 'MODEL', 'type': 'PLANNER_RESPONSE',
+            'created_at': '2026-11-04T01:03:00Z',
+            'content': '已完成日报组件更新'
+        }
+    ])
+    # SQLite conversation_summaries.db
+    import sqlite3
+    db_file = tmp_path / 'conversation_summaries.db'
+    with sqlite3.connect(db_file) as conn:
+        conn.execute('CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT)')
+        conn.execute('INSERT INTO conversation_summaries VALUES (?, ?)',
+                     (conv_id, json.dumps(['file:///d:/Projects/ai-work-tracker'])))
+
+    adapter = AntigravityAdapter([brain])
+    locations = adapter.discover()
+    assert len(locations) == 1
+    events = collect(adapter, transcript_path)
+
+    assert [e.kind for e in events] == ['user_prompt', 'shell_command', 'tool_call', 'tool_result', 'assistant_message']
+    assert events[0].summary == '更新日报组件并测试'
+    assert events[0].session_id == conv_id
+    assert 'Projects' in events[0].cwd
+    assert events[1].kind == 'shell_command'
+    assert events[1].metadata['tool'] == 'run_command'
+    assert events[2].metadata['tool'] == 'read_file'
+    assert events[3].summary == 'pytest 1 passed'
+    assert events[4].summary == '已完成日报组件更新'
+
+
+def test_gemini_reads_session_events(tmp_path):
+    session_file = tmp_path / 'sessions' / 'gemini_test.jsonl'
+    write(session_file, [
+        {
+            'role': 'user', 'session_id': 'gem-1', 'cwd': str(tmp_path),
+            'timestamp': '2026-11-04T02:00:00Z',
+            'parts': [{'text': '接入 Gemini 数据源'}]
+        },
+        {
+            'role': 'model', 'session_id': 'gem-1',
+            'timestamp': '2026-11-04T02:01:00Z',
+            'parts': [
+                {'text': '开始接入 Gemini'},
+                {'functionCall': {'name': 'run_command', 'args': {'cmd': 'npm test'}}}
+            ]
+        },
+        {
+            'type': 'function_response', 'session_id': 'gem-1',
+            'timestamp': '2026-11-04T02:02:00Z',
+            'output': 'All tests passed'
+        }
+    ])
+    adapter = GeminiAdapter([tmp_path / 'sessions'])
+    events = collect(adapter, session_file)
+
+    assert [e.kind for e in events] == ['user_prompt', 'shell_command', 'assistant_message', 'tool_result']
+    assert events[0].summary == '接入 Gemini 数据源'
+    assert events[0].session_id == 'gem-1'
+    assert events[1].metadata['tool'] == 'run_command'
+    assert events[2].summary == '开始接入 Gemini'
+    assert events[3].summary == 'All tests passed'

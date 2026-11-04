@@ -13,6 +13,8 @@ import { api } from "./api";
 import { SourceIcon } from "./SourceIcon";
 
 export const sourceKeys = [
+  "antigravity",
+  "gemini",
   "claude_code",
   "codex",
   "workbuddy_cn",
@@ -26,6 +28,8 @@ export const sourceKeys = [
 export type SourceKey = (typeof sourceKeys)[number];
 
 export const sourceLabels: Record<SourceKey, string> = {
+  antigravity: "Antigravity",
+  gemini: "Gemini",
   claude_code: "Claude Code",
   codex: "Codex",
   workbuddy_cn: "WorkBuddy 国内版",
