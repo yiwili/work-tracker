@@ -23,8 +23,7 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .getByRole("button", { name: "修复订单查询接口超时", exact: true })
     .click();
   let dialog = page.getByRole("dialog");
-  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
-  await expect(page.getByLabel("AI 分析日志")).toContainText("工作相关性筛选");
+  await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
   await dialog.getByLabel("确认工时分钟 1").fill("360");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
@@ -814,8 +813,18 @@ test("analysis log updates during a pending request and isolates dates", async (
     const current = selected ? state : "idle";
     await route.fulfill({ json: {
       state: current, elapsed_seconds: current === "idle" ? 0 : 12,
-      logs: current === "idle" ? [] : [{ seconds: 1, message: "工作相关性筛选：第 1/2 批" },
-        { seconds: 12, message: current === "running" ? "模型正在思考：思考已接收 128 字符，结果已接收 0 字符" : "分析完成，结果已保存" }],
+      logs: current === "idle" ? [] : [{ seconds: 1, message: "归纳工作项：第 1/2 批" },
+        { seconds: 12, message: current === "running" ? "模型正在输出结果" : "分析完成，结果已保存" }],
+      thinking: current === "idle" ? "" : "正在核对当天对话与工作目标",
+      thinking_live: current === "running",
+      model: "glm-5.3-flash",
+      thinking_seconds: current === "idle" ? 0 : 12,
+      tokens: current === "idle" ? undefined : {
+        prompt_tokens: 3758,
+        completion_tokens: current === "running" ? 128 : 256,
+        total_tokens: current === "running" ? 3886 : 4014,
+        estimated: current === "running",
+      },
     } });
   });
   await page.route("**/api/analyze?*", async (route) => {
@@ -829,13 +838,18 @@ test("analysis log updates during a pending request and isolates dates", async (
   await page.getByRole("button", { name: "采集当天数据", exact: true }).click();
   await page.getByRole("button", { name: "AI 分析全天对话", exact: true }).click();
   try {
-    await expect(page.getByLabel("AI 分析日志")).toContainText("思考已接收 128 字符");
-    await expect(page.getByLabel("AI 分析日志")).toContainText("已耗时 12 秒");
+    await expect(page.getByLabel("AI 思考与输出")).toContainText("正在核对当天对话与工作目标");
+    await expect(page.getByLabel("AI 思考与输出")).toContainText("思考中… 12 秒");
+    await expect(page.getByLabel("AI 思考与输出")).toContainText("3,758");
   } finally { release(); }
-  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
+  // Thinking folds up once the answer starts; the user can reopen it.
+  await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
+  await expect(page.getByLabel("AI 思考与输出")).not.toContainText("正在核对当天对话与工作目标");
+  await page.getByRole("button", { name: "已思考（用时 12 秒）" }).click();
+  await expect(page.getByLabel("AI 思考与输出")).toContainText("正在核对当天对话与工作目标");
   await page.reload();
   await page.getByLabel("工作日期").fill("2026-10-24");
-  await expect(page.getByLabel("AI 分析日志")).toContainText("分析完成，结果已保存");
+  await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
   await page.getByLabel("工作日期").fill("2026-10-25");
-  await expect(page.getByLabel("AI 分析日志")).toHaveCount(0);
+  await expect(page.getByLabel("AI 思考与输出")).toHaveCount(0);
 });
