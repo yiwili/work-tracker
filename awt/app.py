@@ -54,6 +54,7 @@ def create_app(engine=None):
     analysis_locks = {}
     collect_states = {}
     analysis_runs = {}
+    allocation_runs = {}
 
     @contextmanager
     def transaction():
@@ -340,20 +341,49 @@ def create_app(engine=None):
     def confirm_gitee_match_day(day: date, payload: GiteeConfirmMatchInput):
         return gitee_sync_svc.apply_user_decisions(engine, str(day), [d.model_dump() for d in payload.decisions])
 
+    @app.get('/api/allocation/progress')
+    def allocation_status(date: date):
+        progress = allocation_runs.get(date)
+        return progress.snapshot() if progress else {
+            'state': 'idle', 'elapsed_seconds': 0, 'logs': [], 'thinking': '', 'thinking_live': False, 'model': '',
+            'thinking_seconds': 0,
+            'tokens': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0, 'estimated': False}}
+
     @app.post('/api/reports/{day}/estimate-time')
     def estimate_time(day:date,payload:AllocationInput=AllocationInput()):
         lock=analysis_locks.setdefault(day,Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409,detail='该日期的AI分析或工时估算正在进行，请等待完成')
+        progress=analysis_progress.Progress()
+        allocation_runs[day]=progress
+        for old in list(allocation_runs):
+            if len(allocation_runs)>32 and old!=day and allocation_runs[old].state!='running':
+                del allocation_runs[old]
+        progress.add('开始估算工时')
         try:
-            with engine.connect() as conn:
+            with analysis_progress.track(progress), engine.connect() as conn:
                 try:
                     result=time_allocation.estimate(conn,day,payload)
                 except ValueError as exc:
+                    progress.add('工时分配未完成，原有记录已保留')
+                    progress.finish('error')
                     logging.getLogger('awt.allocation').warning('工时分配失败 date=%s manual_count=%s reason=%s',day,len(payload.manual_items),str(exc))
                     raise
                 conn.commit()
+                progress.add('工时分配结果已保存')
+                progress.finish('success')
                 return result
+        finally:
+            lock.release()
+
+    @app.post('/api/reports/{day}/apply-allocation')
+    def apply_allocation(day:date):
+        lock=analysis_locks.setdefault(day,Lock())
+        if not lock.acquire(blocking=False):
+            raise HTTPException(status_code=409,detail='该日期的AI分析或工时估算正在进行，请等待完成')
+        try:
+            with transaction() as conn:
+                return time_allocation.apply(conn,day)
         finally:
             lock.release()
 
@@ -476,7 +506,9 @@ def create_app(engine=None):
     def report(day: date):
         with engine.connect() as conn:
             value = service.report(conn, day)
-            value['conversations']['running'] = bool(analysis_locks.get(day) and analysis_locks[day].locked())
+            analysis_run = analysis_runs.get(day)
+            value['conversations']['running'] = bool(analysis_run and analysis_run.state == 'running')
+            value['allocation_running'] = bool(allocation_runs.get(day) and allocation_runs[day].state == 'running')
             return value
 
     @app.post('/api/reports/{day}/confirm')

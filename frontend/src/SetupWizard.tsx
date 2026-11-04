@@ -172,6 +172,14 @@ export function SetupWizard({
                   : "先生成候选，确认后导入"}
               </span>
             </p>
+            <p>
+              <strong>工时分配</strong>
+              <span>
+                {s.auto_apply_allocation
+                  ? "估算后直接应用"
+                  : "先生成预览，确认后应用"}
+              </span>
+            </p>
           </>
         );
       case "git": {
@@ -606,6 +614,16 @@ export function SetupWizard({
                 }
               />
               AI 分析完成后直接填入今日工作清单
+            </label>
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={s.auto_apply_allocation}
+                onChange={(e) =>
+                  setS({ ...s, auto_apply_allocation: e.target.checked })
+                }
+              />
+              AI 分配工时后直接应用到工作项
             </label>
             <div className="setup-status">
               <div className={modelReady ? "ok" : "warn"}>

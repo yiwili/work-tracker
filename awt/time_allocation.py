@@ -3,7 +3,7 @@ import re
 from decimal import Decimal, ROUND_FLOOR
 from sqlalchemy import select, update
 
-from . import activity_time, db, model_provider, prompts
+from . import activity_time, analysis_progress, db, model_provider, prompts
 from .collectors import stable
 from .privacy import redact
 from .models import AllocationInput, TaskInput
@@ -64,6 +64,21 @@ def parse_estimates(text, ids):
         raise model_provider.ModelError('工时估算格式无效，所有工时保持原值；请重试') from None
 
 
+def select_tasks(tasks, task_ids):
+    """Return selected and preserved unlocked tasks; missing ids keep the old all-in behavior."""
+    unlocked=[t for t in tasks if not t['time_locked']]
+    if task_ids is None:
+        return unlocked,[]
+    wanted=set(task_ids)
+    if wanted-{t['id'] for t in tasks}:
+        raise ValueError('选择的工作项已不存在，请重新选择')
+    selected=[t for t in unlocked if t['id'] in wanted]
+    if len(selected)!=len(wanted):
+        raise ValueError('固定工时项不能参与AI重新分配，请取消勾选后重试')
+    preserved=[t for t in unlocked if t['id'] not in wanted]
+    return selected,preserved
+
+
 def estimate(conn, day, request=None):
     from .daily_analysis import day_rows,input_hash
     from .service import get_settings,invalidate,list_tasks,now,upsert,save_task
@@ -83,26 +98,31 @@ def estimate(conn, day, request=None):
     if not tasks and not request.manual_items:
         raise ValueError('请先生成或补录真实工作项，再估算工时')
     locked=[t for t in tasks if t['time_locked']]
-    unlocked=[t for t in tasks if not t['time_locked']]
-    fixed=sum(t['confirmed_minutes'] for t in locked)+sum(i.minutes for i in request.manual_items)
-    if fixed>settings.target_minutes:
-        raise ValueError('固定工时已超过每日目标，请先调整；未改动任何工作项')
-    remaining=settings.target_minutes-fixed
+    selected,preserved=select_tasks(tasks,request.task_ids)
+    if request.task_ids is not None and not selected:
+        raise ValueError('请至少勾选一个需要AI分配工时的工作项')
+    human_fixed=sum(t['confirmed_minutes'] for t in locked)+sum(i.minutes for i in request.manual_items)
+    preserved_minutes=sum(t['confirmed_minutes'] for t in preserved)
+    retained=human_fixed+preserved_minutes
+    if retained>settings.target_minutes:
+        raise ValueError('固定或保留工时已超过每日目标，请先调整；未改动任何工作项')
+    remaining=settings.target_minutes-retained
     if remaining%ALLOCATION_STEP:
-        raise ValueError(f'AI工时只能按0.5小时分配：固定人工工时为{fixed}分钟，剩余{remaining}分钟不是30分钟的整数倍；请调整人工工时或每日目标后重试，原记录未改动')
+        raise ValueError(f'AI工时只能按0.5小时分配：固定人工工时为{human_fixed}分钟，保留{preserved_minutes}分钟，剩余{remaining}分钟不是30分钟的整数倍；请调整人工工时或每日目标后重试，原记录未改动')
     if not remaining:
-        if any(t['confirmed_minutes'] for t in unlocked):
+        if any(t['confirmed_minutes'] for t in selected):
             raise ValueError('固定工时已占满目标，请先人工核对其余已有分配，系统不会静默清零')
         if not request.manual_items:
-            return {'allocated':0,'fixed_minutes':fixed,'total_minutes':fixed,'warnings':['固定工时已达到目标，无需AI分配。']}
-    if remaining and not unlocked:
-        raise ValueError('所有工作项均已固定，请补录真实工作或解锁需要AI估算的工作项')
+            return {'allocated':0,'fixed_minutes':human_fixed,'total_minutes':retained,'warnings':['固定工时已达到目标，无需AI分配。'],'applied':False,'pending':False}
+    if remaining and not selected:
+        raise ValueError('已选工作项均带固定工时，请改选需要AI估算的工作项')
+    analysis_progress.emit('开始估算工时，正在整理参与分配的工作项')
     timeline=day_rows(conn,day,settings)
     initial_hash=state_hash(tasks,settings)
     scope_hash=input_hash(timeline,settings)
     prepared=[]
     if request.manual_items:
-        text=model_provider.complete(settings,prompts.prompt(settings,'manual_writer'),json.dumps({'items':[{**i.model_dump(),'name':redact(i.name,settings.redact_patterns)} for i in request.manual_items],'style_examples':settings.title_examples},ensure_ascii=False),max_tokens=4000)
+        text=model_provider.complete(settings,prompts.prompt(settings,'manual_writer'),json.dumps({'items':[{**i.model_dump(),'name':redact(i.name,settings.redact_patterns)} for i in request.manual_items],'style_examples':settings.title_examples},ensure_ascii=False),max_tokens=4000,purpose='manual_writer')
         try:
             named=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',text.strip()))['items']
             if not isinstance(named,list) or len(named)!=len(request.manual_items) or any(not isinstance(i,dict) or type(i.get('index')) is not int or not isinstance(i.get('title'),str) for i in named) or {i['index'] for i in named}!=set(range(len(request.manual_items))):
@@ -114,14 +134,15 @@ def estimate(conn, day, request=None):
                     confirmed_minutes=item.minutes,time_locked=True,status='attempted'))
         except (ValueError,KeyError,TypeError):
             raise model_provider.ModelError('人工事项命名格式无效，所有事项和工时保持原值；请重试') from None
-    payload={'date':str(day),'target_minutes':settings.target_minutes,'manual_minutes':fixed,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
+        analysis_progress.emit(f'人工事项已命名，正在估算 {len(selected)} 个工作项的工时')
+    payload={'date':str(day),'target_minutes':settings.target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
              'locked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'minutes':t['confirmed_minutes']} for t in locked]+[{'id':f'quick-{i}','title':p.title,'minutes':p.confirmed_minutes} for i,p in enumerate(prepared)],
              'unlocked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'details':redact(t['details'],settings.redact_patterns),
                                 'project':t['project'],'category':t['category'],'status':t['status'],'source':t['origin'],
-                                'evidence_count':len(t['evidence']),'timing_reference':activity_time.profile(t['evidence'],timeline,settings.activity_gap_minutes)} for t in unlocked]}
+                                'evidence_count':len(t['evidence']),'timing_reference':activity_time.profile(t['evidence'],timeline,settings.activity_gap_minutes)} for t in selected]}
     if remaining:
-        text=model_provider.complete(settings,prompts.prompt(settings,'time_estimator'),json.dumps(payload,ensure_ascii=False),max_tokens=8000)
-        result=parse_estimates(text,[t['id'] for t in unlocked])
+        text=model_provider.complete(settings,prompts.prompt(settings,'time_estimator'),json.dumps(payload,ensure_ascii=False),max_tokens=8000,purpose='time_estimator')
+        result=parse_estimates(text,[t['id'] for t in selected])
     else:
         result={'items':[],'note':'人工固定工时已达到目标。'}
     eligible=[i for i in result['items'] if i['eligible']]
@@ -130,24 +151,64 @@ def estimate(conn, day, request=None):
     estimates=sum(i['estimated_minutes'] or 0 for i in eligible)
     if estimates and remaining>estimates*1.5:
         warnings.append(f'剩余目标 {remaining} 分钟明显高于AI独立估算 {estimates} 分钟；请按实际投入核对，必要时保留差额。')
+    analysis_progress.emit(f'工时估算完成：{len(eligible)} 个工作项参与分配，正在核对工作项是否变化')
     conn.commit();conn.exec_driver_sql('BEGIN IMMEDIATE')
     current_settings=get_settings(conn);current_tasks=list_tasks(conn,day)
     if state_hash(current_tasks,current_settings)!=initial_hash or input_hash(day_rows(conn,day,current_settings),current_settings)!=scope_hash:
         raise ValueError('估算期间工作项、工时或对话范围发生变化，未覆盖人工修改；请重新估算')
-    added=[save_task(conn,p) for p in prepared]
-    for item in result['items']:
-        minutes=allocation.get(item['id'],0)
-        reason=redact(item['reason'],settings.redact_patterns)
-        conn.execute(update(db.worklogs).where(db.worklogs.c.task_id==item['id']).values(confirmed_minutes=minutes,suggested_minutes=item.get('estimated_minutes'),time_locked=False,time_source='ai_estimate',time_reason=reason,is_confirmed=False))
-    invalidate(conn,day)
+    apply_now=settings.auto_apply_allocation
+    added=[]
+    if apply_now:
+        added=[save_task(conn,p) for p in prepared]
+        for item in result['items']:
+            minutes=allocation.get(item['id'],0)
+            reason=redact(item['reason'],settings.redact_patterns)
+            conn.execute(update(db.worklogs).where(db.worklogs.c.task_id==item['id']).values(confirmed_minutes=minutes,suggested_minutes=item.get('estimated_minutes'),time_locked=False,time_source='ai_estimate',time_reason=reason,is_confirmed=False))
+        invalidate(conn,day)
+        analysis_progress.emit('工时已应用到所选工作项')
+    else:
+        analysis_progress.emit('工时建议已保存为预览，确认后才会写入工作项')
     final_tasks=list_tasks(conn,day)
     snapshot={'estimated_at':now(),'model':model_provider.status(settings)['model'],'target_minutes':settings.target_minutes,'step_minutes':ALLOCATION_STEP,
-              'fixed_minutes':fixed,'distributed_minutes':remaining,'independent_estimate_minutes':estimates,
+              'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,'distributed_minutes':remaining,'independent_estimate_minutes':estimates,
               'note':redact(str(result.get('note',''))[:3000],settings.redact_patterns),'warnings':warnings,
               'items':[{**i,'reason':redact(i['reason'],settings.redact_patterns),'allocated_minutes':allocation.get(i['id'],0)} for i in result['items']],
+              'manual_tasks':[p.model_dump(mode='json') for p in prepared],'selected_ids':[t['id'] for t in selected],
+              'pending':not apply_now,'applied_at':now() if apply_now else None,
               'state_hash':state_hash(final_tasks,settings),'scope_hash':scope_hash}
     upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
-    response={'allocated':len(allocation),'added_manual_ids':added,'fixed_minutes':fixed,'total_minutes':sum(t['confirmed_minutes'] for t in final_tasks),'warnings':warnings,'allocation':snapshot}
+    response={'allocated':len(allocation),'added_manual_ids':added,'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,
+              'total_minutes':sum(t['confirmed_minutes'] for t in final_tasks),'warnings':warnings,'allocation':snapshot,
+              'applied':apply_now,'pending':not apply_now}
     if request_key:
         upsert(conn,db.allocation_requests,{'id':request_key,'payload_hash':request_hash,'result':response},'id')
     return response
+
+
+def apply(conn, day):
+    """Write a previously previewed allocation after confirming it is still current."""
+    from .service import get_settings,invalidate,list_tasks,now,save_task,upsert
+    snapshot=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==str(day))).scalar_one_or_none()
+    if not snapshot:
+        raise ValueError('没有可应用的工时建议，请先生成')
+    if not snapshot.get('pending'):
+        raise ValueError('该工时建议已应用，无需重复应用')
+    settings=get_settings(conn)
+    tasks=list_tasks(conn,day)
+    if state_hash(tasks,settings)!=snapshot.get('state_hash'):
+        raise ValueError('工作项、工时或分析设置已变化，请重新分配；本次未写入任何记录')
+    selected_ids=set(snapshot.get('selected_ids') or [t['id'] for t in tasks if not t['time_locked']])
+    added=[save_task(conn,TaskInput.model_validate(p)) for p in snapshot.get('manual_tasks',[])]
+    for item in snapshot.get('items',[]):
+        if item['id'] not in selected_ids:
+            continue
+        reason=item.get('reason','')
+        conn.execute(update(db.worklogs).where(db.worklogs.c.task_id==item['id']).values(confirmed_minutes=item.get('allocated_minutes',0),suggested_minutes=item.get('estimated_minutes'),time_locked=False,time_source='ai_estimate',time_reason=reason,is_confirmed=False))
+    invalidate(conn,day)
+    final=list_tasks(conn,day)
+    snapshot={**snapshot,'pending':False,'applied_at':now(),'total_minutes':sum(t['confirmed_minutes'] for t in final),
+              'state_hash':state_hash(final,settings)}
+    upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
+    return {'allocated':len(selected_ids),'added_manual_ids':added,'fixed_minutes':snapshot.get('fixed_minutes',0),
+            'preserved_minutes':snapshot.get('preserved_minutes',0),'total_minutes':snapshot['total_minutes'],
+            'warnings':snapshot.get('warnings',[]),'allocation':snapshot,'applied':True,'pending':False}

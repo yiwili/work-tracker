@@ -252,7 +252,7 @@ test("invalid url settings explain why connection testing did not start", async 
   expect(writes).toBe(0);
 });
 
-test("AI time allocation preserves pinned communication and remains a draft", async ({
+test("AI time allocation preserves pinned communication and applies AI time", async ({
   page,
 }) => {
   await page.goto("/?date=2026-10-22");
@@ -272,15 +272,15 @@ test("AI time allocation preserves pinned communication and remains a draft", as
     .click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "生成工时分配草稿", exact: true })
+    .getByRole("button", { name: "开始 AI 分配", exact: true })
     .click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "完成，返回审核", exact: true })
-    .click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "保留 1h 固定工时" }),
-  ).toBeVisible();
+  const toast = page.locator(".job-toast");
+  await expect(toast).toContainText("AI 工时已分配");
+  await toast.getByRole("button", { name: "预览工时" }).click();
+  const preview = page.getByRole("dialog");
+  await expect(preview).toContainText("AI 工时预览");
+  await expect(preview).toContainText("已应用");
+  await preview.getByRole("button", { name: "关闭", exact: true }).click();
   const meeting = page.locator("tbody tr").filter({
     has: page.getByRole("button", { name: "客户需求沟通", exact: true }),
   });
@@ -298,7 +298,9 @@ test("AI time allocation preserves pinned communication and remains a draft", as
     page.getByRole("button", { name: "预览并推送工作项" }),
   ).toBeEnabled();
   await page.reload();
-  await expect(page.getByText("AI工时分配草稿", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("AI 工时分配已应用", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "系统设置" }).click();
   await page.getByRole("tab", { name: "提示词与风格" }).click();
   await page.getByText("业务工作项归并与标题", { exact: true }).click();
@@ -341,11 +343,15 @@ test("allocation modal adds quick manual activities and preserves specified time
       process.env.AWT_MODAL_SCREENSHOT || "test-results/allocation-modal.png",
   });
   await dialog.getByRole("button", { name: "生成条目并分配工时" }).click();
+  const toast = page.locator(".job-toast");
+  await expect(toast).toContainText("AI 工时已分配");
+  await toast.getByRole("button", { name: "预览工时" }).click();
+  const preview = page.getByRole("dialog");
   await expect(
-    dialog.getByText("沟通附件挂接需求", { exact: false }),
+    preview.getByText("沟通附件挂接需求", { exact: false }),
   ).toBeVisible();
-  await expect(dialog.getByText("1.5h", { exact: true })).toBeVisible();
-  await dialog.getByRole("button", { name: "完成，返回审核" }).click();
+  await expect(preview.getByText("1.5h", { exact: true })).toBeVisible();
+  await preview.getByRole("button", { name: "关闭", exact: true }).click();
   const result = await page.request
     .get("/api/reports/2026-10-21")
     .then((r) => r.json());
@@ -445,10 +451,10 @@ test("failed allocation keeps three manual rows across reload and retries the sa
     });
   });
   await dialog.getByRole("button", { name: "生成条目并分配工时" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("工时估算格式无效");
-  await expect(
-    dialog.getByLabel("人工事项名称 3", { exact: true }),
-  ).toHaveValue("服务维护3");
+  const allocationBar = page.locator(".allocation-bar");
+  await expect(allocationBar.getByRole("alert")).toContainText(
+    "工时估算格式无效",
+  );
   expect(
     await page.request.get("/api/tasks?date=2026-10-19").then((r) => r.json()),
   ).toHaveLength(1);
@@ -457,7 +463,6 @@ test("failed allocation keeps three manual rows across reload and retries the sa
     .getByRole("button", { name: "AI 估算并分配 8h", exact: true })
     .click();
   dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("alert")).toContainText("工时估算格式无效");
   await expect(
     dialog.getByLabel("人工事项名称 3", { exact: true }),
   ).toHaveValue("服务维护3");
@@ -467,9 +472,7 @@ test("failed allocation keeps three manual rows across reload and retries the sa
   );
   await dialog.getByRole("button", { name: "生成条目并分配工时" }).click();
   expect((await next).postDataJSON()).toEqual(firstBody);
-  await expect(
-    dialog.getByRole("button", { name: "完成，返回审核" }),
-  ).toBeVisible();
+  await expect(page.locator(".job-toast")).toContainText("AI 工时已分配");
   const report = await page.request
     .get("/api/reports/2026-10-19")
     .then((r) => r.json());
@@ -481,6 +484,48 @@ test("failed allocation keeps three manual rows across reload and retries the sa
       .map((t: { confirmed_minutes: number }) => t.confirmed_minutes)
       .sort((a: number, b: number) => a - b),
   ).toEqual([30, 60, 90]);
+});
+
+test("allocation preview waits for confirmation when direct apply is disabled", async ({
+  page,
+}) => {
+  const settings = await page.request
+    .get("/api/settings")
+    .then((r) => r.json());
+  await page.request.put("/api/settings", {
+    data: { ...settings, auto_apply_allocation: false },
+  });
+  await page.goto("/?date=2026-10-15");
+  await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
+  await page.getByLabel("任务标题").fill("补录历史工时");
+  await page.getByRole("button", { name: "保存记录", exact: true }).click();
+  await page
+    .getByRole("button", { name: "AI 估算并分配 8h", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "开始 AI 分配", exact: true })
+    .click();
+  const toast = page.locator(".job-toast");
+  await expect(toast).toContainText("工时建议已生成");
+  await toast.getByRole("button", { name: "预览工时" }).click();
+  const preview = page.getByRole("dialog");
+  await expect(preview).toContainText("预览并应用 AI 工时");
+  await expect(preview).toContainText("这些工时尚未写入工作项");
+  const before = await page.request
+    .get("/api/reports/2026-10-15")
+    .then((r) => r.json());
+  expect(before.tasks[0].confirmed_minutes).toBe(0);
+  await preview.getByRole("button", { name: "应用这些工时" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已应用 1 个工作项" }),
+  ).toBeVisible();
+  const after = await page.request
+    .get("/api/reports/2026-10-15")
+    .then((r) => r.json());
+  expect(after.time_allocation.pending).toBe(false);
+  expect(after.total_minutes).toBe(480);
+  await page.request.put("/api/settings", { data: settings });
 });
 
 test("enterprise title mappings persist and confirmed publishing skips existing work items", async ({

@@ -1,11 +1,19 @@
 import { useRef, useState, useEffect } from "react";
-import { Sparkles, X, Plus, Trash2 } from "lucide-react";
+import { Sparkles, X, Plus, Trash2, LockKeyhole } from "lucide-react";
 import type { Report } from "./types";
 import "./workflows.css";
 
 type Quick = { category: string; name: string; hours: string };
+export type AllocationRequest = {
+  request_id: string;
+  task_ids: string[];
+  manual_items: { category: string; name: string; minutes: number }[];
+};
 const h = (minutes: number) => Number((minutes / 60).toFixed(2));
-function readDraft(day: string) {
+function unlockedIds(report: Report) {
+  return report.tasks.filter((t) => !t.time_locked).map((t) => t.id);
+}
+function readDraft(day: string, report: Report) {
   try {
     const value = JSON.parse(
       sessionStorage.getItem(`allocation-draft:${day}`) || "null",
@@ -23,13 +31,21 @@ function readDraft(day: string) {
           ["沟通", "运维"].includes(i.category) &&
           typeof i.name === "string" &&
           typeof i.hours === "string",
-      )
+      ) &&
+      (value.selected === null ||
+        (Array.isArray(value.selected) &&
+          value.selected.every((id: unknown) => typeof id === "string")))
     )
-      return value as {
-        enabled: boolean;
-        requestId: string;
-        items: Quick[];
-        error?: string;
+      return {
+        enabled: value.enabled as boolean,
+        requestId: value.requestId as string,
+        items: value.items as Quick[],
+        selected:
+          value.selected === null
+            ? null
+            : (value.selected as string[]).filter((id) =>
+                unlockedIds(report).includes(id),
+              ),
       };
   } catch {
     /* A blocked or damaged browser draft must not prevent opening. */
@@ -37,51 +53,53 @@ function readDraft(day: string) {
   return {
     enabled: false,
     requestId: crypto.randomUUID(),
-    items: [{ category: "沟通", name: "", hours: "1" }],
-    error: "",
+    items: [{ category: "沟通", name: "", hours: "1" }] as Quick[],
+    selected: null,
   };
 }
 
 export function AllocationModal({
   report,
   onClose,
-  onApplied,
+  onStart,
 }: {
   report: Report;
   onClose: () => void;
-  onApplied: (message: string) => Promise<void>;
+  onStart: (request: AllocationRequest) => void;
 }) {
-  const [draft] = useState(() => readDraft(report.date));
+  const [draft] = useState(() => readDraft(report.date, report));
   const [enabled, setEnabled] = useState(draft.enabled),
-    [items, setItems] = useState<Quick[]>(draft.items);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState(draft.error || ""),
-    [done, setDone] = useState(false);
+    [items, setItems] = useState<Quick[]>(draft.items),
+    [selected, setSelected] = useState<string[] | null>(draft.selected);
+  const [error, setError] = useState("");
   const requestId = useRef(draft.requestId);
+  const available = unlockedIds(report);
+  const chosen = selected === null ? available : selected;
   useEffect(() => {
     try {
-      if (done) sessionStorage.removeItem(`allocation-draft:${report.date}`);
-      else
-        sessionStorage.setItem(
-          `allocation-draft:${report.date}`,
-          JSON.stringify({
-            enabled,
-            items,
-            requestId: requestId.current,
-            error,
-          }),
-        );
+      sessionStorage.setItem(
+        `allocation-draft:${report.date}`,
+        JSON.stringify({
+          enabled,
+          items,
+          requestId: requestId.current,
+          selected,
+        }),
+      );
     } catch {
       /* Inputs remain available in memory when storage is unavailable. */
     }
-  }, [enabled, items, error, done, report.date]);
+  }, [enabled, items, selected, report.date]);
   const closeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
-  const fixed = report.tasks
-    .filter((t) => t.time_locked)
+  const locked = report.tasks.filter((t) => t.time_locked);
+  const lockedMinutes = locked.reduce((s, t) => s + t.confirmed_minutes, 0);
+  const preserved = report.tasks
+    .filter((t) => !t.time_locked && !chosen.includes(t.id))
     .reduce((s, t) => s + t.confirmed_minutes, 0);
+  const fixed = lockedMinutes + preserved;
   const quick = enabled
     ? items.reduce((s, t) => s + Math.round(Number(t.hours) * 60), 0)
     : 0;
@@ -103,6 +121,31 @@ export function AllocationModal({
       items.map((item, i) => (i === index ? { ...item, ...patch } : item)),
     );
   };
+  const toggle = (id: string) => {
+    requestId.current = crypto.randomUUID();
+    setSelected(
+      chosen.includes(id)
+        ? chosen.filter((value) => value !== id)
+        : [...chosen, id],
+    );
+  };
+  const submit = () => {
+    if (remaining > 0 && chosen.length === 0) {
+      setError("请至少勾选一个需要 AI 分配工时的工作项。");
+      return;
+    }
+    onStart({
+      request_id: requestId.current,
+      task_ids: chosen,
+      manual_items: enabled
+        ? items.map((i) => ({
+            category: i.category,
+            name: i.name,
+            minutes: Math.round(Number(i.hours) * 60),
+          }))
+        : [],
+    });
+  };
   return (
     <div className="modal-overlay">
       <section
@@ -111,7 +154,7 @@ export function AllocationModal({
         aria-modal="true"
         aria-labelledby="allocation-title"
         onKeyDown={(e) => {
-          if (e.key === "Escape" && !busy) onClose();
+          if (e.key === "Escape") onClose();
           if (e.key === "Tab") {
             const els = Array.from(
               e.currentTarget.querySelectorAll<HTMLElement>(
@@ -144,46 +187,96 @@ export function AllocationModal({
             type="button"
             className="icon-button"
             aria-label="关闭工时分配"
-            disabled={busy}
             onClick={onClose}
           >
             <X size={20} />
           </button>
         </div>
-        {!done ? (
-          <>
-            {error && (
-              <div role="alert" className="allocation-error">
-                <strong>本次操作未完成</strong>
-                <p>{error}</p>
-                <p>本次输入已保留。直接重试会复用同一请求，避免重复添加。</p>
-              </div>
-            )}
-            <div className="allocation-summary">
-              <span>
-                已固定 <strong>{h(fixed)}h</strong>
-              </span>
-              <span>
-                人工补充 <strong>{h(quick)}h</strong>
-              </span>
-              <span>
-                AI 分配 <strong>{h(Math.max(0, remaining))}h</strong>
-              </span>
-            </div>
+        {error && (
+          <div role="alert" className="allocation-error">
+            <strong>请先补全选择</strong>
+            <p>{error}</p>
+          </div>
+        )}
+        <div className="allocation-summary">
+          <span>
+            固定 / 保留 <strong>{h(fixed)}h</strong>
+          </span>
+          <span>
+            人工补充 <strong>{h(quick)}h</strong>
+          </span>
+          <span>
+            AI 分配 <strong>{h(Math.max(0, remaining))}h</strong>
+          </span>
+        </div>
+        <fieldset className="allocation-picker">
+          <legend>
+            选择由 AI 分配工时的工作项（{chosen.length}/{available.length}）
+          </legend>
+          <div className="allocation-picker-head">
             <label className="check">
               <input
                 type="checkbox"
-                checked={enabled}
+                checked={
+                  available.length > 0 && chosen.length === available.length
+                }
+                disabled={!available.length}
                 onChange={(e) => {
-                  setEnabled(e.target.checked);
                   requestId.current = crypto.randomUUID();
+                  setSelected(e.target.checked ? available : []);
                 }}
-                disabled={busy}
               />
-              添加人工事项（运维 / 沟通）
+              全选未固定工作项
             </label>
-            {enabled && (
-              <fieldset disabled={busy} className="quick-items">
+            <span>未勾选的工作项保持当前工时不变</span>
+          </div>
+          {available.length === 0 ? (
+            <p className="muted">
+              当前工作项均已固定，没有需要 AI 分配的项目。
+            </p>
+          ) : (
+            <div className="allocation-picker-list">
+              {report.tasks
+                .filter((t) => !t.time_locked)
+                .map((t) => (
+                  <label key={t.id} className="allocation-pick">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${t.title}`}
+                      checked={chosen.includes(t.id)}
+                      onChange={() => toggle(t.id)}
+                    />
+                    <span>{t.title}</span>
+                    <small>
+                      {t.confirmed_minutes
+                        ? `当前 ${h(t.confirmed_minutes)}h`
+                        : "待分配"}
+                    </small>
+                  </label>
+                ))}
+            </div>
+          )}
+          {locked.length > 0 && (
+            <p className="allocation-locked">
+              <LockKeyhole size={14} />
+              {locked.length} 个固定工时项共 {h(lockedMinutes)}h，不参与 AI
+              重新分配。
+            </p>
+          )}
+        </fieldset>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => {
+              setEnabled(e.target.checked);
+              requestId.current = crypto.randomUUID();
+            }}
+          />
+          添加人工事项（运维 / 沟通）
+        </label>
+        {enabled && (
+          <fieldset className="quick-items">
                 <legend>人工事项（{items.length} 项）· 支持一次添加多项</legend>
                 <div className="quick-toolbar">
                   <span>填写简称与实际时长，AI 按历史风格命名</span>
@@ -256,120 +349,30 @@ export function AllocationModal({
                 ))}
               </fieldset>
             )}
-            <details className="agent-prompt">
-              <summary>参与分配的 {report.tasks.length} 个工作项</summary>
-              {report.tasks.map((t) => (
-                <p key={t.id}>
-                  {t.title} ·{" "}
-                  {t.time_locked
-                    ? `固定 ${h(t.confirmed_minutes)}h`
-                    : "由 AI 估算"}
-                </p>
-              ))}
-            </details>
-            {remaining < 0 && (
-              <p role="alert" className="error">
-                固定和人工工时已超过每日目标，请调整。
-              </p>
-            )}
-            {incompatible && (
-              <p role="alert" className="allocation-error">
-                剩余 {remaining}{" "}
-                分钟无法按0.5小时分配。请调整人工工时或每日目标，系统会保留原有工时。
-              </p>
-            )}
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="outline"
-                onClick={onClose}
-                disabled={busy}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={busy || invalid || remaining < 0 || incompatible}
-                onClick={async () => {
-                  setBusy(true);
-                  setError("");
-                  let saved = false;
-                  try {
-                    const r = await fetch(
-                      `/api/reports/${report.date}/estimate-time`,
-                      {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          request_id: requestId.current,
-                          manual_items: enabled
-                            ? items.map((i) => ({
-                                category: i.category,
-                                name: i.name,
-                                minutes: Math.round(Number(i.hours) * 60),
-                              }))
-                            : [],
-                        }),
-                      },
-                    );
-                    const result = await r.json();
-                    if (!r.ok)
-                      throw Error(
-                        typeof result.detail === "string"
-                          ? result.detail
-                          : "请检查事项名称与时长",
-                      );
-                    saved = true;
-                    await onApplied(
-                      `已生成 ${h(result.total_minutes)}h 工时分配草稿，保留 ${h(result.fixed_minutes)}h 固定工时。${result.warnings.join("；")}`,
-                    );
-                    setDone(true);
-                  } catch (e) {
-                    setError(
-                      saved
-                        ? "分配结果已保存，但界面刷新失败；请重试读取已保存的结果。"
-                        : (e as Error).message,
-                    );
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                <Sparkles size={16} />
-                {busy
-                  ? "AI 正在命名和分配…"
-                  : enabled
-                    ? "生成条目并分配工时"
-                    : "生成工时分配草稿"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p role="status">
-              分配草稿已保存。以下为各项工时，可关闭弹窗后继续修改。
-            </p>
-            <div className="allocation-results">
-              {report.tasks.map((t) => (
-                <div key={t.id}>
-                  <span>
-                    {t.title}
-                    <small>
-                      {t.time_locked ? "人工固定" : t.time_reason || "AI建议"}
-                    </small>
-                  </span>
-                  <strong>{h(t.confirmed_minutes)}h</strong>
-                </div>
-              ))}
-            </div>
-            <p>合计 {h(report.total_minutes)}h · 日报尚未自动确认</p>
-            <div className="modal-footer">
-              <button type="button" onClick={onClose}>
-                完成，返回审核
-              </button>
-            </div>
-          </>
+        {remaining < 0 && (
+          <p role="alert" className="error">
+            固定和人工工时已超过每日目标，请调整。
+          </p>
         )}
+        {incompatible && (
+          <p role="alert" className="allocation-error">
+            剩余 {remaining}{" "}
+            分钟无法按0.5小时分配。请调整人工工时、勾选项或每日目标，系统会保留原有工时。
+          </p>
+        )}
+        <div className="modal-footer">
+          <button type="button" className="outline" onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={invalid || remaining < 0 || incompatible}
+            onClick={submit}
+          >
+            <Sparkles size={16} />
+            {enabled ? "生成条目并分配工时" : "开始 AI 分配"}
+          </button>
+        </div>
       </section>
     </div>
   );

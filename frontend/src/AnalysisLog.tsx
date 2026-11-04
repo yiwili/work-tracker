@@ -21,7 +21,23 @@ type Progress = {
 
 const number = (value: number) => value.toLocaleString("zh-CN");
 
-export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
+export function AnalysisLog({
+  day,
+  active,
+  endpoint = "/api/analysis/progress",
+  label = "AI 思考与输出",
+  runningLabel = "AI 正在分析",
+  doneLabel = "AI 分析已完成",
+  prepareLabel = "正在准备分析…",
+}: {
+  day: string;
+  active: boolean;
+  endpoint?: string;
+  label?: string;
+  runningLabel?: string;
+  doneLabel?: string;
+  prepareLabel?: string;
+}) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [manual, setManual] = useState<boolean | null>(null);
@@ -35,7 +51,7 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
     async function poll() {
       let running = false;
       try {
-        const response = await fetch(`/api/analysis/progress?date=${day}`, {
+        const response = await fetch(`${endpoint}?date=${day}`, {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("progress unavailable");
@@ -59,7 +75,7 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [day, active]);
+  }, [day, active, endpoint]);
   // A new day or a new run starts with the automatic expand/collapse behavior.
   useEffect(() => setManual(null), [day]);
   const previousState = useRef(progress?.state);
@@ -86,7 +102,7 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
   return (
     <div
       className={"analysis-live" + (running ? " running" : "")}
-      aria-label="AI 思考与输出"
+      aria-label={label}
     >
       <div className="analysis-live-head">
         <span className="analysis-live-state">
@@ -95,7 +111,7 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
           ) : (
             <Brain size={15} />
           )}
-          {running ? "AI 正在分析" : "AI 分析已完成"}
+          {running ? runningLabel : doneLabel}
         </span>
         {tokens && tokens.total_tokens > 0 && (
           <span className="analysis-token-inline">
@@ -127,7 +143,7 @@ export function AnalysisLog({ day, active }: { day: string; active: boolean }) {
               ? thinkingLive
                 ? `思考中… ${Math.max(1, Math.ceil(thinkingSeconds))} 秒`
                 : `已思考（用时 ${Math.max(1, Math.round(thinkingSeconds))} 秒）`
-              : "正在准备分析…"}
+              : prepareLabel}
           </span>
           {thinking && (
             <ChevronDown className="thinking-chevron" size={15} />

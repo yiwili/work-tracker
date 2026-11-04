@@ -103,6 +103,52 @@ def test_ai_half_hour_units_independent_of_manual_editor_step(client,monkeypatch
             assert task['suggested_minutes']%30==0
 
 
+def test_preview_selection_preserves_unchecked_tasks_and_waits_for_apply(client,monkeypatch):
+    c,_=client
+    settings=c.get('/api/settings').json();settings['auto_apply_allocation']=False
+    c.put('/api/settings',json=settings).raise_for_status()
+    first=add_task(c,'修复附件上传');second=add_task(c,'优化归档章');kept=add_task(c,'客户现场沟通',60,time_locked=False)
+    weights(monkeypatch)
+    url='/api/reports/2026-10-24/estimate-time'
+    result=c.post(url,json={'request_id':'preview-selection','task_ids':[first,second]});result.raise_for_status()
+    body=result.json()
+    assert body['applied'] is False and body['pending'] is True
+    assert body['preserved_minutes']==60 and body['total_minutes']==60
+    report=c.get('/api/reports/2026-10-24').json()
+    assert all(t['confirmed_minutes']==(60 if t['id']==kept else 0) for t in report['tasks'])
+    assert report['time_allocation']['pending'] and {i['id'] for i in report['time_allocation']['items']}=={first,second}
+    assert c.get('/api/allocation/progress?date=2026-10-24').json()['state']=='success'
+    applied=c.post('/api/reports/2026-10-24/apply-allocation',json={});applied.raise_for_status()
+    assert applied.json()['applied'] is True and applied.json()['allocated']==2
+    report=c.get('/api/reports/2026-10-24').json()
+    assert next(t for t in report['tasks'] if t['id']==kept)['confirmed_minutes']==60
+    assert sum(t['confirmed_minutes'] for t in report['tasks'] if t['time_source']=='ai_estimate')==420
+    assert not report['time_allocation']['pending']
+    assert c.post('/api/reports/2026-10-24/apply-allocation',json={}).status_code==400
+
+
+def test_explicit_empty_selection_is_rejected_without_calling_model(client,monkeypatch):
+    c,_=client
+    add_task(c,'修复业务问题')
+    def forbidden(*a,**kw):raise AssertionError('AI不应在未选择工作项时启动')
+    monkeypatch.setattr(model_provider,'complete',forbidden)
+    rejected=c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'empty-selection','task_ids':[]})
+    assert rejected.status_code==400 and '至少勾选' in rejected.json()['detail']
+    assert c.get('/api/reports/2026-10-24').json()['total_minutes']==0
+
+
+def test_preview_apply_rejects_changes_since_estimation(client,monkeypatch):
+    c,_=client
+    settings=c.get('/api/settings').json();settings['auto_apply_allocation']=False
+    c.put('/api/settings',json=settings).raise_for_status()
+    task=add_task(c,'修复业务问题');weights(monkeypatch)
+    c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'preview-stale','task_ids':[task]}).raise_for_status()
+    c.patch('/api/tasks/'+task,json={'title':'人工改写后的标题'}).raise_for_status()
+    rejected=c.post('/api/reports/2026-10-24/apply-allocation',json={})
+    assert rejected.status_code==400 and '重新分配' in rejected.json()['detail']
+    assert c.get('/api/reports/2026-10-24').json()['total_minutes']==0
+
+
 def test_time_changes_during_ai_wait_are_never_overwritten(client,monkeypatch):
     c,_=client
     task=add_task(c,'修复业务功能')

@@ -36,9 +36,11 @@ import type { GiteeSyncResult, PendingTask, Report, Settings, Task, WorkEvent } 
 import "./style.css";
 import { api } from "./api";
 import { Conversations } from "./Conversations";
+import { AnalysisLog } from "./AnalysisLog";
 import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
-import { AllocationModal } from "./AllocationModal";
+import { AllocationModal, type AllocationRequest } from "./AllocationModal";
+import { AllocationPreviewModal } from "./AllocationPreviewModal";
 import { GiteePublishModal } from "./GiteePublishModal";
 import { GiteeDedupModal } from "./GiteeDedupModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
@@ -173,6 +175,9 @@ function App() {
     [notice, setNotice] = useState(""),
     [editor, setEditor] = useState<Editor | null>(null),
     [allocationOpen, setAllocationOpen] = useState(false),
+    [allocationPreviewOpen, setAllocationPreviewOpen] = useState(false),
+    [allocating, setAllocating] = useState(false),
+    [allocationError, setAllocationError] = useState(""),
     [giteeOpen, setGiteeOpen] = useState(false),
     [giteeDedupOpen, setGiteeDedupOpen] = useState(false),
     [giteeSyncResult, setGiteeSyncResult] = useState<GiteeSyncResult | null>(null),
@@ -249,14 +254,14 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [busy]);
   useEffect(() => {
-    if (!report?.conversations.running) return;
+    if (!report?.conversations.running && !report?.allocation_running) return;
     const timer = window.setInterval(() => {
       api<Report>("/reports/" + day)
         .then(setReport)
         .catch(() => {});
     }, 4000);
     return () => window.clearInterval(timer);
-  }, [day, report?.conversations.running]);
+  }, [day, report?.conversations.running, report?.allocation_running]);
   const run = async (label: string, action: () => Promise<void>) => {
     setBusy(label);
     setError("");
@@ -403,6 +408,46 @@ function App() {
       setError((e as Error).message);
     } finally {
       setAnalyzing(false);
+    }
+  };
+  const startAllocation = async (request: AllocationRequest) => {
+    const jobDay = day;
+    setAllocationOpen(false);
+    setAllocating(true);
+    setAllocationError("");
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{
+        allocated: number;
+        fixed_minutes: number;
+        preserved_minutes?: number;
+        total_minutes: number;
+        warnings: string[];
+        applied: boolean;
+        pending: boolean;
+      }>("/reports/" + jobDay + "/estimate-time", "POST", request);
+      await refresh(jobDay);
+      const pending = result.pending ?? !result.applied;
+      const kept = result.fixed_minutes + (result.preserved_minutes || 0);
+      const warnings = result.warnings?.length
+        ? ` 提示：${result.warnings.join("；")}`
+        : "";
+      setToast({
+        title: pending ? "工时建议已生成" : "AI 工时已分配",
+        message: pending
+          ? `已生成 ${result.allocated} 个工作项的工时建议，确认后应用；固定和保留 ${hours(kept)}h 不变。${warnings}`
+          : `已应用 ${result.allocated} 个工作项的 AI 工时，固定和保留 ${hours(kept)}h。${warnings}`,
+        actionLabel: "预览工时",
+        onAction: () => {
+          setToast(null);
+          setAllocationPreviewOpen(true);
+        },
+      });
+    } catch (e) {
+      setAllocationError((e as Error).message);
+    } finally {
+      setAllocating(false);
     }
   };
   const openAnalysisResults = () => {
@@ -786,19 +831,6 @@ function App() {
                       提交到 Gitee
                       {selected.length ? `（${selected.length}项）` : ""}
                     </button>
-                    <button
-                      className="outline"
-                      disabled={
-                        !!busy ||
-                        !!report.conversations.running ||
-                        !settings?.llm_enabled ||
-                        !report.tasks.length
-                      }
-                      onClick={() => setAllocationOpen(true)}
-                    >
-                      <Sparkles size={16} />
-                      AI 估算并分配 {hours(report.target_minutes)}h
-                    </button>
                     {selected.length >= 2 && (
                       <button disabled={!!busy} onClick={merge}>
                         <GitMerge size={15} />
@@ -813,6 +845,111 @@ function App() {
                       <Plus size={17} />
                       添加人工事项
                     </button>
+                  </div>
+                </div>
+                <div
+                  className={
+                    "allocation-bar" +
+                    (allocating || report.allocation_running ? " running" : "")
+                  }
+                >
+                  <div className="allocation-bar-main">
+                    <span className="allocation-bar-icon">
+                      {allocating || report.allocation_running ? (
+                        <LoaderCircle className="spin" size={17} />
+                      ) : (
+                        <Sparkles size={17} />
+                      )}
+                    </span>
+                    <div className="allocation-bar-copy">
+                      <strong>AI 工时分配</strong>
+                      <p>
+                        {allocating || report.allocation_running
+                          ? "正在按每日目标估算所选工作项，思考过程与 token 用量实时显示。"
+                          : report.time_allocation?.stale
+                            ? "工作项或设置已变化，请重新分配工时。"
+                            : report.time_allocation?.pending
+                              ? "工时建议已生成，确认后才会写入工作项。"
+                              : report.time_allocation
+                                ? `已按每日 ${hours(report.target_minutes)}h 目标完成分配，可预览分配明细。`
+                                : `按每日 ${hours(report.target_minutes)}h 目标估算所选工作项，分配前可确认范围。`}
+                      </p>
+                    </div>
+                    <div className="allocation-bar-right">
+                    <button
+                      className="outline"
+                      disabled={
+                        !!busy ||
+                        allocating ||
+                        Boolean(report.conversations.running) ||
+                        Boolean(report.allocation_running) ||
+                        !settings?.llm_enabled ||
+                        !report.tasks.length
+                      }
+                      title={
+                        !settings?.llm_enabled
+                          ? "请先在系统设置接通并开启模型分析"
+                          : !report.tasks.length
+                            ? "请先生成或补录工作项"
+                            : undefined
+                      }
+                      onClick={() => {
+                        setAllocationError("");
+                        setAllocationOpen(true);
+                      }}
+                    >
+                      {allocating || report.allocation_running ? (
+                        <LoaderCircle className="spin" size={16} />
+                      ) : (
+                        <Sparkles size={16} />
+                      )}
+                      {allocating || report.allocation_running
+                        ? "AI 正在分配…"
+                        : `AI 估算并分配 ${hours(report.target_minutes)}h`}
+                    </button>
+                    {report.time_allocation && (
+                      <button
+                        className="outline"
+                        disabled={
+                          !!busy ||
+                          allocating ||
+                          Boolean(report.allocation_running)
+                        }
+                        onClick={() => setAllocationPreviewOpen(true)}
+                      >
+                        <FileText size={15} />
+                        {report.time_allocation.pending
+                          ? "预览并应用"
+                          : "预览工时"}
+                      </button>
+                    )}
+                    </div>
+                  </div>
+                  {allocationError && (
+                    <div role="alert" className="allocation-error">
+                      <strong>AI 工时分配失败</strong>
+                      <p>{allocationError}</p>
+                      <button
+                        type="button"
+                        className="outline"
+                        onClick={() => setAllocationError("")}
+                      >
+                        关闭
+                      </button>
+                    </div>
+                  )}
+                  <div className="allocation-bar-progress">
+                    <AnalysisLog
+                      day={report.date}
+                      active={
+                        allocating || Boolean(report.allocation_running)
+                      }
+                      endpoint="/api/allocation/progress"
+                      label="AI 工时分配思考与用量"
+                      runningLabel="AI 正在估算工时"
+                      doneLabel="AI 工时估算已完成"
+                      prepareLabel="正在准备估算…"
+                    />
                   </div>
                 </div>
                 {report.tasks.length === 0 ? (
@@ -964,12 +1101,18 @@ function App() {
                   <strong>
                     {report.time_allocation.stale
                       ? "工作项已变化，工时建议待重新审核"
-                      : "AI工时分配草稿"}
+                      : report.time_allocation.pending
+                        ? "AI 工时建议待应用"
+                        : "AI 工时分配已应用"}
                   </strong>
                   <p>
-                    固定 {hours(report.time_allocation.fixed_minutes)}h ·
-                    目标分配 {hours(report.time_allocation.distributed_minutes)}
-                    h · AI独立估算{" "}
+                    固定 {hours(report.time_allocation.fixed_minutes)}h
+                    {report.time_allocation.preserved_minutes
+                      ? ` · 保留 ${hours(report.time_allocation.preserved_minutes)}h`
+                      : ""}{" "}
+                    · 目标分配{" "}
+                    {hours(report.time_allocation.distributed_minutes)}h ·
+                    AI独立估算{" "}
                     {hours(report.time_allocation.independent_estimate_minutes)}
                     h
                   </p>
@@ -1226,7 +1369,15 @@ function App() {
         <AllocationModal
           report={report}
           onClose={() => setAllocationOpen(false)}
+          onStart={startAllocation}
+        />
+      )}
+      {allocationPreviewOpen && report && report.time_allocation && (
+        <AllocationPreviewModal
+          report={report}
+          onClose={() => setAllocationPreviewOpen(false)}
           onApplied={async (message) => {
+            setToast(null);
             await refresh();
             setNotice(message);
           }}
@@ -1984,6 +2135,22 @@ function SettingsForm({
                   />
                   AI 分析完成后直接填入今日工作清单
                 </label>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={s.auto_apply_allocation}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        auto_apply_allocation: e.target.checked,
+                      })
+                    }
+                  />
+                  AI 分配工时后直接应用到工作项
+                </label>
+                <p className="muted">
+                  关闭后先生成工时预览，在「今日工作清单」右侧确认后再应用。
+                </p>
               </section>
             )}
             {tab === "workflow" && (

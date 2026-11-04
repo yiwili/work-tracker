@@ -222,6 +222,8 @@ class Settings(BaseModel):
     ccswitch_config_path: str = ''
     # 默认只生成候选，用户在“分析结果”中确认后再写入今日工作清单。
     auto_import_analysis: bool = False
+    # 默认沿用原有行为：估算完成后直接写入工作项；关闭后先生成待应用预览。
+    auto_apply_allocation: bool = True
     analysis_sources: list[Literal['codex', 'claude_code', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)
@@ -435,6 +437,8 @@ class QuickItem(BaseModel):
 
 class AllocationInput(BaseModel):
     request_id: str = Field(default='', max_length=100, pattern=r'^[\w-]*$')
+    # None 表示沿用旧行为：所有未固定工作项参与；空列表表示用户未勾选任何工作项。
+    task_ids: list[str] | None = Field(default=None, max_length=200)
     manual_items: list[QuickItem] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode='after')

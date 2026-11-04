@@ -39,6 +39,32 @@ export type Timing = {
   confidence: string;
   method: string;
 };
+export type AllocationItem = {
+  id: string;
+  eligible: boolean;
+  weight: number;
+  estimated_minutes: number | null;
+  reason: string;
+  allocated_minutes: number;
+};
+export type AllocationSnapshot = {
+  stale: boolean;
+  pending?: boolean;
+  applied_at?: string | null;
+  estimated_at: string;
+  fixed_minutes: number;
+  preserved_minutes?: number;
+  distributed_minutes: number;
+  independent_estimate_minutes: number;
+  warnings: string[];
+  note: string;
+  items?: AllocationItem[];
+  manual_tasks?: {
+    title: string;
+    confirmed_minutes: number;
+    category?: string;
+  }[];
+};
 export type Report = {
   date: string;
   tasks: Task[];
@@ -49,15 +75,8 @@ export type Report = {
   warnings: string[];
   projects: number;
   sources: number;
-  time_allocation: null | {
-    stale: boolean;
-    estimated_at: string;
-    fixed_minutes: number;
-    distributed_minutes: number;
-    independent_estimate_minutes: number;
-    warnings: string[];
-    note: string;
-  };
+  allocation_running?: boolean;
+  time_allocation: null | AllocationSnapshot;
   conversations: ConversationOverview;
   legacy_count: number;
   merge_suggestions: { ids: string[]; reason: string }[];
@@ -157,6 +176,7 @@ export type Settings = {
   llm_protocol: "openai" | "anthropic";
   ccswitch_config_path: string;
   auto_import_analysis: boolean;
+  auto_apply_allocation: boolean;
   analysis_sources: string[];
   agent_prompts: Record<string, string>;
   title_examples: string[];

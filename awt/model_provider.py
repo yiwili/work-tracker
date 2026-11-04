@@ -67,7 +67,8 @@ class ModelError(ValueError):
     pass
 
 
-STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并'}
+STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名'}
+STREAM_PURPOSES=('scope_filter','task_writer','time_estimator','manual_writer')
 _usage_calls=contextvars.ContextVar('awt_usage_calls',default=None)
 
 
@@ -135,7 +136,7 @@ def output_budget(model, requested, purpose):
 
 
 def truncated(purpose, budget):
-    stage={'scope_filter':'工作相关性筛选','task_writer':'工作项归并'}.get(purpose,'模型')
+    stage=STAGE_LABELS.get(purpose,'模型')
     logging.getLogger('awt.model').warning('模型输出被截断 stage=%s max_tokens=%d',purpose or 'general',budget)
     return ModelError(f'{stage}输出被截断（本次输出预算{budget} tokens，包含模型思考）；原任务已保留。可减少单次分析范围后重新分析，不会自动重复请求。')
 
@@ -368,7 +369,7 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
         # uses its supported light effort without disabling forced thinking.
         body['reasoning_effort']='low'
         body['stream']=True
-    if current.get() is not None and purpose in ('scope_filter', 'task_writer'):
+    if current.get() is not None and purpose in STREAM_PURPOSES:
         body['stream'] = True
     started = monotonic()
     if body['stream'] and current.get() is not None:
