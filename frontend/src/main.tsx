@@ -189,7 +189,40 @@ function App() {
       pending: PendingTask[];
       stale: boolean;
     } | null>(null),
-    [toast, setToast] = useState<JobToastState | null>(null);
+    [toast, setToast] = useState<JobToastState | null>(null),
+    [reviewAlert, setReviewAlert] = useState<{
+      day: string;
+      warnings: string[];
+    } | null>(null);
+  const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(() => {
+    try {
+      const raw = sessionStorage.getItem("awt_dismissed_warnings");
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const dismissWarning = (d: string) => {
+    setDismissedWarnings((prev) => {
+      const next = new Set(prev).add(d);
+      try {
+        sessionStorage.setItem("awt_dismissed_warnings", JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  };
+
+  const resetDismissedWarning = (d: string) => {
+    setDismissedWarnings((prev) => {
+      const next = new Set(prev);
+      next.delete(d);
+      try {
+        sessionStorage.setItem("awt_dismissed_warnings", JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
+  };
   const [source, setSource] = useState(""),
     [sessionFilter, setSessionFilter] = useState(""),
     [project, setProject] = useState(""),
@@ -361,10 +394,28 @@ function App() {
           estimated: boolean;
         };
       }>("/analyze?date=" + jobDay, "POST", {});
+      const refreshedReport = await api<Report>("/reports/" + jobDay);
       await refresh(jobDay);
       if (a.analysis_required) {
         setNotice(a.warnings.join("；"));
         return;
+      }
+      resetDismissedWarning(jobDay);
+      const allReviewWarnings = [
+        ...new Set([
+          ...(a.warnings || []),
+          ...(refreshedReport.warnings || []),
+        ]),
+      ].filter(
+        (w) =>
+          !w.startsWith("已统计全天对话") &&
+          !w.startsWith("所选来源在当天没有"),
+      );
+      if (allReviewWarnings.length > 0) {
+        setReviewAlert({
+          day: jobDay,
+          warnings: allReviewWarnings,
+        });
       }
       const usage = a.usage
         ? `本次模型用量${a.usage.estimated ? "约 " : " "}${a.usage.total_tokens.toLocaleString("zh-CN")} tokens（输入 ${a.usage.prompt_tokens.toLocaleString("zh-CN")} / 输出 ${a.usage.completion_tokens.toLocaleString("zh-CN")}）。`
@@ -602,6 +653,22 @@ function App() {
                 />
                 {report?.confirmed ? "日报已确认" : "草稿 · 待审核"}
               </span>
+              {report?.warnings && report.warnings.length > 0 && (
+                <button
+                  type="button"
+                  className="warning-badge-pill"
+                  title="点击查看待审核提示"
+                  onClick={() =>
+                    setReviewAlert({
+                      day,
+                      warnings: [...new Set(report.warnings)],
+                    })
+                  }
+                >
+                  <AlertCircle size={12} />
+                  待审核提示
+                </button>
+              )}
             </div>
           )}
           {page === "daily" && report && (
@@ -937,7 +1004,7 @@ function App() {
                   </div>
                 )}
               </section>
-              {report.warnings.length > 0 && (
+              {!dismissedWarnings.has(day) && report.warnings.length > 0 && (
                 <div className="review-warning" role="alert">
                   <AlertCircle size={15} className="review-warning-icon" />
                   <div className="review-warning-body">
@@ -950,6 +1017,23 @@ function App() {
                     <span className="review-warning-hint">
                       可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
                     </span>
+                  </div>
+                  <div className="review-warning-actions">
+                    <button
+                      type="button"
+                      className="review-warning-ack"
+                      onClick={() => dismissWarning(day)}
+                    >
+                      我知道了
+                    </button>
+                    <button
+                      type="button"
+                      className="review-warning-close"
+                      aria-label="关闭提示"
+                      onClick={() => dismissWarning(day)}
+                    >
+                      <X size={14} />
+                    </button>
                   </div>
                 </div>
               )}
@@ -1310,13 +1394,76 @@ function App() {
           stale={analysisView.stale}
           onClose={() => setAnalysisView(null)}
           onImported={async () => {
+            const r = await api<Report>("/reports/" + analysisView.day);
             await refresh(analysisView.day);
+            if (r?.warnings?.length > 0) {
+              resetDismissedWarning(analysisView.day);
+              setReviewAlert({
+                day: analysisView.day,
+                warnings: [...new Set(r.warnings)],
+              });
+            }
+          }}
+        />
+      )}
+      {reviewAlert && (
+        <ReviewAlertModal
+          alert={reviewAlert}
+          onClose={() => {
+            dismissWarning(reviewAlert.day);
+            setReviewAlert(null);
           }}
         />
       )}
       {toast && (
         <JobToast toast={toast} onClose={() => setToast(null)} />
       )}
+    </div>
+  );
+}
+
+function ReviewAlertModal({
+  alert,
+  onClose,
+}: {
+  alert: { day: string; warnings: string[] };
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="待审核提示"
+      onClick={onClose}
+    >
+      <div
+        className="modal alert-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="alert-modal-badge">
+          <AlertCircle size={26} />
+        </div>
+        <h3 className="alert-modal-title">待审核提示</h3>
+        <div className="alert-modal-body">
+          {alert.warnings.map((w, i) => (
+            <div key={i} className="alert-modal-warning-item">
+              {w}
+            </div>
+          ))}
+          <p className="alert-modal-hint">
+            可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
+          </p>
+        </div>
+        <div className="alert-modal-actions">
+          <button className="primary" type="button" onClick={onClose}>
+            我知道了
+          </button>
+          <button className="outline" type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
