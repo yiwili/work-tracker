@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from awt.collectors import (AntigravityAdapter, CollectionCursor, DeepSeekHarnessAdapter,
-                            GeminiAdapter, QoderAdapter, SourceLocation,
+                            DoubaoAdapter, GeminiAdapter, QoderAdapter, SourceLocation,
                             TraeAdapter, WorkBuddyAdapter, zstandard)
 from awt.models import Settings
 
@@ -251,3 +251,37 @@ def test_gemini_reads_session_events(tmp_path):
     assert events[1].metadata['tool'] == 'run_command'
     assert events[2].summary == '开始接入 Gemini'
     assert events[3].summary == 'All tests passed'
+
+
+def test_doubao_reads_session_events(tmp_path):
+    session_file = tmp_path / 'Doubao' / 'session_1.jsonl'
+    write(session_file, [
+        {
+            'role': 'user', 'session_id': 'db-1', 'cwd': str(tmp_path),
+            'timestamp': '2026-11-04T03:00:00Z',
+            'content': '总结今日开发进展'
+        },
+        {
+            'role': 'assistant', 'session_id': 'db-1',
+            'timestamp': '2026-11-04T03:01:00Z',
+            'content': '今日已完成豆包桌面端接入',
+            'tool_calls': [
+                {'name': 'run_command', 'args': {'CommandLine': 'pytest tests/test_collectors.py'}}
+            ]
+        },
+        {
+            'type': 'tool_result', 'session_id': 'db-1',
+            'timestamp': '2026-11-04T03:02:00Z',
+            'output': '8 passed'
+        }
+    ])
+    adapter = DoubaoAdapter([tmp_path / 'Doubao'])
+    events = collect(adapter, session_file)
+
+    assert [e.kind for e in events] == ['user_prompt', 'shell_command', 'assistant_message', 'tool_result']
+    assert events[0].summary == '总结今日开发进展'
+    assert events[0].session_id == 'db-1'
+    assert events[1].kind == 'shell_command'
+    assert events[1].metadata['tool'] == 'run_command'
+    assert events[2].summary == '今日已完成豆包桌面端接入'
+    assert events[3].summary == '8 passed'

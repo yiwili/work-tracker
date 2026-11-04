@@ -11,7 +11,7 @@ class SourceConfig(BaseModel):
     paths: list[str] = Field(default_factory=list)
 
 
-CONVERSATION_SOURCES = ('codex', 'claude_code', 'antigravity', 'gemini', 'workbuddy_cn', 'workbuddy_intl',
+CONVERSATION_SOURCES = ('codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl',
                         'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl')
 
 # 旧版把国内外版合并成一个来源；读取旧设置时按路径拆到两个新来源。
@@ -34,6 +34,16 @@ def _gemini_source():
     return SourceConfig(paths=[
         str(Path.home() / ".gemini" / "tmp"),
         str(Path.home() / ".gemini" / "sessions"),
+    ])
+
+
+def _doubao_source():
+    local_app_data = Path.home() / "AppData" / "Local"
+    roaming_app_data = Path.home() / "AppData" / "Roaming"
+    return SourceConfig(paths=[
+        str(local_app_data / "Doubao"),
+        str(roaming_app_data / "DoubaoAI"),
+        str(roaming_app_data / "Doubao"),
     ])
 
 
@@ -211,6 +221,7 @@ class Settings(BaseModel):
     step_minutes: int = Field(default=15, ge=1, le=120)
     antigravity: SourceConfig = Field(default_factory=_antigravity_source)
     gemini: SourceConfig = Field(default_factory=_gemini_source)
+    doubao: SourceConfig = Field(default_factory=_doubao_source)
     claude_code: SourceConfig = Field(default_factory=SourceConfig)
     codex: SourceConfig = Field(default_factory=SourceConfig)
     workbuddy_cn: SourceConfig = Field(default_factory=_workbuddy_cn_source)
@@ -237,7 +248,7 @@ class Settings(BaseModel):
     auto_import_analysis: bool = False
     # 默认沿用原有行为：估算完成后直接写入工作项；关闭后先生成待应用预览。
     auto_apply_allocation: bool = True
-    analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
+    analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)
     history_reference: dict = Field(default_factory=dict)

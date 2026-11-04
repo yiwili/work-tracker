@@ -155,6 +155,7 @@ export type Settings = {
   step_minutes: number;
   antigravity: SourceConfig;
   gemini: SourceConfig;
+  doubao: SourceConfig;
   claude_code: SourceConfig;
   codex: SourceConfig;
   workbuddy_cn: SourceConfig;

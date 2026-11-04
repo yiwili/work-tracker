@@ -437,6 +437,86 @@ class GeminiAdapter(JSONLAdapter):
         return []
 
 
+class DoubaoAdapter(JSONLAdapter):
+    """豆包桌面端会话记录（%LOCALAPPDATA%/Doubao 或 %APPDATA%/DoubaoAI 下的会话/日志记录）。
+
+    支持豆包桌面端及导出会话格式（user / assistant / bot / tool），
+    每行一个对象，提取用户指令、模型回复及工具调用。
+    """
+
+    name = "doubao"
+
+    def normalize(self, raw, location):
+        row = raw.value
+        if "session_id" in row or "sessionId" in row:
+            self.session_id = str(row.get("session_id") or row.get("sessionId") or self.session_id)
+        if "cwd" in row or "workdir" in row:
+            self.cwd = str(row.get("cwd") or row.get("workdir") or self.cwd)
+
+        kind = str(row.get("type") or row.get("role") or "").lower()
+        ts = row.get("timestamp") or row.get("created_at") or row.get("create_time") or row.get("time") or row.get("ts")
+        if not ts:
+            return []
+
+        # 用户提问
+        if kind in ("user", "human", "user_input", "user_prompt"):
+            text = ""
+            if "content" in row:
+                text = content_text(row["content"])
+            elif "message" in row:
+                text = content_text(row["message"])
+            elif "text" in row:
+                text = str(row["text"])
+            elif "query" in row:
+                text = str(row["query"])
+            if not text.strip():
+                return []
+            return self.make(raw, location, "user_prompt", text.strip(), ts)
+
+        # 豆包回复
+        if kind in ("assistant", "bot", "doubao", "ai", "model"):
+            res = []
+            text_parts = []
+            if "content" in row:
+                text_parts.append(content_text(row["content"]))
+            elif "message" in row:
+                text_parts.append(content_text(row["message"]))
+            elif "text" in row:
+                text_parts.append(str(row["text"]))
+            elif "reply" in row:
+                text_parts.append(str(row["reply"]))
+
+            for tc in row.get("tool_calls") or row.get("plugin_calls") or []:
+                fname = tc.get("name") or (tc.get("function") or {}).get("name", "tool")
+                fargs = tc.get("args") or (tc.get("function") or {}).get("arguments", {})
+                ctx = tool_context(fargs, self.cwd)
+                is_shell = str(fname).lower() in ("run_command", "bash", "shell", "exec_command", "shell_command")
+                res += self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                                 f"{fname}\n{json.dumps(fargs, ensure_ascii=False) if isinstance(fargs, dict) else str(fargs)}",
+                                 ts, {"tool": fname, **ctx})
+
+            combined = "\n".join(t.strip() for t in text_parts if t.strip())
+            if combined:
+                res += self.make(raw, location, "assistant_message", combined, ts)
+            return res
+
+        # 工具调用与结果
+        if kind in ("tool_call", "function_call", "plugin_call"):
+            name = row.get("name") or (row.get("function") or {}).get("name", "tool")
+            args = row.get("args") or row.get("arguments") or (row.get("function") or {}).get("arguments", {})
+            ctx = tool_context(args, self.cwd)
+            is_shell = str(name).lower() in ("run_command", "bash", "shell", "exec_command", "shell_command")
+            rendered = f"{name}\n{json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)}"
+            return self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                             rendered, ts, {"tool": name, **ctx})
+
+        if kind in ("tool_result", "function_response", "plugin_result"):
+            output = row.get("response") or row.get("output") or row.get("content", "")
+            return self.make(raw, location, "tool_result", content_text(output), ts, {"tool": "tool", "event_cwd": self.cwd})
+
+        return []
+
+
 # WorkBuddy 会在用户消息前面塞一大段 <system-reminder>，里面是工作区、时间和身份注入。
 # 那是工具自己写的上下文，不是用户说的话；留着会把整段对话淹掉，必须先摘掉。
 SYSTEM_REMINDER = re.compile(r"<system-reminder\b[^>]*>.*?</system-reminder>", re.S)

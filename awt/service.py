@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db
 from .collectors import (ClaudeAdapter, CodexAdapter, AntigravityAdapter, GeminiAdapter,
-                         DeepSeekHarnessAdapter, QoderCnAdapter,
+                         DoubaoAdapter, DeepSeekHarnessAdapter, QoderCnAdapter,
                          QoderIntlAdapter, TraeCnAdapter, TraeIntlAdapter, WorkBuddyCnAdapter,
                          WorkBuddyIntlAdapter, CollectionCursor, stable)
 from .git_tools import collect_commits, day_bounds, exclusion_prefixes, excluded, resolve_project, filter_git_events
@@ -129,6 +129,7 @@ def collect(conn, day, progress=None):
         progress({"source": "", "files_done": 0, "files_total": 0, "new_events": 0})
     for cls, config in [(ClaudeAdapter, settings.claude_code), (CodexAdapter, settings.codex),
                         (AntigravityAdapter, settings.antigravity), (GeminiAdapter, settings.gemini),
+                        (DoubaoAdapter, settings.doubao),
                         (WorkBuddyCnAdapter, settings.workbuddy_cn), (WorkBuddyIntlAdapter, settings.workbuddy_intl),
                         (DeepSeekHarnessAdapter, settings.deepseek_harness),
                         (QoderCnAdapter, settings.qoder_cn), (QoderIntlAdapter, settings.qoder_intl),

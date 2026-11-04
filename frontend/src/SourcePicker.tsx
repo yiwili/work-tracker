@@ -15,6 +15,7 @@ import { SourceIcon } from "./SourceIcon";
 export const sourceKeys = [
   "antigravity",
   "gemini",
+  "doubao",
   "claude_code",
   "codex",
   "workbuddy_cn",
@@ -30,6 +31,7 @@ export type SourceKey = (typeof sourceKeys)[number];
 export const sourceLabels: Record<SourceKey, string> = {
   antigravity: "Antigravity",
   gemini: "Gemini",
+  doubao: "豆包桌面端",
   claude_code: "Claude Code",
   codex: "Codex",
   workbuddy_cn: "WorkBuddy 国内版",
