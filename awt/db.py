@@ -26,6 +26,7 @@ integrations = Table('integration_state', metadata, Column('id', String, primary
 allocation_requests = Table('allocation_requests', metadata, Column('id', String, primary_key=True), Column('payload_hash', String), Column('result', JSON))
 gitee_batches = Table('gitee_export_batches', metadata, Column('id', String, primary_key=True), Column('snapshot', JSON))
 gitee_links = Table('gitee_work_item_links', metadata, Column('id', String, primary_key=True), Column('enterprise_id', Integer), Column('task_id', String, index=True), Column('program_id', Integer), Column('status', String), Column('issue_id', String), Column('url', Text), Column('error', Text), Column('updated_at', String))
+model_usage = Table('model_usage', metadata, Column('id', String, primary_key=True), Column('recorded_at', String, index=True), Column('model', String), Column('purpose', String), Column('prompt_tokens', Integer, nullable=False, default=0), Column('completion_tokens', Integer, nullable=False, default=0), Column('calls', Integer, nullable=False, default=1, server_default='1'), Column('estimated', Boolean, nullable=False, default=False))
 
 
 def data_dir():

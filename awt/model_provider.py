@@ -13,9 +13,10 @@ from pathlib import Path
 import httpx
 
 from . import db
+from . import usage as usage_ledger
 from .collectors import stable
 from .models import Settings
-from .analysis_progress import current, emit
+from .analysis_progress import begin_stream, current, emit, stream_delta, stream_usage
 
 GLM_MODELS = [
     {'id': 'glm-5.3-flash', 'label': 'GLM-5.3-Flash'},
@@ -88,16 +89,17 @@ def _estimate_tokens(text):
 
 
 def _record_usage(purpose, model, system, input_text, output_text, usage):
-    calls=_usage_calls.get()
-    if calls is None:
-        return
     prompt=(usage or {}).get('prompt')
     completion=(usage or {}).get('completion')
     estimated=prompt is None or completion is None
-    calls.append({'purpose':purpose or 'general','model':model,
-                  'prompt_tokens':prompt if prompt is not None else _estimate_tokens(system)+_estimate_tokens(input_text),
-                  'completion_tokens':completion if completion is not None else _estimate_tokens(output_text),
-                  'estimated':estimated})
+    entry={'purpose':purpose or 'general','model':model,
+           'prompt_tokens':prompt if prompt is not None else _estimate_tokens(system)+_estimate_tokens(input_text),
+           'completion_tokens':completion if completion is not None else _estimate_tokens(output_text),
+           'estimated':estimated}
+    calls=_usage_calls.get()
+    if calls is not None:
+        calls.append(entry)
+    usage_ledger.record_call(entry)
 
 
 def usage_summary(calls=None):
@@ -139,11 +141,10 @@ def truncated(purpose, budget):
 
 
 def stream_text(lines, protocol, purpose, budget):
-    """Read complete SSE messages; discard thinking and reject partial streams."""
+    """Read complete SSE messages and publish thinking/output deltas for the live window."""
     parts=[];data=[];reason=None;done=False;usage={'prompt':None,'completion':None}
     thinking_chars = 0
     output_chars = 0
-    last_update = 0
     def events():
         for line in lines:
             if not line:
@@ -157,20 +158,21 @@ def stream_text(lines, protocol, purpose, budget):
             value=json.loads(payload)
             if value.get('type')=='error' or 'error' in value:
                 raise ModelError('模型流式响应发生错误；原任务已保留，不会自动重复请求')
-            # Expose counters and activity only, never internal reasoning or task JSON.
             if protocol == 'anthropic':
                 delta = value.get('delta', {})
                 block = value.get('content_block', {})
-                thinking_chars += len(delta.get('thinking', '') or '') + len(block.get('thinking', '') or '')
-                output_chars += len(delta.get('text', '') or '') + len(block.get('text', '') or '')
+                thinking = (delta.get('thinking', '') or '') + (block.get('thinking', '') or '')
+                output = (delta.get('text', '') or '') + (block.get('text', '') or '')
             else:
+                thinking = ''
+                output = ''
                 for choice in value.get('choices', []):
                     delta = choice.get('delta', {})
-                    thinking_chars += len(delta.get('reasoning_content', '') or '')
-                    output_chars += len(delta.get('content', '') or '')
-            if monotonic() - last_update >= 1:
-                emit(f'模型正在{"输出结果" if output_chars else "思考" if thinking_chars else "处理请求"}：思考已接收 {thinking_chars} 字符，结果已接收 {output_chars} 字符', replace=True)
-                last_update = monotonic()
+                    thinking += delta.get('reasoning_content', '') or ''
+                    output += delta.get('content', '') or ''
+            thinking_chars += len(thinking)
+            output_chars += len(output)
+            stream_delta(thinking, output)
             if protocol=='anthropic':
                 kind=value.get('type')
                 if kind=='content_block_start' and value.get('content_block',{}).get('type')=='text':
@@ -181,10 +183,12 @@ def stream_text(lines, protocol, purpose, budget):
                     reported=value.get('message',{}).get('usage') or {}
                     if reported.get('input_tokens') is not None:usage['prompt']=reported['input_tokens']
                     if reported.get('output_tokens') is not None:usage['completion']=reported['output_tokens']
+                    stream_usage(prompt=usage['prompt'],completion=usage['completion'])
                 elif kind=='message_delta':
                     reason=value.get('delta',{}).get('stop_reason',reason)
                     reported=value.get('usage') or {}
                     if reported.get('output_tokens') is not None:usage['completion']=reported['output_tokens']
+                    stream_usage(completion=usage['completion'])
                 elif kind=='message_stop':done=True
                 if reason=='max_tokens':raise truncated(purpose,budget)
             else:
@@ -192,6 +196,7 @@ def stream_text(lines, protocol, purpose, budget):
                 if isinstance(reported,dict):
                     if reported.get('prompt_tokens') is not None:usage['prompt']=reported['prompt_tokens']
                     if reported.get('completion_tokens') is not None:usage['completion']=reported['completion_tokens']
+                    stream_usage(prompt=usage['prompt'],completion=usage['completion'])
                 for choice in value.get('choices',[]):
                     content=choice.get('delta',{}).get('content')
                     if content is not None:parts.append(content)
@@ -366,6 +371,8 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
     if current.get() is not None and purpose in ('scope_filter', 'task_writer'):
         body['stream'] = True
     started = monotonic()
+    if body['stream'] and current.get() is not None:
+        begin_stream(c['model'], _estimate_tokens(system) + _estimate_tokens(text))
     emit(f'请求模型 {c["model"]}，输入 {len(system) + len(text)} 字符，等待响应')
     # Slow reasoning providers may not emit a non-stream response for a while. No automatic paid retry.
     try:
@@ -404,6 +411,9 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
             usage = {'prompt':reported.get('prompt_tokens'),'completion':reported.get('completion_tokens')}
         if require_text and (not isinstance(answer, str) or not answer.strip()):
             raise ModelError('模型未返回可用文本；原任务已保留')
+        if body['stream'] and current.get() is not None:
+            stream_delta(output=answer)
+            stream_usage(prompt=usage.get('prompt'), completion=usage.get('completion'))
         emit(f'本次模型请求完成，耗时 {monotonic() - started:.1f} 秒，返回 {len(answer)} 字符')
         _record_usage(purpose,c['model'],system,text,answer,usage)
         return answer

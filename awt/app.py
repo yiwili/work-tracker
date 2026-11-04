@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import date
 from pathlib import Path
 from threading import Lock
+from typing import Literal
 import asyncio
 import logging
 from contextlib import suppress
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
+from . import usage
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
@@ -25,10 +27,12 @@ from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,Gi
 
 def create_app(engine=None):
     engine = engine or db.make_engine()
+    usage.bind(engine)
 
     @asynccontextmanager
     async def lifespan(app):
         db.migrate(engine)
+        usage.backfill(engine)
         async def poll():
             while True:
                 try:
@@ -103,6 +107,11 @@ def create_app(engine=None):
     def settings():
         with engine.connect() as conn:
             return service.get_settings(conn)
+
+    @app.get('/api/usage/stats')
+    def usage_stats(period: Literal['day', 'week', 'month', 'year', 'all'] = 'day'):
+        with engine.connect() as conn:
+            return usage.report(conn, period, service.get_settings(conn).timezone)
 
     @app.put('/api/settings')
     def put_settings(payload: Settings):
@@ -364,7 +373,10 @@ def create_app(engine=None):
     @app.get('/api/analysis/progress')
     def analysis_status(date: date):
         progress = analysis_runs.get(date)
-        return progress.snapshot() if progress else {'state': 'idle', 'elapsed_seconds': 0, 'logs': []}
+        return progress.snapshot() if progress else {
+            'state': 'idle', 'elapsed_seconds': 0, 'logs': [], 'thinking': '', 'thinking_live': False, 'model': '',
+            'thinking_seconds': 0,
+            'tokens': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0, 'estimated': False}}
 
     @app.post('/api/analyze')
     def analyze(date: date):

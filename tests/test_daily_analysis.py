@@ -508,7 +508,7 @@ def test_analysis_progress_visible_while_running_isolated_and_retained_on_failur
 
 
 @pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
-def test_progress_arrives_before_stream_finishes_without_exposing_reasoning(monkeypatch, protocol):
+def test_progress_arrives_before_stream_finishes_with_live_thinking(monkeypatch, protocol):
     from awt.analysis_progress import Progress, track
     progress = Progress()
     monkeypatch.setattr(model_provider, 'connection', lambda s: {
@@ -523,9 +523,10 @@ def test_progress_arrives_before_stream_finishes_without_exposing_reasoning(monk
     class Stream(httpx.SyncByteStream):
         def __iter__(self):
             yield ('data: ' + json.dumps(first) + '\n\n').encode()
-            snapshot = json.dumps(progress.snapshot(), ensure_ascii=False)
-            assert '思考已接收 17 字符' in snapshot
-            assert 'private-reasoning' not in snapshot and 'private-key' not in snapshot
+            live = progress.snapshot()
+            assert live['thinking'] == 'private-reasoning'
+            assert live['thinking_live'] is True
+            assert 'private-key' not in json.dumps(live)
             for item in rest:
                 yield ('data: ' + json.dumps(item) + '\n\n').encode()
             if protocol == 'openai': yield b'data: [DONE]\n\n'
@@ -536,5 +537,8 @@ def test_progress_arrives_before_stream_finishes_without_exposing_reasoning(monk
     monkeypatch.setattr(model_provider.httpx, 'Client', lambda **kw: base_client(transport=httpx.MockTransport(respond), **kw))
     with track(progress):
         assert model_provider.complete(Settings(), 'private-prompt', 'private-input', purpose='task_writer') == 'OK'
-    snapshot = json.dumps(progress.snapshot())
-    assert all(secret not in snapshot for secret in ('private-prompt', 'private-input', 'private-reasoning', 'private-key'))
+    final = progress.snapshot()
+    assert final['thinking'] == 'private-reasoning'
+    assert final['thinking_live'] is False
+    snapshot = json.dumps(final)
+    assert all(secret not in snapshot for secret in ('private-prompt', 'private-input', 'private-key'))
