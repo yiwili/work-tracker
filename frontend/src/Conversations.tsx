@@ -1,9 +1,20 @@
-import { Activity, ArrowUpRight, LoaderCircle, Sparkles, Settings2 } from "lucide-react";
+import { useState } from "react";
+import {
+  Activity,
+  ArrowUpRight,
+  Check,
+  LoaderCircle,
+  Plus,
+  Settings2,
+  Sparkles,
+} from "lucide-react";
 import type { ConversationOverview, Settings } from "./types";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
 import { AnalysisLog } from "./AnalysisLog";
+
 const formatTokens = (value: number) => value.toLocaleString("zh-CN");
+
 const names: Record<string, string> = {
   ...sourceLabels,
   trae_cn: "Trae 国内版",
@@ -39,19 +50,68 @@ export function Conversations({
   onView: (source: string, session: string) => void;
   onViewPending: () => void;
 }) {
+  const [sourceTab, setSourceTab] = useState<"ready" | "all">("ready");
+
   const messages = overview.user_messages + overview.assistant_messages;
-  const gitEvents = overview.sources.find((s) => s.source === "git")?.events ?? 0;
+  const gitSource = overview.sources.find((s) => s.source === "git");
+  const gitEvents = gitSource?.events ?? 0;
+  const isGitChecked = settings.analysis_sources.includes("git");
+
+  // 分离 AI Agent 对话来源与 Git 辅助证据来源
+  const agentSources = overview.sources.filter((s) => s.source !== "git");
+  const detectedAgents = agentSources.filter((s) => s.detected ?? false);
+  const undetectedAgents = agentSources.filter((s) => !(s.detected ?? false));
+  const activeAgentCount = detectedAgents.filter((s) =>
+    settings.analysis_sources.includes(s.source),
+  ).length;
+
+  const displayedAgents = sourceTab === "ready" ? detectedAgents : agentSources;
+
   // 只有 Git 提交时 AI 分析一定是灰的：后端也要求当天存在对话才归纳。
   // 不解释一句，用户会以为按钮坏了或者自己点漏了。
   const onlyGit = messages === 0 && gitEvents > 0;
   const noConversationSource = !settings.analysis_sources.some(
     (source) => source !== "git",
   );
+
+  const handleSelectAll = () => {
+    const detectedKeys = detectedAgents.map((s) => s.source);
+    const gitPart = isGitChecked ? ["git"] : [];
+    onSources([...gitPart, ...detectedKeys]);
+  };
+
+  const handleSelectWithData = () => {
+    const withData = detectedAgents
+      .filter((s) => s.sessions > 0)
+      .map((s) => s.source);
+    const gitPart = isGitChecked && gitEvents > 0 ? ["git"] : [];
+    onSources([...gitPart, ...withData]);
+  };
+
+  const handleClearAll = () => {
+    const gitPart = isGitChecked ? ["git"] : [];
+    onSources(gitPart);
+  };
+
+  const handleToggleAgent = (sourceKey: string, checked: boolean) => {
+    const detectedKeys = new Set(detectedAgents.map((s) => s.source));
+    if (!detectedKeys.has(sourceKey) && checked) {
+      return; // 未检测到的 Agent 不可勾选参与分析
+    }
+    const updated = checked
+      ? [...settings.analysis_sources, sourceKey]
+      : settings.analysis_sources.filter((x) => x !== sourceKey);
+    onSources(updated.filter((x) => x === "git" || detectedKeys.has(x)));
+  };
+
   return (
     <section className="conversations-panel">
       <div className="section-head">
-        <div>
+        <div className="section-head-title-wrap">
           <h2>对话与来源</h2>
+          <span className="source-summary-pill">
+            {detectedAgents.length} 个 Agent 已连接 · {activeAgentCount} 个参与分析
+          </span>
         </div>
         <div className="conversation-actions">
           {!settings.auto_import_analysis && (
@@ -106,51 +166,170 @@ export function Conversations({
           {`已采集到 ${gitEvents} 条 Git 提交，但 AI 归纳需要当天的对话记录。请到「系统设置」配置可读的对话日志目录，或在下方用「添加人工事项」手工记录今天的工作。`}
         </p>
       )}
-      <div className="conversation-sources">
-        {overview.sources
-          .filter((s) => s.detected ?? true)
-          .map((s) => {
-            const count = s.source === "git" ? s.events : s.sessions;
-            const isChecked = settings.analysis_sources.includes(s.source);
-            return (
-              <label
-                className={
-                  "check-label" +
-                  (isChecked ? " active" : "") +
-                  (count > 0 ? " has-data" : "")
-                }
-                key={s.source}
-              >
-                <input
-                  type="checkbox"
-                  checked={isChecked}
-                  disabled={busy}
-                  onChange={(e) => {
-                    const detectedKeys = new Set(
-                      overview.sources
-                        .filter((item) => item.detected ?? true)
-                        .map((item) => item.source),
-                    );
-                    const updated = e.target.checked
-                      ? [...settings.analysis_sources, s.source]
-                      : settings.analysis_sources.filter((x) => x !== s.source);
-                    onSources(updated.filter((x) => detectedKeys.has(x)));
-                  }}
-                />
-                <SourceIcon source={s.source} size={15} />
-                <span className="source-name-text">{names[s.source] || s.source}</span>
-                <small>
-                  {count > 0
-                    ? s.source === "git"
-                      ? `${s.events}`
-                      : `${s.sessions} 会话`
-                    : "0"}
-                </small>
-              </label>
-            );
-          })}
+
+      {/* 顶部控制栏：苹果风格分段切换与快捷操作 */}
+      <div className="source-segmented-toolbar">
+        <div className="apple-segmented-group" role="tablist">
+          <button
+            type="button"
+            className={`apple-segmented-btn ${sourceTab === "ready" ? "active" : ""}`}
+            onClick={() => setSourceTab("ready")}
+          >
+            本机就绪 ({detectedAgents.length})
+          </button>
+          <button
+            type="button"
+            className={`apple-segmented-btn ${sourceTab === "all" ? "active" : ""}`}
+            onClick={() => setSourceTab("all")}
+          >
+            全部支持 ({agentSources.length})
+          </button>
+        </div>
+
+        <div className="source-quick-actions">
+          <button
+            type="button"
+            className="source-quick-btn"
+            disabled={busy || detectedAgents.length === 0}
+            onClick={handleSelectAll}
+          >
+            全选
+          </button>
+          <span className="source-quick-sep">·</span>
+          <button
+            type="button"
+            className="source-quick-btn"
+            disabled={busy}
+            onClick={handleSelectWithData}
+          >
+            仅选有数据
+          </button>
+          <span className="source-quick-sep">·</span>
+          <button
+            type="button"
+            className="source-quick-btn"
+            disabled={busy}
+            onClick={handleClearAll}
+          >
+            清空
+          </button>
+        </div>
       </div>
-      <div className="conversation-total">
+
+      {/* AI Agent 网格展示 */}
+      <div className="conversation-sources-grid">
+        {displayedAgents.map((s) => {
+          const isDetected = s.detected ?? false;
+          const isChecked = settings.analysis_sources.includes(s.source);
+          const count = s.sessions;
+
+          if (!isDetected) {
+            return (
+              <div
+                className="agent-card unconfigured"
+                key={s.source}
+                onClick={onSettings}
+                role="button"
+                tabIndex={0}
+                title="本机未检测到该 Agent 日志路径，点击前往系统设置配置"
+              >
+                <div className="apple-checkbox-circle disabled" />
+                <SourceIcon source={s.source} size={18} />
+                <span className="agent-card-title">{names[s.source] || s.source}</span>
+                <span className="unconfigured-tag">
+                  未配置 <Settings2 size={11} />
+                </span>
+              </div>
+            );
+          }
+
+          return (
+            <label
+              className={`agent-card ${isChecked ? "active" : ""} ${count > 0 ? "has-data" : ""}`}
+              key={s.source}
+            >
+              <input
+                type="checkbox"
+                checked={isChecked}
+                disabled={busy}
+                onChange={(e) => handleToggleAgent(s.source, e.target.checked)}
+              />
+              <div className="apple-checkbox-circle">
+                {isChecked && <Check size={11} strokeWidth={3} />}
+              </div>
+              <SourceIcon source={s.source} size={18} />
+              <span className="agent-card-title">{names[s.source] || s.source}</span>
+              <span className={`count-tag ${count > 0 ? "has-data" : ""}`}>
+                {count > 0 ? (
+                  <>
+                    <span className="live-dot" />
+                    {count} 会话
+                  </>
+                ) : (
+                  "0"
+                )}
+              </span>
+            </label>
+          );
+        })}
+
+        {sourceTab === "ready" && undetectedAgents.length > 0 && (
+          <div
+            className="agent-card discover-more"
+            onClick={() => setSourceTab("all")}
+            role="button"
+            tabIndex={0}
+            title="查看全部支持的 Agent"
+          >
+            <div className="discover-icon-wrap">
+              <Plus size={14} />
+            </div>
+            <span className="agent-card-title">更多 Agent</span>
+            <span className="discover-tag">{undetectedAgents.length} 个未配置</span>
+          </div>
+        )}
+      </div>
+
+      {/* 辅助证据：Git 提交 */}
+      {gitSource && (gitSource.detected ?? true) && (
+        <div className="auxiliary-evidence-section">
+          <label
+            className={`git-evidence-card ${isGitChecked ? "active" : ""} ${gitEvents > 0 ? "has-data" : ""}`}
+          >
+            <input
+              type="checkbox"
+              checked={isGitChecked}
+              disabled={busy}
+              onChange={(e) => {
+                const next = e.target.checked
+                  ? [...settings.analysis_sources, "git"]
+                  : settings.analysis_sources.filter((x) => x !== "git");
+                onSources(next);
+              }}
+            />
+            <div className="apple-checkbox-circle">
+              {isGitChecked && <Check size={11} strokeWidth={3} />}
+            </div>
+            <SourceIcon source="git" size={17} />
+            <div className="git-evidence-text">
+              <strong className="git-title">Git 仓库代码提交</strong>
+              <span className="git-sub">代码变更辅助归纳证据，不单独作为工作会话</span>
+            </div>
+            <span className={`count-tag ${gitEvents > 0 ? "has-data" : ""}`}>
+              {gitEvents > 0 ? (
+                <>
+                  <span className="live-dot" />
+                  {gitEvents} 提交
+                </>
+              ) : (
+                "今日无提交"
+              )}
+            </span>
+          </label>
+        </div>
+      )}
+
+      <div className="conversation-total apple-metrics-bar">
         <Activity size={17} />
         <span>
           本次范围：<strong>{overview.session_count} 个会话</strong>，
