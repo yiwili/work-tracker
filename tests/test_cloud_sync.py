@@ -3,14 +3,22 @@ import sys
 from pathlib import Path
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
-from awt import cloud_sync, db, service
+from awt import cloud_sync, db, service, gitee
 from awt.cloud_client import CloudClient
 from awt.models import Settings, TaskInput, TaskPatch, GiteeProjectRule
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fake_cloud import FakeCloudServer
+
+
+@pytest.fixture(autouse=True)
+def isolate_awt_data_dir(tmp_path, monkeypatch):
+    data_dir = tmp_path / "awt_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AWT_DATA_DIR", str(data_dir))
+    return data_dir
 
 
 @pytest.fixture
@@ -315,7 +323,6 @@ def test_cloud_coordinated_publish(make_desktop, fake_cloud, monkeypatch):
     from awt.models import GiteePreviewInput, GiteePublishInput, GiteeExportTarget
 
     prev = gitee_enterprise.preview(eng, GiteePreviewInput(date=date(2026, 11, 6)), cloud_client=client)
-    assert prev['batch_id'] in server.batches
 
     pub_res = gitee_enterprise.publish(eng, GiteePublishInput(
         batch_id=prev['batch_id'],
@@ -323,8 +330,198 @@ def test_cloud_coordinated_publish(make_desktop, fake_cloud, monkeypatch):
         targets=[GiteeExportTarget(task_id=task_id, program_id=101, issue_type_id=1)],
     ), cloud_client=client)
 
+    assert prev['batch_id'] in server.batches
     assert pub_res['created'] == 1
     matched_req = next((r for r in server.requests.values() if r.get('work_item_id') == task_id), None)
     assert matched_req is not None
     assert matched_req['status'] == 'succeeded'
 
+
+
+def test_push_does_not_advance_pull_cursor_skipping_remote_changes(make_desktop, fake_cloud):
+    server, _ = fake_cloud
+    engA, clientA = make_desktop("desktopA")
+    engB, clientB = make_desktop("desktopB")
+
+    cloud_sync.bind(engA, "https://cloud.awt.local", "user@example.com", "password123", "Desktop A", client=clientA)
+    clientA.token = "wts_sessionA"
+    server.sessions["wts_sessionA"] = {'account_id': 'acc-1', 'device_id': 'devA'}
+
+    cloud_sync.bind(engB, "https://cloud.awt.local", "user@example.com", "password123", "Desktop B", client=clientB)
+    clientB.token = "wts_sessionB"
+    server.sessions["wts_sessionB"] = {'account_id': 'acc-1', 'device_id': 'devB'}
+
+    # 1. Desktop A creates task Alpha and syncs
+    with engA.begin() as conn:
+        task_a = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Task Alpha", confirmed_minutes=60))
+    resA = cloud_sync.sync_once(engA, clientA)
+    assert resA['applied'] == 1
+
+    # 2. Desktop B creates task Beta locally BEFORE pulling task Alpha
+    with engB.begin() as conn:
+        task_b = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Task Beta", confirmed_minutes=45))
+
+    # 3. Desktop B syncs. Push sends Beta; Pull cursor must NOT be advanced by push so it still pulls Alpha!
+    resB = cloud_sync.sync_once(engB, clientB)
+    assert resB['applied'] == 1
+    assert resB['pulled'] >= 1
+
+    # Verify Desktop B now has BOTH task Alpha and task Beta!
+    with engB.connect() as conn:
+        task_ids = set(conn.execute(select(db.tasks.c.id)).scalars())
+        assert task_a in task_ids
+        assert task_b in task_ids
+
+
+def test_concurrent_edit_during_in_flight_push_preserves_newer_edit(make_desktop, fake_cloud):
+    server, _ = fake_cloud
+    eng, client = make_desktop("desktopA")
+
+    cloud_sync.bind(eng, "https://cloud.awt.local", "user@example.com", "password123", "Desktop A", client=client)
+    client.token = "wts_sessionA"
+    server.sessions["wts_sessionA"] = {'account_id': 'acc-1', 'device_id': 'devA'}
+
+    with eng.begin() as conn:
+        task_id = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Concurrent Edit Task", confirmed_minutes=90))
+
+    # Hook client.push to simulate the user modifying the task from 90 to 120 while push is in flight
+    orig_push = client.push
+    def hooked_push(ops):
+        with eng.begin() as conn:
+            existing = service.get_task(conn, task_id)
+            existing['confirmed_minutes'] = 120
+            existing['time_locked'] = True
+            service.save_task(conn, TaskInput.model_validate(existing), task_id)
+        return orig_push(ops)
+
+    client.push = hooked_push
+
+    res = cloud_sync.sync_once(eng, client)
+    assert res['applied'] == 1
+
+    # Local value must remain 120 (not overwritten back to 90 by the push response!)
+    with eng.connect() as conn:
+        row = conn.execute(select(db.worklogs.c.confirmed_minutes).where(db.worklogs.c.task_id == task_id)).scalar()
+        assert row == 120
+
+        # sync_dirty must still have a dirty entry for this task
+        dirty = conn.execute(select(db.sync_dirty.c.seq).where(and_(
+            db.sync_dirty.c.entity_type == 'work_item',
+            db.sync_dirty.c.entity_id == task_id,
+        ))).scalar()
+        assert dirty is not None
+
+    # Restore orig_push and run second sync: 120 gets pushed to server
+    client.push = orig_push
+    res2 = cloud_sync.sync_once(eng, client)
+    assert res2['applied'] == 1
+
+    # Server entity now has confirmed_minutes = 120
+    ent = server.entities.get(('acc-1', 'work_item', task_id))
+    assert ent is not None
+    assert ent['fields']['confirmed_minutes'] == 120
+
+
+def test_publish_aborts_with_zero_gitee_calls_on_offline_401_or_claim_conflict(make_desktop, fake_cloud, monkeypatch):
+    server, _ = fake_cloud
+    eng, client = make_desktop("desktopA")
+
+    cloud_sync.bind(eng, "https://cloud.awt.local", "user@example.com", "password123", "Desktop A", client=client)
+    client.token = "wts_sessionA"
+    server.sessions["wts_sessionA"] = {'account_id': 'acc-1', 'device_id': 'devA'}
+
+    with eng.begin() as conn:
+        cloud_sync.set_meta(conn, 'unified_publish_enabled', True)
+        s = service.get_settings(conn)
+        s.gitee_enterprise.enterprise_id = 88888
+        service.save_settings(conn, s)
+        task_id = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Guarded Task", confirmed_minutes=60))
+
+    gitee_calls = []
+    monkeypatch.setattr("awt.gitee_enterprise.programs", lambda ent_id: [{'id': 101, 'name': 'Prog', 'ident': 'P', 'status': 0}])
+    monkeypatch.setattr("awt.gitee_enterprise.issue_types", lambda ent_id, prog_id: [{'id': 1, 'name': '任务'}])
+    monkeypatch.setattr("awt.gitee_enterprise.token", lambda: "fake-gitee-token")
+    def fake_tool(tool, args, **kwargs):
+        gitee_calls.append(tool)
+        return {'id': 12345, 'issue_url': 'https://gitee.com/ent/issue/12345'}
+    monkeypatch.setattr("awt.gitee_enterprise._tool", fake_tool)
+
+    from awt import gitee_enterprise
+    from awt.models import GiteePreviewInput, GiteePublishInput, GiteeExportTarget
+    from awt.cloud_client import CloudUnavailable, CloudError
+
+    prev = gitee_enterprise.preview(eng, GiteePreviewInput(date=date(2026, 11, 6)), cloud_client=client)
+
+    # 1. Simulate Offline / CloudUnavailable -> 0 Gitee calls
+    def offline_batch(*args, **kwargs):
+        raise CloudUnavailable("network down")
+    monkeypatch.setattr(client, "register_publish_batch", offline_batch)
+
+    with pytest.raises(gitee_enterprise.EnterpriseError):
+        gitee_enterprise.publish(eng, GiteePublishInput(
+            batch_id=prev['batch_id'],
+            confirmed=True,
+            targets=[GiteeExportTarget(task_id=task_id, program_id=101, issue_type_id=1)],
+        ), cloud_client=client)
+    assert len(gitee_calls) == 0
+
+    # 2. Simulate 401 Unauthorized -> 0 Gitee calls
+    def auth_fail_batch(*args, **kwargs):
+        raise CloudError(401, "unauthorized", "session expired")
+    monkeypatch.setattr(client, "register_publish_batch", auth_fail_batch)
+
+    with pytest.raises(gitee_enterprise.EnterpriseError):
+        gitee_enterprise.publish(eng, GiteePublishInput(
+            batch_id=prev['batch_id'],
+            confirmed=True,
+            targets=[GiteeExportTarget(task_id=task_id, program_id=101, issue_type_id=1)],
+        ), cloud_client=client)
+    assert len(gitee_calls) == 0
+
+    # 3. Simulate claim conflict (e.g. 409 claimed by cloud or another device) -> 0 Gitee calls
+    monkeypatch.undo()
+    monkeypatch.setattr("awt.gitee_enterprise.programs", lambda ent_id: [{'id': 101, 'name': 'Prog', 'ident': 'P', 'status': 0}])
+    monkeypatch.setattr("awt.gitee_enterprise.issue_types", lambda ent_id, prog_id: [{'id': 1, 'name': '任务'}])
+    monkeypatch.setattr("awt.gitee_enterprise.token", lambda: "fake-gitee-token")
+    monkeypatch.setattr("awt.gitee_enterprise._tool", fake_tool)
+
+    def conflict_claim(req_id):
+        raise CloudError(409, "already_claimed", "claimed by another device")
+    monkeypatch.setattr(client, "claim_publish_request", conflict_claim)
+
+    pub_res = gitee_enterprise.publish(eng, GiteePublishInput(
+        batch_id=prev['batch_id'],
+        confirmed=True,
+        targets=[GiteeExportTarget(task_id=task_id, program_id=101, issue_type_id=1)],
+    ), cloud_client=client)
+
+    assert len(gitee_calls) == 0
+    assert pub_res['failed'] == 1
+
+
+def test_session_token_never_falls_back_to_gitee_access_token(monkeypatch):
+    monkeypatch.setenv("GITEE_ACCESS_TOKEN", "sensitive-gitee-token")
+    monkeypatch.setenv("GITEE_ENTERPRISE_TOKEN", "sensitive-ent-token")
+
+    # Cloud session token must return empty string when no session file exists
+    assert gitee.token(service='cloud-session') == ""
+
+    # Gitee token still returns the configured gitee token
+    assert gitee.token(service='gitee') == "sensitive-gitee-token"
+    assert gitee.token(service='gitee-enterprise') == "sensitive-ent-token"
+
+
+def test_cloud_client_enforces_https_for_non_loopback():
+    with pytest.raises(ValueError, match="必须使用 HTTPS 协议"):
+        CloudClient(base_url="http://remote-server.com")
+
+    # Local loopbacks are allowed with http
+    c1 = CloudClient(base_url="http://127.0.0.1:8765")
+    assert c1.base_url == "http://127.0.0.1:8765"
+
+    c2 = CloudClient(base_url="http://localhost:8765")
+    assert c2.base_url == "http://localhost:8765"
+
+    # HTTPS is allowed
+    c3 = CloudClient(base_url="https://remote-server.com")
+    assert c3.base_url == "https://remote-server.com"

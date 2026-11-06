@@ -224,22 +224,35 @@ class FakeCloudServer:
         if path == '/api/v1/publish/batches' and method == 'POST':
             batch_id = body.get('idempotency_key') or body.get('batch_id')
             items = []
+            requests_list = []
             for it in body.get('items', []):
-                req_id = it.get('request_id') or it.get('work_item_id') or str(uuid4())
+                req_id = it.get('request_id') or str(uuid4())
                 req = {
+                    'id': req_id,
                     'request_id': req_id,
                     'batch_id': batch_id,
                     'account_id': acc_id,
                     'work_item_id': it.get('work_item_id'),
+                    'work_item_version': it.get('work_item_version', 1),
                     'target_scope': it.get('target_scope'),
+                    'operation': it.get('operation', 'create'),
+                    'operation_adjusted': False,
+                    'remote_id': it.get('remote_id', ''),
+                    'url': '',
+                    'target': it.get('target', {}),
+                    'payload': it.get('payload', {}),
+                    'config_versions': it.get('config_versions', {}),
                     'status': 'registered',
+                    'state': 'registered',
                     'claimed_by_device': None,
                     'created_at': datetime.now(timezone.utc).isoformat(),
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
                 }
                 self.requests[req_id] = req
-                items.append({'request_id': req_id, 'status': 'registered', 'target_scope': it.get('target_scope')})
-            self.batches[batch_id] = {'batch_id': batch_id, 'account_id': acc_id, 'status': 'active'}
-            return httpx.Response(200, json={'batch_id': batch_id, 'status': 'active', 'items': items})
+                items.append({'id': req_id, 'request_id': req_id, 'status': 'registered', 'state': 'registered', 'target_scope': it.get('target_scope'), 'work_item_id': it.get('work_item_id')})
+                requests_list.append(req)
+            self.batches[batch_id] = {'id': batch_id, 'batch_id': batch_id, 'account_id': acc_id, 'status': 'active'}
+            return httpx.Response(201, json={'id': batch_id, 'batch_id': batch_id, 'status': 'active', 'items': items, 'requests': requests_list})
 
         # Publish Request Claim
         if path.startswith('/api/v1/publish/requests/') and path.endswith('/claim') and method == 'POST':

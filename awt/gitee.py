@@ -35,7 +35,11 @@ def token(service='gitee'):
         try:
             return model_provider._crypt(base64.b64decode(json.loads(path.read_text())['encrypted']),decrypt=True).decode()
         except (ValueError,KeyError,OSError):
+            if service == 'cloud-session':
+                return ''
             raise ValueError('Gitee本机凭据无法读取，请重新保存Token') from None
+    if service == 'cloud-session':
+        return ''
     if service=='gitee':
         ent_path=db.data_dir()/'gitee-enterprise-credential.json'
         if ent_path.exists():

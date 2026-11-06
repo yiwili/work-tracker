@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 import time
 from typing import Any
 from uuid import uuid4
@@ -22,6 +22,7 @@ from .collectors import stable
 from .models import Settings
 
 logger = logging.getLogger('awt.cloud_sync')
+sync_lock = RLock()
 
 
 def now_iso() -> str:
@@ -305,6 +306,11 @@ def apply_remote_gitee_link(conn, link_id: str, fields: dict) -> None:
 
 def sync_once(engine, client: CloudClient) -> dict:
     """Executes a single two-way sync cycle. Network calls are made outside DB transactions."""
+    with sync_lock:
+        return _sync_once_locked(engine, client)
+
+
+def _sync_once_locked(engine, client: CloudClient) -> dict:
     with engine.begin() as conn:
         bound = get_meta(conn, 'bound', False)
         if not bound:
@@ -486,15 +492,35 @@ def sync_once(engine, client: CloudClient) -> dict:
                         if status == 'applied' and res.get('entity'):
                             applied_count += 1
                             ent = res['entity']
-                            apply_pulled_entity(conn, ent)
+                            # Check whether a newer local modification arrived while push was in-flight
+                            current_dirty_seq = conn.execute(
+                                select(db.sync_dirty.c.seq).where(and_(
+                                    db.sync_dirty.c.entity_type == op_row['entity_type'],
+                                    db.sync_dirty.c.entity_id == op_row['entity_id'],
+                                ))
+                            ).scalar_one_or_none()
+
+                            # Always update shadow to server-applied version and fields
+                            service.upsert(conn, db.sync_shadow, {
+                                'entity_type': ent['entity_type'],
+                                'entity_id': ent['entity_id'],
+                                'version': ent['version'],
+                                'fields': ent['fields'],
+                            }, ('entity_type', 'entity_id'))
 
                             conn.execute(delete(db.sync_ops).where(db.sync_ops.c.op_id == op_id))
-                            # Clear dirty row if seq matches
-                            conn.execute(delete(db.sync_dirty).where(and_(
-                                db.sync_dirty.c.entity_type == op_row['entity_type'],
-                                db.sync_dirty.c.entity_id == op_row['entity_id'],
-                                db.sync_dirty.c.seq == op_row['dirty_seq'],
-                            )))
+
+                            if current_dirty_seq is not None and current_dirty_seq > op_row['dirty_seq']:
+                                # A newer local change occurred during push!
+                                # Preserve local table as-is and leave sync_dirty intact for next cycle.
+                                pass
+                            else:
+                                apply_pulled_entity(conn, ent)
+                                conn.execute(delete(db.sync_dirty).where(and_(
+                                    db.sync_dirty.c.entity_type == op_row['entity_type'],
+                                    db.sync_dirty.c.entity_id == op_row['entity_id'],
+                                    db.sync_dirty.c.seq == op_row['dirty_seq'],
+                                )))
 
                         elif status == 'conflict' and res.get('entity'):
                             conflict_count += 1
@@ -533,10 +559,6 @@ def sync_once(engine, client: CloudClient) -> dict:
                             conn.execute(delete(db.sync_ops).where(db.sync_ops.c.op_id == op_id))
                             set_meta(conn, 'last_error', f"操作被拒绝: {res.get('error', {}).get('message')}")
 
-                    cursor = push_res.get('cursor', 0)
-                    if cursor > get_meta(conn, 'cursor', 0):
-                        set_meta(conn, 'cursor', cursor)
-
     # Step 3: Pull changes
     pulled_count = 0
     has_more = True
@@ -554,7 +576,7 @@ def sync_once(engine, client: CloudClient) -> dict:
                 with engine.begin() as conn:
                     with suppressed(conn):
                         for ent in snapshot_res.get('entities', []):
-                            apply_pulled_entity(conn, ent)
+                            merge_or_apply_pulled_entity(conn, ent)
                         set_meta(conn, 'cursor', snapshot_res.get('cursor', 0))
                 break
             elif exc.status == 401:
@@ -572,7 +594,9 @@ def sync_once(engine, client: CloudClient) -> dict:
             with suppressed(conn):
                 for ent in changes:
                     pulled_count += 1
-                    apply_pulled_entity(conn, ent)
+                    res_status = merge_or_apply_pulled_entity(conn, ent)
+                    if res_status == 'conflict':
+                        conflict_count += 1
                 set_meta(conn, 'cursor', new_cursor)
 
     with engine.begin() as conn:
@@ -614,6 +638,91 @@ def apply_pulled_entity(conn, ent: dict) -> None:
 
     if etype == 'project_mapping':
         rebuild_project_mappings(conn)
+
+
+def merge_or_apply_pulled_entity(conn, ent: dict) -> str:
+    """Three-way merge for pulled entities. Preserves local dirty modifications unconflicted with remote."""
+    etype = ent['entity_type']
+    eid = ent['entity_id']
+    remote_f = ent['fields']
+
+    dirty_seq = conn.execute(
+        select(db.sync_dirty.c.seq).where(and_(
+            db.sync_dirty.c.entity_type == etype,
+            db.sync_dirty.c.entity_id == eid,
+        ))
+    ).scalar_one_or_none()
+
+    if dirty_seq is None:
+        apply_pulled_entity(conn, ent)
+        return 'applied'
+
+    shadow_row = conn.execute(
+        select(db.sync_shadow).where(and_(
+            db.sync_shadow.c.entity_type == etype,
+            db.sync_shadow.c.entity_id == eid,
+        ))
+    ).mappings().first()
+    shadow_f = shadow_row['fields'] if shadow_row else {}
+
+    local_f = None
+    if etype == 'work_item':
+        local_f = local_work_item(conn, eid)
+    elif etype == 'daily_report':
+        local_f = local_daily_report(conn, eid)
+
+    if not local_f:
+        apply_pulled_entity(conn, ent)
+        return 'applied'
+
+    remote_changes = {k for k, v in remote_f.items() if shadow_f.get(k) != v}
+    local_changes = {k for k, v in local_f.items() if shadow_f.get(k) != v}
+    conflicts = [k for k in (remote_changes & local_changes) if remote_f[k] != local_f[k]]
+
+    if conflicts:
+        conf_id = uuid4().hex
+        service.upsert(conn, db.sync_conflicts, {
+            'id': conf_id,
+            'entity_type': etype,
+            'entity_id': eid,
+            'fields': conflicts,
+            'local': local_f,
+            'remote': remote_f,
+            'created_at': now_iso(),
+            'resolved_at': None,
+        }, 'id')
+        service.upsert(conn, db.sync_shadow, {
+            'entity_type': etype,
+            'entity_id': eid,
+            'version': ent['version'],
+            'fields': remote_f,
+        }, ('entity_type', 'entity_id'))
+        return 'conflict'
+
+    # Apply remote-only changes to local
+    remote_only = remote_changes - local_changes
+    if remote_only:
+        patch = {k: remote_f[k] for k in remote_only}
+        if etype == 'work_item':
+            task_patch = {k: v for k, v in patch.items() if k in ('date', 'title', 'details', 'project', 'category', 'status', 'deleted', 'started_at', 'ended_at')}
+            if task_patch:
+                conn.execute(update(db.tasks).where(db.tasks.c.id == eid).values(**task_patch))
+            worklog_patch = {k: v for k, v in patch.items() if k in ('suggested_minutes', 'confirmed_minutes', 'time_locked', 'time_source', 'time_reason')}
+            if worklog_patch:
+                conn.execute(update(db.worklogs).where(db.worklogs.c.task_id == eid).values(**worklog_patch))
+        elif etype == 'daily_report':
+            rep_patch = {k: v for k, v in patch.items() if k in ('target_minutes', 'confirmed', 'confirmed_at')}
+            if rep_patch:
+                conn.execute(update(db.reports).where(db.reports.c.date == eid).values(**rep_patch))
+
+    service.upsert(conn, db.sync_shadow, {
+        'entity_type': etype,
+        'entity_id': eid,
+        'version': ent['version'],
+        'fields': remote_f,
+    }, ('entity_type', 'entity_id'))
+
+    return 'merged'
 
 
 # --- Bind and Migration ---
@@ -904,8 +1013,15 @@ class SyncScheduler:
                 interval = max(60, mode_info.get('interval_minutes', 5) * 60)
                 if now_ts - self._last_pull > interval:
                     should_sync = True
+            elif mode == 'fixed_time':
+                now_hm = datetime.now().strftime('%H:%M')
+                times = mode_info.get('times', [])
+                if now_hm in times and now_ts - self._last_pull > 60:
+                    should_sync = True
+            elif mode == 'manual':
+                should_sync = triggered
 
-            if should_sync and self._lock.acquire(blocking=False):
+            if should_sync and sync_lock.acquire(blocking=False):
                 try:
                     with self.engine.connect() as conn:
                         server_url = get_meta(conn, 'server_url', '')
@@ -921,4 +1037,4 @@ class SyncScheduler:
                 except Exception as exc:
                     logger.warning("Background sync cycle error: %s", exc)
                 finally:
-                    self._lock.release()
+                    sync_lock.release()

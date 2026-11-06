@@ -75,6 +75,11 @@ def upgrade():
             sa.Column('id', sa.Integer(), primary_key=True),
         )
 
+    if 'gitee_work_item_links' in existing_tables:
+        existing_cols = {c['name'] for c in inspector.get_columns('gitee_work_item_links')}
+        if 'publish_req_id' not in existing_cols:
+            op.add_column('gitee_work_item_links', sa.Column('publish_req_id', sa.String(), nullable=True))
+
     # SQLite triggers for local change capture (disabled when sync_suppress has any row)
     op.execute("""
     CREATE TRIGGER IF NOT EXISTS trg_dirty_tasks_ins AFTER INSERT ON work_tasks

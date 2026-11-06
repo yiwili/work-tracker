@@ -3,6 +3,7 @@
 Platform independent, strictly maps error envelopes and handles timeouts/unavailability.
 """
 from typing import Any
+from urllib.parse import urlparse
 import httpx
 
 
@@ -22,6 +23,13 @@ class CloudUnavailable(Exception):
 
 class CloudClient:
     def __init__(self, base_url: str, token: str = '', timeout: float = 15.0, transport: httpx.BaseTransport | None = None):
+        parsed = urlparse(base_url)
+        if parsed.scheme == 'http':
+            host = (parsed.hostname or '').lower()
+            if host not in ('127.0.0.1', 'localhost', '::1') and transport is None:
+                raise ValueError(f"非本地环回云端服务地址必须使用 HTTPS 协议: {base_url}")
+        elif parsed.scheme != 'https':
+            raise ValueError(f"不支持的 URL 协议: {parsed.scheme}")
         self.base_url = base_url.rstrip('/')
         self.token = token
         self.timeout = timeout
@@ -125,12 +133,14 @@ class CloudClient:
             body['error'] = error
         return self._request('POST', f'/publish/requests/{request_id}/result', json=body)
 
-    def reconcile_publish_request(self, request_id: str, found: bool, remote_id: str = '', url: str = '') -> dict:
+    def reconcile_publish_request(self, request_id: str, found: bool, remote_id: str = '', url: str = '', proven_not_created: bool = False) -> dict:
         body = {'found': found}
         if remote_id:
             body['remote_id'] = remote_id
         if url:
             body['url'] = url
+        if proven_not_created:
+            body['proven_not_created'] = True
         return self._request('POST', f'/publish/requests/{request_id}/reconcile', json=body)
 
     def cancel_publish_request(self, request_id: str) -> dict:
