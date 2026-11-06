@@ -156,3 +156,42 @@ class CloudClient:
 
     def complete_migration(self, expected: dict) -> dict:
         return self._request('POST', '/migration/complete', json={'expected': expected})
+
+    # --- History Work Items ---
+
+    def import_history_batch(self, batch_index: int, total_batches: int, items: list[dict]) -> dict:
+        return self._request('POST', '/history/import', json={
+            'batch_index': batch_index,
+            'total_batches': total_batches,
+            'items': items,
+        })
+
+    def list_cloud_history(
+        self,
+        page: int = 1,
+        limit: int = 20,
+        date_from: str = '',
+        date_to: str = '',
+        has_date: bool | None = None,
+        project: str = '',
+        source: str = '',
+        q: str = '',
+    ) -> dict:
+        params: dict[str, Any] = {'page': page, 'limit': limit}
+        if date_from:
+            params['date_from'] = date_from
+        if date_to:
+            params['date_to'] = date_to
+        if has_date is not None:
+            params['has_date'] = str(has_date).lower()
+        if project:
+            params['project'] = project
+        if source:
+            params['source'] = source
+        if q:
+            params['q'] = q
+        return self._request('GET', '/history', params=params)
+
+    def cloud_history_summary(self) -> dict:
+        return self._request('GET', '/history/summary')
+

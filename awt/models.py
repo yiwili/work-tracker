@@ -493,3 +493,10 @@ class CloudModeInput(BaseModel):
 class CloudResolveInput(BaseModel):
     choices: dict[str, Literal['local', 'remote']]
 
+
+class HistoryCloudUploadInput(BaseModel):
+    batch_size: int = Field(default=200, ge=1, le=500)
+    force_restart: bool = False
+    all_batches: bool = True
+
+

@@ -14,10 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
-from . import usage, cloud_sync
+from . import usage, cloud_sync, history_upload
 from .cloud_client import CloudClient
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -626,6 +626,77 @@ def create_app(engine=None):
         client = CloudClient(base_url=server_url, token=token)
         client.revoke_device(device_id)
         return Response(status_code=204)
+
+    def _bound_cloud_client(optional: bool = False) -> CloudClient | None:
+        with engine.connect() as conn:
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+        token = gitee.token(service='cloud-session')
+        if not server_url or not token:
+            if optional:
+                return None
+            raise HTTPException(status_code=400, detail="未绑定云端账号")
+        return CloudClient(base_url=server_url, token=token)
+
+    @app.get('/api/history/cloud/preview')
+    def history_cloud_preview():
+        client = _bound_cloud_client(optional=True)
+        return history_upload.history_preview(engine, client)
+
+    @app.post('/api/history/cloud/upload')
+    def history_cloud_upload(payload: HistoryCloudUploadInput = None):
+        if payload is None:
+            payload = HistoryCloudUploadInput()
+        client = _bound_cloud_client()
+        try:
+            if payload.all_batches:
+                return history_upload.upload_all_history(
+                    engine,
+                    client,
+                    batch_size=payload.batch_size,
+                    force_restart=payload.force_restart,
+                )
+            return history_upload.upload_history_batch(
+                engine,
+                client,
+                batch_size=payload.batch_size,
+                force_restart=payload.force_restart,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"云端上传失败: {exc}")
+
+    @app.get('/api/history/cloud')
+    def history_cloud_list(
+        page: int = Query(1, ge=1),
+        limit: int = Query(20, ge=1, le=100),
+        date_from: str = Query(''),
+        date_to: str = Query(''),
+        has_date: bool | None = Query(None),
+        project: str = Query(''),
+        source: str = Query(''),
+        q: str = Query(''),
+    ):
+        client = _bound_cloud_client()
+        try:
+            return client.list_cloud_history(
+                page=page,
+                limit=limit,
+                date_from=date_from,
+                date_to=date_to,
+                has_date=has_date,
+                project=project,
+                source=source,
+                q=q,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"云端查询失败: {exc}")
+
+    @app.get('/api/history/cloud/summary')
+    def history_cloud_summary():
+        client = _bound_cloud_client()
+        try:
+            return client.cloud_history_summary()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"云端查询统计失败: {exc}")
 
     dist = Path(__file__).resolve().parent.parent / 'frontend' / 'dist'
     if dist.is_dir():

@@ -29,6 +29,8 @@ class FakeCloudServer:
         self.batches = {}
         self.requests = {}
         self.cursor_expired = False
+        self.history_items = {}
+
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -316,5 +318,109 @@ class FakeCloudServer:
                 self.changes.append({'account_id': acc_id, 'seq': acc['change_seq'], 'entity_type': 'gitee_link', 'entity_id': req.get('work_item_id', req_id), 'version': 1, 'device_id': dev_id})
 
             return httpx.Response(200, json={'request_id': req_id, 'status': status})
+
+        # History Import
+        if path == '/api/v1/history/import' and method == 'POST':
+            batch_idx = body.get('batch_index', 0)
+            items = body.get('items', [])
+            rec = len(items)
+            ins = 0
+            upd = 0
+            unchanged = 0
+            for item in items:
+                item_id = item['id']
+                key = (acc_id, item_id)
+                existing = self.history_items.get(key)
+                now_str = datetime.now(timezone.utc).isoformat()
+                if existing:
+                    changed = False
+                    for f in ('title', 'details', 'project', 'work_date', 'source', 'source_id', 'url'):
+                        if existing.get(f) != item.get(f):
+                            changed = True
+                            break
+                    if changed:
+                        existing.update(item)
+                        existing['updated_at'] = now_str
+                        upd += 1
+                    else:
+                        unchanged += 1
+                else:
+                    new_item = dict(item)
+                    new_item['account_id'] = acc_id
+                    new_item['created_at'] = now_str
+                    new_item['updated_at'] = now_str
+                    new_item['imported_at'] = item.get('imported_at') or now_str
+                    self.history_items[key] = new_item
+                    ins += 1
+            return httpx.Response(200, json={
+                'batch_index': batch_idx,
+                'received': rec,
+                'inserted': ins,
+                'updated': upd,
+                'unchanged': unchanged,
+                'failed': 0,
+            })
+
+        # History Summary
+        if path == '/api/v1/history/summary' and method == 'GET':
+            matched = [v for k, v in self.history_items.items() if k[0] == acc_id]
+            total = len(matched)
+            dated = [x['work_date'] for x in matched if x.get('work_date')]
+            sources = {}
+            for x in matched:
+                s = x.get('source') or 'unknown'
+                sources[s] = sources.get(s, 0) + 1
+            return httpx.Response(200, json={
+                'total_records': total,
+                'earliest_date': min(dated) if dated else None,
+                'latest_date': max(dated) if dated else None,
+                'missing_date_count': total - len(dated),
+                'sources': sources,
+            })
+
+        # History List
+        if path == '/api/v1/history' and method == 'GET':
+            page = int(request.url.params.get('page', 1))
+            limit = int(request.url.params.get('limit', 20))
+            date_from = request.url.params.get('date_from', '')
+            date_to = request.url.params.get('date_to', '')
+            has_date_raw = request.url.params.get('has_date')
+            project = request.url.params.get('project', '')
+            source = request.url.params.get('source', '')
+            q = request.url.params.get('q', '')
+
+            matched = [v for k, v in self.history_items.items() if k[0] == acc_id]
+            if date_from:
+                matched = [x for x in matched if x.get('work_date') and x['work_date'] >= date_from]
+            if date_to:
+                matched = [x for x in matched if x.get('work_date') and x['work_date'] <= date_to]
+            if has_date_raw is not None:
+                has_date = str(has_date_raw).lower() in ('true', '1')
+                if has_date:
+                    matched = [x for x in matched if x.get('work_date')]
+                else:
+                    matched = [x for x in matched if not x.get('work_date')]
+            if project:
+                matched = [x for x in matched if x.get('project') == project]
+            if source:
+                matched = [x for x in matched if x.get('source') == source]
+            if q:
+                q_lower = q.lower()
+                matched = [x for x in matched if q_lower in (x.get('title') or '').lower() or q_lower in (x.get('details') or '').lower()]
+
+            def sort_key(x):
+                wd = x.get('work_date')
+                return (0 if wd else 1, -(int(wd.replace('-', '')) if wd else 0), x['id'])
+
+            matched.sort(key=sort_key)
+            total = len(matched)
+            start = (page - 1) * limit
+            paged = matched[start:start + limit]
+            return httpx.Response(200, json={
+                'total': total,
+                'page': page,
+                'limit': limit,
+                'items': paged,
+            })
 
         return httpx.Response(404, json={'error': {'code': 'not_found', 'message': 'not found'}})
