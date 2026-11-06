@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -7,11 +7,18 @@ import {
   Plus,
   Settings2,
   Sparkles,
+  CalendarRange,
 } from "lucide-react";
 import type { ConversationOverview, Settings } from "./types";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
 import { AnalysisLog } from "./AnalysisLog";
+
+export type AnalyzeOptions = {
+  startDate?: string;
+  endDate?: string;
+  targetMinutes?: number;
+};
 
 const formatTokens = (value: number) => value.toLocaleString("zh-CN");
 
@@ -28,6 +35,7 @@ const names: Record<string, string> = {
 export function Conversations({
   overview,
   settings,
+  currentDay,
   busy,
   analyzing,
   pendingCount,
@@ -40,17 +48,46 @@ export function Conversations({
 }: {
   overview: ConversationOverview;
   settings: Settings;
+  currentDay?: string;
   busy: boolean;
   analyzing: boolean;
   pendingCount: number;
   legacyCount: number;
-  onAnalyze: () => void;
+  onAnalyze: (options?: AnalyzeOptions) => void;
   onSettings: () => void;
   onSources: (sources: string[]) => void;
   onView: (source: string, session: string) => void;
   onViewPending: () => void;
 }) {
   const [sourceTab, setSourceTab] = useState<"ready" | "all">("ready");
+  const effectiveDay = currentDay || overview.date || new Date().toISOString().slice(0, 10);
+  const [showMultiDay, setShowMultiDay] = useState(false);
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date(effectiveDay + "T12:00:00");
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [endDate, setEndDate] = useState(effectiveDay);
+  const [customHours, setCustomHours] = useState<number | null>(null);
+
+  useEffect(() => {
+    setEndDate(effectiveDay);
+    const d = new Date(effectiveDay + "T12:00:00");
+    d.setDate(d.getDate() - 1);
+    setStartDate(d.toISOString().slice(0, 10));
+    setCustomHours(null);
+  }, [effectiveDay]);
+
+  const diffDays = Math.max(
+    1,
+    Math.round(
+      (new Date(endDate + "T12:00:00").getTime() -
+        new Date(startDate + "T12:00:00").getTime()) /
+        (1000 * 3600 * 24),
+    ) + 1,
+  );
+  const defaultHours = diffDays * 8;
+  const targetHours = customHours !== null ? customHours : defaultHours;
 
   const messages = overview.user_messages + overview.assistant_messages;
   const gitSource = overview.sources.find((s) => s.source === "git");
@@ -125,31 +162,148 @@ export function Conversations({
             </button>
           )}
           <button
-            className="primary"
-            disabled={
-              busy ||
-              overview.running ||
-              !settings.llm_enabled ||
-              overview.user_messages + overview.assistant_messages === 0
-            }
-            onClick={onAnalyze}
-            title={
-              messages === 0
-                ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
-                : undefined
-            }
+            type="button"
+            className={showMultiDay ? "primary" : "outline"}
+            disabled={busy || overview.running || analyzing}
+            onClick={() => setShowMultiDay(!showMultiDay)}
+            title="自选统计跨度，例如将4号5号两天（共16小时）合并统计到今天"
           >
-            {analyzing || overview.running ? (
-              <LoaderCircle className="spin" size={16} />
-            ) : (
-              <Sparkles size={16} />
-            )}
-            {analyzing || overview.running
-              ? "AI 正在分析，请稍候"
-              : "AI 分析全天对话"}
+            <CalendarRange size={15} style={{ marginRight: "4px" }} />
+            {showMultiDay ? "收起多天设置" : "多天合并分析"}
           </button>
+          {!showMultiDay && (
+            <button
+              className="primary"
+              disabled={
+                busy ||
+                overview.running ||
+                !settings.llm_enabled ||
+                overview.user_messages + overview.assistant_messages === 0
+              }
+              onClick={() => onAnalyze()}
+              title={
+                messages === 0
+                  ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
+                  : undefined
+              }
+            >
+              {analyzing || overview.running ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {analyzing || overview.running
+                ? "AI 正在分析，请稍候"
+                : "AI 分析全天对话"}
+            </button>
+          )}
         </div>
       </div>
+      {showMultiDay && (
+        <div
+          className="multi-day-banner"
+          style={{
+            margin: "12px 0 16px 0",
+            padding: "14px 16px",
+            background: "var(--card-bg, rgba(255, 255, 255, 0.05))",
+            border: "1px solid var(--accent, #3b82f6)",
+            borderRadius: "8px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+            <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+              <Sparkles size={16} style={{ color: "var(--accent, #3b82f6)" }} />
+              多天合并统计与一次性提交
+            </div>
+            <span style={{ fontSize: "12px", color: "var(--muted)" }}>
+              跨天范围：共 {diffDays} 天 · 建议总工时 {defaultHours} 小时
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
+              起始日期：
+              <input
+                type="date"
+                value={startDate}
+                max={endDate}
+                disabled={busy || analyzing}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setCustomHours(null);
+                }}
+                style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
+              />
+            </label>
+            <span style={{ color: "var(--muted)" }}>至</span>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
+              结束日期：
+              <input
+                type="date"
+                value={endDate}
+                min={startDate}
+                disabled={busy || analyzing}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setCustomHours(null);
+                }}
+                style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
+              目标工时（小时）：
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={targetHours}
+                disabled={busy || analyzing}
+                onChange={(e) => setCustomHours(Number(e.target.value))}
+                style={{ width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
+              />
+            </label>
+          </div>
+
+          <p style={{ margin: 0, fontSize: "13px", color: "var(--muted)", lineHeight: 1.5 }}>
+            💡 AI 将统计 <strong>{startDate}</strong> 至 <strong>{endDate}</strong>（共 {diffDays} 天）的所有 AI 对话与 Git 提交，归纳出的工作项将<strong>统一写入 {effectiveDay} 今日清单</strong>，并将本日目标工时设为 <strong>{targetHours} 小时（{targetHours * 60} 分钟）</strong>。
+          </p>
+
+          <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || overview.running || analyzing || !settings.llm_enabled || targetHours <= 0}
+              onClick={() =>
+                onAnalyze({
+                  startDate,
+                  endDate,
+                  targetMinutes: targetHours * 60,
+                })
+              }
+            >
+              {analyzing || overview.running ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {analyzing || overview.running
+                ? "AI 正在分析多天记录…"
+                : `开始多天合并分析（${startDate} ~ ${endDate} · ${targetHours}h）`}
+            </button>
+            <button
+              type="button"
+              className="outline"
+              disabled={busy || analyzing}
+              onClick={() => setShowMultiDay(false)}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
       <AnalysisLog day={overview.date} active={overview.running || analyzing} />
       {!settings.auto_import_analysis && pendingCount > 0 && (
         <p className="muted">

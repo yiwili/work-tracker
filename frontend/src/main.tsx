@@ -74,7 +74,7 @@ const settingsTabs = [
   { key: "model", label: "模型分析", icon: Sparkles },
   { key: "operation", label: "操作设置", icon: SlidersHorizontal },
   { key: "workflow", label: "提示词与风格", icon: Bot },
-  { key: "enterprise", label: "企业同步", icon: Building2 },
+  { key: "enterprise", label: "Gitee 企业版", icon: Building2 },
 ] as const;
 type SettingsTab = (typeof settingsTabs)[number]["key"];
 const kinds: Record<string, string> = {
@@ -354,13 +354,24 @@ function App() {
       setCollecting(false);
     }
   };
-  const analyzeDay = async () => {
+  const analyzeDay = async (options?: {
+    startDate?: string;
+    endDate?: string;
+    targetMinutes?: number;
+  }) => {
     if (analyzing || collecting) return;
     const jobDay = day;
     setAnalyzing(true);
     setError("");
     setNotice("");
     try {
+      const q = new URLSearchParams();
+      q.set("date", jobDay);
+      if (options?.startDate) q.set("start_date", options.startDate);
+      if (options?.endDate) q.set("end_date", options.endDate);
+      if (options?.targetMinutes)
+        q.set("target_minutes", String(options.targetMinutes));
+
       const a = await api<{
         created: number;
         archived: number;
@@ -375,7 +386,7 @@ function App() {
           completion_tokens: number;
           estimated: boolean;
         };
-      }>("/analyze?date=" + jobDay, "POST", {});
+      }>("/analyze?" + q.toString(), "POST", {});
       await refresh(jobDay);
       if (a.analysis_required) {
         setNotice(a.warnings.join("；"));
@@ -769,6 +780,7 @@ function App() {
                 <Conversations
                   overview={report.conversations}
                   settings={settings}
+                  currentDay={day}
                   busy={collecting || analyzing}
                   analyzing={analyzing}
                   pendingCount={

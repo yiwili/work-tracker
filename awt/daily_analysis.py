@@ -28,10 +28,10 @@ def selected_sources(settings):
     return selected
 
 
-def day_rows(conn, day, settings):
+def day_rows(conn, day, settings, end_day=None):
     from .service import visible_events
     sources = selected_sources(settings)
-    return [e for e in visible_events(conn,day,settings)
+    return [e for e in visible_events(conn, day, settings, end_day=end_day)
             if e['source'] in sources and not excluded(e['cwd'], settings)]
 
 
@@ -65,9 +65,9 @@ def is_source_detected(source, settings, conn=None, rows=None):
     return False
 
 
-def overview(conn, day, settings):
+def overview(conn, day, settings, end_day=None):
     from .service import visible_events
-    all_rows = [e for e in visible_events(conn,day,settings) if not excluded(e['cwd'], settings)]
+    all_rows = [e for e in visible_events(conn, day, settings, end_day=end_day) if not excluded(e['cwd'], settings)]
     sessions = {}
     for e in all_rows:
         if e['source'] == 'git':
@@ -230,10 +230,10 @@ def infer_day(records, refs, settings, reviewed, day):
     return parse_result(text, refs), len(chunks)+1
 
 
-def analyze(conn, day):
+def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
     with model_provider.usage_tracker() as usage_calls:
         try:
-            return _analyze(conn, day, usage_calls)
+            return _analyze(conn, day, usage_calls, start_day=start_day, end_day=end_day, target_minutes=target_minutes)
         except model_provider.ModelError as exc:
             usage=model_provider.usage_summary(usage_calls)
             if not usage:
@@ -242,15 +242,18 @@ def analyze(conn, day):
             raise model_provider.ModelError(f"{exc}；本次已记录模型用量{prefix}{usage['total_tokens']:,} tokens（输入 {usage['prompt_tokens']:,} / 输出 {usage['completion_tokens']:,}）") from None
 
 
-def _analyze(conn, day, usage_calls):
+def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minutes=None):
     from .service import category, get_settings, invalidate, list_tasks, now, state_for, upsert
     settings = get_settings(conn)
-    rows = day_rows(conn, day, settings)
-    summary = overview(conn, day, settings)
+    s_day = start_day or day
+    e_day = end_day or day
+    rows = day_rows(conn, s_day, settings, end_day=e_day)
+    summary = overview(conn, s_day, settings, end_day=e_day)
     if not settings.llm_enabled:
-        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计全天对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
     if not any(e['kind'] in ('user_prompt', 'assistant_message') for e in rows):
-        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': ['所选来源在当天没有可分析的对话。'], 'conversations': summary, 'merge_suggestions': []}
+        msg = f'所选来源在 {s_day} 至 {e_day} 期间没有可分析的对话。' if str(s_day) != str(e_day) else '所选来源在当天没有可分析的对话。'
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': [msg], 'conversations': summary, 'merge_suggestions': []}
     records, refs, segments = transcript(rows, settings)
     active_tasks = list_tasks(conn, day)
     protected = [t for t in active_tasks if t['origin'] == 'manual' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate')]
@@ -261,17 +264,18 @@ def _analyze(conn, day, usage_calls):
     reviewed += [{'title': t['title'], 'project': t['project'], 'decision': '用户历史曾删除；请结合实施证据与操作历史综合推测置信度：若当天有充分确凿的代码修改、工具调用、提交或明确实施动作（排除误删可能），可作为高置信度候选重新列出；若缺乏实施证据或明确不再需要，则尊重删除决定，不生成'} for t in deleted]
     records, work_refs, scope, filter_requests = filter_work(records,refs,segments,settings)
     refs=work_refs
+    date_label = f"{s_day} 至 {e_day}" if str(s_day) != str(e_day) else str(day)
     if records:
-        result, requests = infer_day(records, refs, settings, reviewed, day)
+        result, requests = infer_day(records, refs, settings, reviewed, date_label)
     else:
-        result, requests = {'summary':'当天没有可自动计入的实际工作；私人、无关及不足时长的知识梳理已排除。','tasks':[]},0
+        result, requests = {'summary':'所选日期范围内没有可自动计入的实际工作；私人、无关及不足时长的知识梳理已排除。','tasks':[]},0
     requests+=filter_requests
     # Model latency must never hold the database's writer lock. Re-read human edits atomically
     # after inference, and refuse stale input if collection/source selection changed meanwhile.
     conn.commit()
     conn.exec_driver_sql('BEGIN IMMEDIATE')
     current_settings = get_settings(conn)
-    current_rows = day_rows(conn, day, current_settings)
+    current_rows = day_rows(conn, s_day, current_settings, end_day=e_day)
     if input_hash(current_rows, current_settings) != input_hash(rows, settings):
         raise model_provider.ModelError('分析期间对话或来源范围发生变化，原任务已保留；请重新分析')
     active_tasks = list_tasks(conn, day)
@@ -360,15 +364,18 @@ def _analyze(conn, day, usage_calls):
     usage = model_provider.usage_summary(usage_calls)
     snapshot = {'scope':scope, 'prompt_roles':['scope_filter','task_writer'], 'input_hash': input_hash(rows, settings), 'analyzed_at': now(), 'provider': settings.llm_provider,
                 'usage': usage, 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
+                'start_date': str(s_day), 'end_date': str(e_day), 'target_day': str(day), 'target_minutes': target_minutes,
                 'model': model_provider.status(settings)['model'], 'summary': redact(result.get('summary', ''), settings.redact_patterns),
                 'session_count': summary['session_count'], 'user_messages': summary['user_messages'], 'assistant_messages': summary['assistant_messages'],
                 'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings}
     upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
+    if target_minutes:
+        upsert(conn, db.reports, {'date': str(day), 'target_minutes': target_minutes, 'confirmed': False}, 'date')
     if settings.auto_import_analysis and (imported or archived):
         invalidate(conn, day)
     return {'created': len(imported), 'updated': 0, 'archived': archived,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, day, settings), 'merge_suggestions': []}
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day), 'merge_suggestions': []}
 
 
 def import_pending(conn, day, selections):

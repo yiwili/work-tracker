@@ -55,13 +55,17 @@ def invalidate(conn, day):
     conn.execute(update(db.worklogs).where(db.worklogs.c.task_id.in_(ids)).values(is_confirmed=False))
 
 
-def event_query(day, settings):
-    start, end = day_bounds(day, settings.timezone)
+def event_query(day, settings, end_day=None):
+    start, _ = day_bounds(day, settings.timezone)
+    if end_day and str(end_day) != str(day):
+        _, end = day_bounds(end_day, settings.timezone)
+    else:
+        _, end = day_bounds(day, settings.timezone)
     return select(db.events).where(and_(db.events.c.occurred_at >= start, db.events.c.occurred_at < end)).order_by(db.events.c.occurred_at, db.events.c.id)
 
 
-def visible_events(conn, day, settings):
-    return filter_git_events([dict(e) for e in conn.execute(event_query(day,settings)).mappings()],settings)
+def visible_events(conn, day, settings, end_day=None):
+    return filter_git_events([dict(e) for e in conn.execute(event_query(day, settings, end_day=end_day)).mappings()], settings)
 
 
 def _inside(path, root):
@@ -271,9 +275,9 @@ def list_tasks(conn, day):
     return output
 
 
-def analyze(conn, day):
+def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
     from .daily_analysis import analyze as analyze_daily
-    return analyze_daily(conn, day)
+    return analyze_daily(conn, day, start_day=start_day, end_day=end_day, target_minutes=target_minutes)
 
 
 def merge_suggestions(tasks):
@@ -428,11 +432,17 @@ def report(conn, day):
         allocation={**allocation,'stale':allocation['state_hash']!=state_hash(tasks,settings)}
 
     legacy_count = sum(t['origin'] == 'auto' and not t['edited'] and not t['confirmed_minutes'] and not (t['fingerprint'] or '').startswith('daily-v2:') for t in tasks)
-    return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": settings.target_minutes,
-            "remaining_minutes": settings.target_minutes-total, "confirmed": bool(stored and stored['confirmed'] and total == settings.target_minutes),
+    effective_target = stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes
+    return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
+            "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,
             "merge_suggestions": merge_suggestions(tasks), "projects": len({t['project'] for t in tasks}),
             "sources": len({e['source'] for t in tasks for e in t['evidence'] if e['source'] != 'git'})}
+
+
+def set_report_target(conn, day, target_minutes):
+    upsert(conn, db.reports, {"date": str(day), "target_minutes": target_minutes, "confirmed": False}, "date")
+    return report(conn, day)
 
 
 def confirm(conn, day):

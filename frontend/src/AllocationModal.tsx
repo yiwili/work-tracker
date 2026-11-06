@@ -8,6 +8,7 @@ export type AllocationRequest = {
   request_id: string;
   task_ids: string[];
   manual_items: { category: string; name: string; minutes: number }[];
+  target_minutes?: number;
 };
 const h = (minutes: number) => Number((minutes / 60).toFixed(2));
 function unlockedIds(report: Report) {
@@ -137,6 +138,7 @@ export function AllocationModal({
     onStart({
       request_id: requestId.current,
       task_ids: chosen,
+      target_minutes: report.target_minutes,
       manual_items: enabled
         ? items.map((i) => ({
             category: i.category,

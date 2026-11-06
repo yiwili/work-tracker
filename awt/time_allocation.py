@@ -11,8 +11,9 @@ from .models import AllocationInput, TaskInput
 ALLOCATION_STEP = 30
 
 
-def state_hash(tasks, settings):
-    return stable(ALLOCATION_STEP,settings.target_minutes,settings.step_minutes,settings.analysis_sources,
+def state_hash(tasks, settings, target_minutes=None):
+    eff_target = target_minutes if target_minutes is not None else settings.target_minutes
+    return stable(ALLOCATION_STEP,eff_target,settings.step_minutes,settings.analysis_sources,
                   settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()},
                   settings.llm_enabled,settings.llm_provider,settings.llm_model,settings.llm_endpoint,settings.llm_protocol,
                   sorted((t['id'],t['title'],t['details'],t['project'],t['category'],t['status'],t['started_at'],t['ended_at'],t['confirmed_minutes'],t['time_locked'],t['time_source'],sorted(e['id'] for e in t['evidence'])) for t in tasks))
@@ -101,12 +102,14 @@ def estimate(conn, day, request=None):
     selected,preserved=select_tasks(tasks,request.task_ids)
     if request.task_ids is not None and not selected:
         raise ValueError('请至少勾选一个需要AI分配工时的工作项')
+    stored_target = conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date == str(day))).scalar_one_or_none()
+    target_minutes = request.target_minutes or stored_target or settings.target_minutes
     human_fixed=sum(t['confirmed_minutes'] for t in locked)+sum(i.minutes for i in request.manual_items)
     preserved_minutes=sum(t['confirmed_minutes'] for t in preserved)
     retained=human_fixed+preserved_minutes
-    if retained>settings.target_minutes:
+    if retained>target_minutes:
         raise ValueError('固定或保留工时已超过每日目标，请先调整；未改动任何工作项')
-    remaining=settings.target_minutes-retained
+    remaining=target_minutes-retained
     if remaining%ALLOCATION_STEP:
         raise ValueError(f'AI工时只能按0.5小时分配：固定人工工时为{human_fixed}分钟，保留{preserved_minutes}分钟，剩余{remaining}分钟不是30分钟的整数倍；请调整人工工时或每日目标后重试，原记录未改动')
     if not remaining:
@@ -118,7 +121,7 @@ def estimate(conn, day, request=None):
         raise ValueError('已选工作项均带固定工时，请改选需要AI估算的工作项')
     analysis_progress.emit('开始估算工时，正在整理参与分配的工作项')
     timeline=day_rows(conn,day,settings)
-    initial_hash=state_hash(tasks,settings)
+    initial_hash=state_hash(tasks,settings,target_minutes)
     scope_hash=input_hash(timeline,settings)
     prepared=[]
     if request.manual_items:
@@ -135,7 +138,7 @@ def estimate(conn, day, request=None):
         except (ValueError,KeyError,TypeError):
             raise model_provider.ModelError('人工事项命名格式无效，所有事项和工时保持原值；请重试') from None
         analysis_progress.emit(f'人工事项已命名，正在估算 {len(selected)} 个工作项的工时')
-    payload={'date':str(day),'target_minutes':settings.target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
+    payload={'date':str(day),'target_minutes':target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
              'locked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'minutes':t['confirmed_minutes']} for t in locked]+[{'id':f'quick-{i}','title':p.title,'minutes':p.confirmed_minutes} for i,p in enumerate(prepared)],
              'unlocked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'details':redact(t['details'],settings.redact_patterns),
                                 'project':t['project'],'category':t['category'],'status':t['status'],'source':t['origin'],
@@ -154,7 +157,7 @@ def estimate(conn, day, request=None):
     analysis_progress.emit(f'工时估算完成：{len(eligible)} 个工作项参与分配，正在核对工作项是否变化')
     conn.commit();conn.exec_driver_sql('BEGIN IMMEDIATE')
     current_settings=get_settings(conn);current_tasks=list_tasks(conn,day)
-    if state_hash(current_tasks,current_settings)!=initial_hash or input_hash(day_rows(conn,day,current_settings),current_settings)!=scope_hash:
+    if state_hash(current_tasks,current_settings,target_minutes)!=initial_hash or input_hash(day_rows(conn,day,current_settings),current_settings)!=scope_hash:
         raise ValueError('估算期间工作项、工时或对话范围发生变化，未覆盖人工修改；请重新估算')
     apply_now=settings.auto_apply_allocation
     added=[]
@@ -169,14 +172,15 @@ def estimate(conn, day, request=None):
     else:
         analysis_progress.emit('工时建议已保存为预览，确认后才会写入工作项')
     final_tasks=list_tasks(conn,day)
-    snapshot={'estimated_at':now(),'model':model_provider.status(settings)['model'],'target_minutes':settings.target_minutes,'step_minutes':ALLOCATION_STEP,
+    snapshot={'estimated_at':now(),'model':model_provider.status(settings)['model'],'target_minutes':target_minutes,'step_minutes':ALLOCATION_STEP,
               'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,'distributed_minutes':remaining,'independent_estimate_minutes':estimates,
               'note':redact(str(result.get('note',''))[:3000],settings.redact_patterns),'warnings':warnings,
               'items':[{**i,'reason':redact(i['reason'],settings.redact_patterns),'allocated_minutes':allocation.get(i['id'],0)} for i in result['items']],
               'manual_tasks':[p.model_dump(mode='json') for p in prepared],'selected_ids':[t['id'] for t in selected],
               'pending':not apply_now,'applied_at':now() if apply_now else None,
-              'state_hash':state_hash(final_tasks,settings),'scope_hash':scope_hash}
+              'state_hash':state_hash(final_tasks,settings,target_minutes),'scope_hash':scope_hash}
     upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
+    upsert(conn,db.reports,{'date':str(day),'target_minutes':target_minutes,'confirmed':False},'date')
     response={'allocated':len(allocation),'added_manual_ids':added,'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,
               'total_minutes':sum(t['confirmed_minutes'] for t in final_tasks),'warnings':warnings,'allocation':snapshot,
               'applied':apply_now,'pending':not apply_now}

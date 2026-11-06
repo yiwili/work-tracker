@@ -464,9 +464,14 @@ class AllocationInput(BaseModel):
     # None 表示沿用旧行为：所有未固定工作项参与；空列表表示用户未勾选任何工作项。
     task_ids: list[str] | None = Field(default=None, max_length=200)
     manual_items: list[QuickItem] = Field(default_factory=list, max_length=20)
+    target_minutes: int | None = Field(default=None, ge=1, le=1440 * 30)
 
     @model_validator(mode='after')
     def require_id(self):
         if self.manual_items and not self.request_id:
             raise ValueError('添加人工事项需要请求编号')
         return self
+
+
+class ReportTargetInput(BaseModel):
+    target_minutes: int = Field(..., ge=1, le=1440 * 30)

@@ -16,7 +16,7 @@ from sqlalchemy.exc import OperationalError
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
 from . import usage
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -409,7 +409,7 @@ def create_app(engine=None):
             'tokens': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0, 'estimated': False}}
 
     @app.post('/api/analyze')
-    def analyze(date: date):
+    def analyze(date: date, start_date: date | None = None, end_date: date | None = None, target_minutes: int | None = None):
         lock = analysis_locks.setdefault(date, Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail='该日期正在进行 AI 分析，请等待完成后刷新；未重复发送模型请求')
@@ -418,10 +418,11 @@ def create_app(engine=None):
         for old in list(analysis_runs):
             if len(analysis_runs) > 32 and old != date and analysis_runs[old].state != 'running':
                 del analysis_runs[old]
-        progress.add('开始分析全天对话')
+        label = f"{start_date} 至 {end_date}" if start_date and end_date and start_date != end_date else '全天'
+        progress.add(f'开始分析{label}对话')
         try:
             with analysis_progress.track(progress), engine.connect() as conn:
-                result = service.analyze(conn, date)
+                result = service.analyze(conn, date, start_day=start_date, end_day=end_date, target_minutes=target_minutes)
                 conn.commit()
                 progress.add('分析完成，结果已保存')
                 progress.finish('success')
@@ -455,9 +456,9 @@ def create_app(engine=None):
             return service.tasks_from_events(conn, payload.date, payload.event_ids)
 
     @app.get('/api/events')
-    def events(date: date):
+    def events(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:
-            return service.visible_events(conn,date,service.get_settings(conn))
+            return service.visible_events(conn, start_date or date, service.get_settings(conn), end_day=end_date or date)
 
     @app.get('/api/repositories')
     def repositories():
@@ -501,6 +502,13 @@ def create_app(engine=None):
     def split(payload: SplitInput):
         with transaction() as conn:
             return {'ids': service.split_task(conn, payload.id, payload.parts)}
+
+    @app.put('/api/reports/{day}/target')
+    def set_target(day: date, payload: ReportTargetInput):
+        with engine.connect() as conn:
+            res = service.set_report_target(conn, day, payload.target_minutes)
+            conn.commit()
+            return res
 
     @app.get('/api/reports/{day}')
     def report(day: date):
