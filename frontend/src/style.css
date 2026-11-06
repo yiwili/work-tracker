@@ -1010,7 +1010,8 @@ main {
 
 .content {
   padding: 24px 32px 48px;
-  max-width: 1280px;
+  /* 1280px 在 1920 屏上会留下约 224px/侧的空白；放宽到 1680px 让卡片铺满主区域 */
+  max-width: 1680px;
   margin: 0 auto;
   min-width: 0;
   width: 100%;
@@ -1638,7 +1639,8 @@ h2 {
 /* AI Agent 网格：统一行高与卡片尺寸，不再让不同状态撑出不同大小的框 */
 .conversation-sources-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* 220px 下限让 1600px 内容区稳定停在 6 列，名字不会被挤到省略号 */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   grid-auto-rows: minmax(48px, auto);
   gap: 10px;
   padding: 0 20px 12px;
@@ -4205,6 +4207,8 @@ code {
   margin-bottom: 20px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03);
   min-width: 0;
+  /* 作为容器查询基准：容器够宽时把列表排成两列，配置引导的窄弹窗仍保持单列 */
+  container-type: inline-size;
 }
 
 .settings-section h2 {
@@ -5305,6 +5309,17 @@ code {
     opacity: 1;
     transform: none;
     filter: none;
+  }
+}
+
+/* 宽屏下 12 个来源改成两列；用列优先保持原有的从上到下顺序 */
+@container (min-width: 860px) {
+  .source-tags {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(6, auto);
+    grid-auto-flow: column;
+    align-items: start;
   }
 }
 
