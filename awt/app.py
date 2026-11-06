@@ -14,9 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
-from . import usage
+from . import usage, cloud_sync
+from .cloud_client import CloudClient
 from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -42,9 +43,13 @@ def create_app(engine=None):
                     pass
                 await asyncio.sleep(60)
         worker=asyncio.create_task(poll())
+        scheduler = cloud_sync.SyncScheduler(engine)
+        scheduler.start()
+        app.state.cloud_scheduler = scheduler
         try:
             yield
         finally:
+            scheduler.stop()
             worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
@@ -529,6 +534,98 @@ def create_app(engine=None):
         with transaction() as conn:
             return Response(service.export_markdown(conn, day), media_type='text/markdown; charset=utf-8',
                             headers={'Content-Disposition': f'attachment; filename="worklog-{day}.md"'})
+
+    @app.get('/api/cloud/status')
+    def cloud_status():
+        with engine.connect() as conn:
+            bound = cloud_sync.get_meta(conn, 'bound', False)
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+            account = cloud_sync.get_meta(conn, 'account', {})
+            device_id = cloud_sync.get_meta(conn, 'device_id', '')
+            mode = cloud_sync.get_meta(conn, 'mode', {'mode': 'auto', 'interval_minutes': 5, 'times': []})
+            last_sync_at = cloud_sync.get_meta(conn, 'last_sync_at', None)
+            last_error = cloud_sync.get_meta(conn, 'last_error', '')
+            unified_publish_enabled = cloud_sync.get_meta(conn, 'unified_publish_enabled', False)
+            dirty_cnt = len(list(conn.execute(select(db.sync_dirty.c.entity_id)).scalars()))
+            ops_cnt = len(list(conn.execute(select(db.sync_ops.c.op_id)).scalars()))
+            conflicts_cnt = len(cloud_sync.list_conflicts(conn))
+
+            return {
+                'bound': bound,
+                'server_url': server_url,
+                'account': account,
+                'device_id': device_id,
+                'mode': mode,
+                'last_sync_at': last_sync_at,
+                'last_error': last_error,
+                'pending': dirty_cnt,
+                'in_flight': ops_cnt,
+                'conflicts': conflicts_cnt,
+                'unified_publish_enabled': unified_publish_enabled,
+            }
+
+    @app.post('/api/cloud/bind')
+    def cloud_bind(payload: CloudBindInput):
+        return cloud_sync.bind(engine, payload.server_url, payload.email, payload.password, payload.device_name)
+
+    @app.post('/api/cloud/unbind')
+    def cloud_unbind():
+        cloud_sync.unbind(engine)
+        return {'status': 'unbound'}
+
+    @app.get('/api/cloud/migration/preview')
+    def cloud_migration_preview():
+        return cloud_sync.migration_preview(engine)
+
+    @app.post('/api/cloud/migrate')
+    def cloud_migrate():
+        return cloud_sync.migrate(engine)
+
+    @app.post('/api/cloud/sync')
+    def cloud_sync_now():
+        with engine.connect() as conn:
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+        token = gitee.token(service='cloud-session')
+        if not server_url or not token:
+            raise HTTPException(status_code=400, detail="未绑定云端账号")
+        client = CloudClient(base_url=server_url, token=token)
+        return cloud_sync.sync_once(engine, client)
+
+    @app.put('/api/cloud/mode')
+    def cloud_set_mode(payload: CloudModeInput):
+        with engine.begin() as conn:
+            cloud_sync.set_meta(conn, 'mode', payload.model_dump(mode='json'))
+        return payload.model_dump(mode='json')
+
+    @app.get('/api/cloud/conflicts')
+    def cloud_list_conflicts():
+        with engine.connect() as conn:
+            return {'conflicts': cloud_sync.list_conflicts(conn)}
+
+    @app.post('/api/cloud/conflicts/{id}/resolve')
+    def cloud_resolve_conflict(id: str, payload: CloudResolveInput):
+        return cloud_sync.resolve_conflict(engine, id, payload.choices)
+
+    @app.get('/api/cloud/devices')
+    def cloud_list_devices():
+        with engine.connect() as conn:
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+        token = gitee.token(service='cloud-session')
+        if not server_url or not token:
+            raise HTTPException(status_code=400, detail="未绑定云端账号")
+        client = CloudClient(base_url=server_url, token=token)
+        return {'devices': client.list_devices()}
+
+    @app.delete('/api/cloud/devices/{device_id}')
+    def cloud_revoke_device(device_id: str):
+        with engine.connect() as conn:
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+        token = gitee.token(service='cloud-session')
+        if not server_url or not token:
+            raise HTTPException(status_code=400, detail="未绑定云端账号")
+        client = CloudClient(base_url=server_url, token=token)
+        client.revoke_device(device_id)
+        return Response(status_code=204)
 
     dist = Path(__file__).resolve().parent.parent / 'frontend' / 'dist'
     if dist.is_dir():

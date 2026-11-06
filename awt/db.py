@@ -27,6 +27,12 @@ allocation_requests = Table('allocation_requests', metadata, Column('id', String
 gitee_batches = Table('gitee_export_batches', metadata, Column('id', String, primary_key=True), Column('snapshot', JSON))
 gitee_links = Table('gitee_work_item_links', metadata, Column('id', String, primary_key=True), Column('enterprise_id', Integer), Column('task_id', String, index=True), Column('program_id', Integer), Column('status', String), Column('issue_id', String), Column('url', Text), Column('error', Text), Column('updated_at', String))
 model_usage = Table('model_usage', metadata, Column('id', String, primary_key=True), Column('recorded_at', String, index=True), Column('model', String), Column('purpose', String), Column('prompt_tokens', Integer, nullable=False, default=0), Column('completion_tokens', Integer, nullable=False, default=0), Column('calls', Integer, nullable=False, default=1, server_default='1'), Column('estimated', Boolean, nullable=False, default=False))
+sync_meta = Table('sync_meta', metadata, Column('key', String, primary_key=True), Column('value', JSON))
+sync_shadow = Table('sync_shadow', metadata, Column('entity_type', String, primary_key=True), Column('entity_id', String, primary_key=True), Column('version', Integer), Column('fields', JSON))
+sync_dirty = Table('sync_dirty', metadata, Column('entity_type', String, primary_key=True), Column('entity_id', String, primary_key=True), Column('changed_at', String), Column('seq', Integer))
+sync_ops = Table('sync_ops', metadata, Column('op_id', String, primary_key=True), Column('entity_type', String), Column('entity_id', String), Column('base_version', Integer), Column('fields', JSON), Column('dirty_seq', Integer), Column('created_at', String), Column('attempts', Integer, default=0))
+sync_conflicts = Table('sync_conflicts', metadata, Column('id', String, primary_key=True), Column('entity_type', String), Column('entity_id', String), Column('fields', JSON), Column('local', JSON), Column('remote', JSON), Column('created_at', String), Column('resolved_at', String))
+sync_suppress = Table('sync_suppress', metadata, Column('id', Integer, primary_key=True))
 
 
 def data_dir():

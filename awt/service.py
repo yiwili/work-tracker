@@ -26,7 +26,12 @@ def now():
 
 def upsert(conn, table, values, key):
     stmt = sqlite_insert(table).values(**values)
-    conn.execute(stmt.on_conflict_do_update(index_elements=[key], set_={k: v for k, v in values.items() if k != key}))
+    index_elements = list(key) if isinstance(key, (list, tuple)) else [key]
+    key_set = set(key) if isinstance(key, (list, tuple)) else {key}
+    conn.execute(stmt.on_conflict_do_update(
+        index_elements=index_elements,
+        set_={k: v for k, v in values.items() if k not in key_set}
+    ))
 
 
 def get_settings(conn):

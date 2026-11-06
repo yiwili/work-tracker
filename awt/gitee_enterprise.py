@@ -253,7 +253,7 @@ def cache_programs(engine,enterprise_id):
     return catalog
 
 
-def preview(engine,payload):
+def preview(engine,payload,cloud_client=None):
     from .service import get_settings,upsert,now
     with engine.connect() as conn:
         settings=get_settings(conn);config=settings.gitee_enterprise
@@ -315,6 +315,34 @@ def preview(engine,payload):
             raise ValueError('读取项目期间工作项或映射设置发生变化，请重新预览')
         upsert(conn,db.gitee_batches,{'id':batch_id,'snapshot':snapshot},'id')
         links={r['task_id']:dict(r) for r in conn.execute(select(db.gitee_links).where(db.gitee_links.c.enterprise_id==config.enterprise_id)).mappings()}
+
+    # Cloud coordination if bound & unified_publish_enabled
+    try:
+        c_client = cloud_client
+        if not c_client:
+            from . import cloud_sync
+            from .cloud_client import CloudClient
+            with engine.connect() as conn:
+                bound = cloud_sync.get_meta(conn, 'bound', False)
+                unified = cloud_sync.get_meta(conn, 'unified_publish_enabled', False)
+                server_url = cloud_sync.get_meta(conn, 'server_url', '')
+            if bound and unified and server_url:
+                c_token = gitee.token(service='cloud-session')
+                if c_token:
+                    c_client = CloudClient(base_url=server_url, token=c_token)
+        if c_client:
+            req_items = [{
+                'request_id': stable(config.enterprise_id, it['task_id']),
+                'work_item_id': it['task_id'],
+                'target_scope': f"ent:{config.enterprise_id}",
+                'target_type': 'enterprise',
+                'action': 'update' if it.get('matched_issue') else 'create',
+                'params': {'program_id': it['program_id'], 'minutes': it['minutes']},
+            } for it in items]
+            c_client.register_publish_batch(idempotency_key=batch_id, executor='client', items=req_items)
+    except Exception:
+        pass
+
     return {'batch_id':batch_id,'date':str(payload.date),'enterprise_id':config.enterprise_id,'programs':catalog,
             'items':[{**i,'existing':links.get(i['task_id'])} for i in items]}
 
@@ -325,7 +353,7 @@ def safe_url(value):
     return value if parsed.scheme=='https' and parsed.hostname in ('gitee.com','e.gitee.com') and not parsed.username and not parsed.password else ''
 
 
-def publish(engine,payload):
+def publish(engine,payload,cloud_client=None):
     from .service import get_settings,upsert,now
     if not publish_lock.acquire(blocking=False):
         raise ValueError('Gitee创建正在进行，请等待完成；不会重复发送')
@@ -341,6 +369,23 @@ def publish(engine,payload):
                 raise ValueError('企业凭据或映射设置已变更，请重新预览')
             if task_snapshot(conn,snapshot['date'],[t['id'] for t in snapshot['tasks']])!=snapshot['tasks']:
                 raise ValueError('预览后工作内容或工时已修改，请重新预览后提交')
+
+        c_client = cloud_client
+        if not c_client:
+            try:
+                from . import cloud_sync
+                from .cloud_client import CloudClient
+                with engine.connect() as conn:
+                    bound = cloud_sync.get_meta(conn, 'bound', False)
+                    unified = cloud_sync.get_meta(conn, 'unified_publish_enabled', False)
+                    server_url = cloud_sync.get_meta(conn, 'server_url', '')
+                if bound and unified and server_url:
+                    c_token = gitee.token(service='cloud-session')
+                    if c_token:
+                        c_client = CloudClient(base_url=server_url, token=c_token)
+            except Exception:
+                pass
+
         ids=[t.task_id for t in payload.targets]
         if len(ids)!=len(set(ids)) or any(t not in {i['task_id'] for i in snapshot['items']} for t in ids):
             raise ValueError('提交工作项与预览不一致')
@@ -365,6 +410,18 @@ def publish(engine,payload):
                 record={'id':identity,'enterprise_id':enterprise_id,'task_id':target.task_id,'program_id':target.program_id,
                         'status':'pending','issue_id':'','url':'','error':'','updated_at':now()}
                 upsert(conn,db.gitee_links,record,'id');conn.commit()
+
+            if c_client:
+                try:
+                    c_client.claim_publish_request(identity)
+                except Exception as exc:
+                    err_msg = f'云端声明冲突或已被认领: {exc}'
+                    record.update(status='failed', error=err_msg, updated_at=now())
+                    with engine.begin() as conn:
+                        upsert(conn, db.gitee_links, record, 'id')
+                    results.append(record)
+                    continue
+
             if target.existing_issue_id:
                 update_body={'enterprise_id':enterprise_id,'issue_id':str(target.existing_issue_id),
                              'duration':item['minutes'],'description':item['description']}
@@ -390,6 +447,20 @@ def publish(engine,payload):
             record['updated_at']=now()
             with engine.begin() as conn:
                 upsert(conn,db.gitee_links,record,'id')
+
+            if c_client:
+                try:
+                    c_stat = 'succeeded' if record['status'] == 'created' else record['status']
+                    c_client.report_publish_result(
+                        identity,
+                        outcome=c_stat,
+                        remote_id=record['issue_id'],
+                        url=record['url'],
+                        error=record['error'],
+                    )
+                except Exception:
+                    pass
+
             results.append(record)
         return {'items':results,'created':sum(r['status']=='created' for r in results),'failed':sum(r['status']=='failed' for r in results),
                 'uncertain':sum(r['status'] in ('pending','uncertain') for r in results)}

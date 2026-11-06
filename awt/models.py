@@ -475,3 +475,21 @@ class AllocationInput(BaseModel):
 
 class ReportTargetInput(BaseModel):
     target_minutes: int = Field(..., ge=1, le=1440 * 30)
+
+
+class CloudBindInput(BaseModel):
+    server_url: str = Field(min_length=1, max_length=1000)
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+    device_name: str = Field(default="Desktop Client", min_length=1, max_length=100)
+
+
+class CloudModeInput(BaseModel):
+    mode: Literal['auto', 'interval', 'daily', 'manual'] = 'auto'
+    interval_minutes: int = Field(default=5, ge=1, le=1440)
+    times: list[str] = Field(default_factory=list, max_length=24)
+
+
+class CloudResolveInput(BaseModel):
+    choices: dict[str, Literal['local', 'remote']]
+
