@@ -464,7 +464,7 @@ def export_markdown(conn, day):
     value = report(conn, day)
     def esc(text):
         return str(text).replace('\\', '\\\\').replace('|', '\\|').replace('\r', '').replace('\n', '<br>').replace('<script', '&lt;script')
-    status_names = {'requested': '待执行', 'attempted': '尝试中', 'changed': '已修改', 'verified': '已验证', 'delivered': '已交付（人工确认）'}
+    status_names = {'requested': '待办的', 'attempted': '进行中', 'changed': '已修改', 'verified': '已验收', 'delivered': '已完成', 'rejected': '已拒绝'}
     lines = [f"# 工作日报 · {day}", '', f"状态：{'已确认' if value['confirmed'] else '草稿（未确认）'}", '',
              '| 项目 | 任务标题 | 分类 | 状态 | 来源 | 确认工时 |', '| --- | --- | --- | --- | --- | ---: |']
     for t in value['tasks']:

@@ -54,13 +54,16 @@ import { DeletedRecoveryModal } from "./DeletedRecoveryModal";
 import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
 
+// 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
 const statuses: Record<string, string> = {
-  requested: "待执行",
-  attempted: "尝试中",
+  requested: "待办的",
+  attempted: "进行中",
+  delivered: "已完成",
+  verified: "已验收",
+  rejected: "已拒绝",
   changed: "已修改",
-  verified: "已验证",
-  delivered: "已交付",
 };
+const selectableStatuses = ["requested", "attempted", "delivered", "verified", "rejected"];
 const sources: Record<string, string> = {
   ...sourceLabels,
   workbuddy: "WorkBuddy（旧版合并记录）",
@@ -86,22 +89,7 @@ const kinds: Record<string, string> = {
   git_commit: "Git 提交",
   session_end: "会话结束",
 };
-const categories = [
-  "开发",
-  "Bug 修复",
-  "测试",
-  "代码审查",
-  "运维",
-  "部署",
-  "技术研究",
-  "需求沟通",
-  "客户沟通",
-  "会议",
-  "方案设计",
-  "文档",
-  "日常事务",
-  "其他",
-];
+const categories = ["需求", "任务", "缺陷"];
 const hours = (n: number) => Number((n / 60).toFixed(2)).toString();
 function initialDay() {
   const value = new URLSearchParams(window.location.search).get("date");
@@ -141,7 +129,7 @@ const fromTask = (t?: Task, day = ""): Draft => ({
   title: t?.title || "",
   details: t?.details || "",
   project: t?.project || "",
-  category: t?.category || "其他",
+  category: t?.category || "任务",
   status: t?.status || "requested",
   confirmed_minutes: t?.confirmed_minutes || 0,
   time_locked: t?.time_locked || false,
@@ -1430,6 +1418,7 @@ function App() {
           day={day}
           step={settings?.step_minutes || 15}
           onClose={() => setEditor(null)}
+          onQuickAdded={refresh}
           onSave={async (parts) => {
             setError("");
             if (editor.split) {
@@ -1583,19 +1572,58 @@ function ReviewAlertModal({
   );
 }
 
+type ManualTemplate = {
+  id: string;
+  name: string;
+  title: string;
+  details: string;
+  project: string;
+  category: string;
+  status: string;
+  confirmed_minutes: number;
+  time_locked: boolean;
+};
+const templateKeys = [
+  "title",
+  "details",
+  "project",
+  "category",
+  "status",
+  "confirmed_minutes",
+] as const;
+type TemplateKey = (typeof templateKeys)[number];
+// 模板中“固定”的字段：有实际内容的字段在快捷创建时隐藏。
+function fixedFields(t: ManualTemplate | null): Set<TemplateKey> {
+  const s = new Set<TemplateKey>();
+  if (!t) return s;
+  if (t.title.trim()) s.add("title");
+  if (t.details.trim()) s.add("details");
+  if (t.project.trim()) s.add("project");
+  if (t.category) s.add("category");
+  if (t.status) s.add("status");
+  if (t.confirmed_minutes > 0) s.add("confirmed_minutes");
+  return s;
+}
+const syncCloud = () => {
+  api("/cloud/sync", "POST").catch(() => undefined);
+};
+
 function TaskEditor({
   editor,
   day,
   step,
   onClose,
   onSave,
+  onQuickAdded,
 }: {
   editor: Editor;
   day: string;
   step: number;
   onClose: () => void;
   onSave: (parts: Draft[]) => Promise<void>;
+  onQuickAdded: () => Promise<void> | void;
 }) {
+  const isNew = !editor.task && !editor.split;
   const [parts, setParts] = useState<Draft[]>(() =>
     editor.split
       ? [
@@ -1613,7 +1641,32 @@ function TaskEditor({
       : [fromTask(editor.task, day)],
   );
   const [error, setError] = useState(""),
-    [saving, setSaving] = useState(false);
+    [saving, setSaving] = useState(false),
+    [projects, setProjects] = useState<string[]>([]),
+    [templates, setTemplates] = useState<ManualTemplate[]>([]),
+    [active, setActive] = useState<ManualTemplate | null>(null),
+    [showAll, setShowAll] = useState(false),
+    [templateName, setTemplateName] = useState<string | null>(null),
+    [quick, setQuick] = useState(""),
+    [quickNotice, setQuickNotice] = useState("");
+  useEffect(() => {
+    api<{ templates: ManualTemplate[]; projects: string[] }>("/manual-options")
+      .then((r) => {
+        setTemplates(r.templates || []);
+        setProjects(r.projects || []);
+      })
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !saving) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saving, onClose]);
   const change = (
     i: number,
     key: keyof Draft,
@@ -1630,6 +1683,76 @@ function TaskEditor({
           : p,
       ),
     );
+  const applyTemplate = (t: ManualTemplate | null) => {
+    setActive(t);
+    setShowAll(false);
+    const base = fromTask(undefined, parts[0].date || day);
+    setParts([
+      t
+        ? {
+            ...base,
+            title: t.title,
+            details: t.details,
+            project: t.project,
+            category: t.category || "任务",
+            status: t.status || "requested",
+            confirmed_minutes: t.confirmed_minutes,
+            time_locked: t.time_locked,
+          }
+        : base,
+    ]);
+  };
+  const saveTemplates = async (next: ManualTemplate[]) => {
+    const saved = await api<ManualTemplate[]>("/manual-templates", "PUT", next);
+    setTemplates(saved);
+    syncCloud();
+    return saved;
+  };
+  const saveAsTemplate = async () => {
+    const name = (templateName || "").trim();
+    if (!name) return;
+    const p = parts[0];
+    const t: ManualTemplate = {
+      id: Math.random().toString(36).slice(2, 12) + Date.now().toString(36),
+      name: name.slice(0, 100),
+      title: p.title,
+      details: p.details,
+      project: p.project,
+      category: p.category,
+      status: p.status,
+      confirmed_minutes: p.confirmed_minutes,
+      time_locked: p.time_locked,
+    };
+    try {
+      await saveTemplates([...templates, t]);
+      setTemplateName(null);
+      setActive(t);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const quickAdd = async () => {
+    const title = quick.trim();
+    if (!title) return;
+    setError("");
+    try {
+      const base = active
+        ? { ...parts[0], title }
+        : { ...fromTask(undefined, parts[0].date || day), title };
+      await api("/tasks", "POST", payload({ ...base, status: "requested" }));
+      setQuick("");
+      setQuickNotice(`已添加待办：${title}`);
+      syncCloud();
+      await onQuickAdded();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const hidden = isNew && !showAll ? fixedFields(active) : new Set<TemplateKey>();
+  const statusOptions = (cur: string) =>
+    selectableStatuses.includes(cur) ? selectableStatuses : [cur, ...selectableStatuses];
+  const categoryOptions = (cur: string) =>
+    !cur || categories.includes(cur) ? categories : [cur, ...categories];
   return (
     <div className="modal-overlay">
       <form
@@ -1645,6 +1768,7 @@ function TaskEditor({
           setSaving(true);
           try {
             await onSave(parts);
+            syncCloud();
           } catch (e) {
             setError((e as Error).message);
           } finally {
@@ -1665,123 +1789,246 @@ function TaskEditor({
           <button
             type="button"
             aria-label="关闭编辑"
+            title="关闭（Esc）"
             disabled={saving}
             onClick={onClose}
           >
             <X size={20} />
           </button>
         </div>
+        {isNew && (
+          <div className="manual-quick">
+            <div className="manual-templates">
+              <span className="manual-templates-label">模板</span>
+              <button
+                type="button"
+                className={"template-chip" + (active ? "" : " active")}
+                onClick={() => applyTemplate(null)}
+              >
+                空白
+              </button>
+              {templates.map((t) => (
+                <span
+                  key={t.id}
+                  className={"template-chip" + (active?.id === t.id ? " active" : "")}
+                >
+                  <button type="button" onClick={() => applyTemplate(t)}>
+                    {t.name}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={"删除模板 " + t.name}
+                    onClick={async () => {
+                      if (!window.confirm(`删除模板「${t.name}」？`)) return;
+                      try {
+                        await saveTemplates(templates.filter((x) => x.id !== t.id));
+                        if (active?.id === t.id) applyTemplate(null);
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              {templateName === null ? (
+                <button
+                  type="button"
+                  className="template-chip add"
+                  onClick={() => setTemplateName("")}
+                >
+                  <Plus size={12} /> 存为模板
+                </button>
+              ) : (
+                <span className="template-new">
+                  <input
+                    autoFocus
+                    maxLength={100}
+                    placeholder="模板名称，回车保存"
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void saveAsTemplate();
+                      } else if (e.key === "Escape") {
+                        e.stopPropagation();
+                        setTemplateName(null);
+                      }
+                    }}
+                  />
+                  <button type="button" onClick={() => void saveAsTemplate()}>
+                    <Check size={14} />
+                  </button>
+                </span>
+              )}
+            </div>
+            <div className="manual-quick-todo">
+              <input
+                value={quick}
+                maxLength={500}
+                placeholder={
+                  active
+                    ? `快捷添加待办（按模板「${active.name}」），回车添加`
+                    : "快捷添加待办项，输入标题后回车"
+                }
+                onChange={(e) => setQuick(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void quickAdd();
+                  }
+                }}
+              />
+              <button type="button" className="outline" onClick={() => void quickAdd()}>
+                <Plus size={14} /> 添加待办
+              </button>
+            </div>
+            {quickNotice && <div className="manual-quick-notice">{quickNotice}</div>}
+            {active && hidden.size > 0 && (
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setShowAll(true)}
+              >
+                已隐藏模板固定内容，显示全部字段
+              </button>
+            )}
+          </div>
+        )}
         {parts.map((p, i) => (
           <fieldset key={i}>
             {editor.split && <legend>任务 {i + 1}</legend>}
-            <label>
-              任务标题
-              <input
-                required
-                maxLength={500}
-                value={p.title}
-                onChange={(e) => change(i, "title", e.target.value)}
-                placeholder="例如：与客户确认接口联调方案"
-              />
-            </label>
-            <label>
-              详细工作内容
-              <textarea
-                rows={4}
-                value={p.details}
-                onChange={(e) => change(i, "details", e.target.value)}
-                placeholder="做了什么、采取哪些措施、有哪些产出或待处理事项…"
-              />
-            </label>
+            {!hidden.has("title") && (
+              <label>
+                任务标题
+                <input
+                  required
+                  maxLength={500}
+                  value={p.title}
+                  onChange={(e) => change(i, "title", e.target.value)}
+                  placeholder="例如：与客户确认接口联调方案"
+                />
+              </label>
+            )}
+            {!hidden.has("details") && (
+              <label>
+                详细工作内容
+                <textarea
+                  rows={4}
+                  value={p.details}
+                  onChange={(e) => change(i, "details", e.target.value)}
+                  placeholder="做了什么、采取哪些措施、有哪些产出或待处理事项…"
+                />
+              </label>
+            )}
             <div className="form-grid">
-              <label>
-                所属项目
-                <input
-                  value={p.project}
-                  onChange={(e) => change(i, "project", e.target.value)}
-                  placeholder="项目或客户名称，可不绑定 Git"
-                />
-              </label>
-              <label>
-                工作分类
-                <input
-                  list={"categories-" + i}
-                  value={p.category}
-                  required
-                  onChange={(e) => change(i, "category", e.target.value)}
-                />
-                <datalist id={"categories-" + i}>
-                  {categories.map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </datalist>
-              </label>
-              <label>
-                完成情况
-                <select
-                  value={p.status}
-                  onChange={(e) => change(i, "status", e.target.value)}
-                >
-                  {Object.entries(statuses).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                工作日期
-                <input
-                  required
-                  type="date"
-                  value={p.date}
-                  onChange={(e) => change(i, "date", e.target.value)}
-                />
-              </label>
+              {!hidden.has("project") && (
+                <label>
+                  所属项目
+                  <input
+                    list={"projects-" + i}
+                    value={p.project}
+                    onChange={(e) => change(i, "project", e.target.value)}
+                    placeholder={
+                      projects.length
+                        ? "选择 Gitee 企业项目或手动输入"
+                        : "项目或客户名称，可不绑定 Git"
+                    }
+                  />
+                  <datalist id={"projects-" + i}>
+                    {projects.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                </label>
+              )}
+              {!hidden.has("category") && (
+                <label>
+                  工作分类
+                  <select
+                    value={p.category}
+                    onChange={(e) => change(i, "category", e.target.value)}
+                  >
+                    {categoryOptions(p.category).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {!hidden.has("status") && (
+                <label>
+                  完成情况
+                  <select
+                    value={p.status}
+                    onChange={(e) => change(i, "status", e.target.value)}
+                  >
+                    {statusOptions(p.status).map((v) => (
+                      <option key={v} value={v}>
+                        {statuses[v] || v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {!hidden.has("confirmed_minutes") && (
+                <label>
+                  确认工时（分钟）
+                  <div className="minute-input">
+                    <button
+                      type="button"
+                      aria-label={"减少工时 " + (i + 1)}
+                      onClick={() =>
+                        change(
+                          i,
+                          "confirmed_minutes",
+                          Math.max(0, p.confirmed_minutes - step),
+                        )
+                      }
+                    >
+                      −
+                    </button>
+                    <input
+                      aria-label={"确认工时分钟 " + (i + 1)}
+                      type="number"
+                      required
+                      min="0"
+                      max="1440"
+                      step="1"
+                      value={p.confirmed_minutes}
+                      onChange={(e) =>
+                        change(i, "confirmed_minutes", Number(e.target.value))
+                      }
+                    />
+                    <button
+                      type="button"
+                      aria-label={"增加工时 " + (i + 1)}
+                      onClick={() =>
+                        change(
+                          i,
+                          "confirmed_minutes",
+                          Math.min(1440, p.confirmed_minutes + step),
+                        )
+                      }
+                    >
+                      +
+                    </button>
+                    <span>= {hours(p.confirmed_minutes)} h</span>
+                  </div>
+                </label>
+              )}
             </div>
             <label>
-              确认工时（分钟）
-              <div className="minute-input">
-                <button
-                  type="button"
-                  aria-label={"减少工时 " + (i + 1)}
-                  onClick={() =>
-                    change(
-                      i,
-                      "confirmed_minutes",
-                      Math.max(0, p.confirmed_minutes - step),
-                    )
-                  }
-                >
-                  −
-                </button>
-                <input
-                  aria-label={"确认工时分钟 " + (i + 1)}
-                  type="number"
-                  required
-                  min="0"
-                  max="1440"
-                  step="1"
-                  value={p.confirmed_minutes}
-                  onChange={(e) =>
-                    change(i, "confirmed_minutes", Number(e.target.value))
-                  }
-                />
-                <button
-                  type="button"
-                  aria-label={"增加工时 " + (i + 1)}
-                  onClick={() =>
-                    change(
-                      i,
-                      "confirmed_minutes",
-                      Math.min(1440, p.confirmed_minutes + step),
-                    )
-                  }
-                >
-                  +
-                </button>
-                <span>= {hours(p.confirmed_minutes)} h</span>
-              </div>
+              工作日期
+              <input
+                required
+                type="date"
+                value={p.date}
+                onChange={(e) => change(i, "date", e.target.value)}
+              />
             </label>
             <label className="check-label">
               <input
@@ -1791,24 +2038,6 @@ function TaskEditor({
               />
               固定此项工时，AI分配时保留
             </label>
-            <div className="form-grid">
-              <label>
-                开始时间（可选，本机时区）
-                <input
-                  type="datetime-local"
-                  value={p.started_at}
-                  onChange={(e) => change(i, "started_at", e.target.value)}
-                />
-              </label>
-              <label>
-                结束时间（可选，本机时区）
-                <input
-                  type="datetime-local"
-                  value={p.ended_at}
-                  onChange={(e) => change(i, "ended_at", e.target.value)}
-                />
-              </label>
-            </div>
           </fieldset>
         ))}
         {error && (

@@ -127,6 +127,13 @@ def local_settings_entities(conn) -> dict[str, dict]:
             },
             'deleted': False,
         },
+        'setting:manual': {
+            'value': {
+                'manual_templates': [t.model_dump(mode='json') for t in s.manual_templates],
+                'project_options': list(s.project_options),
+            },
+            'deleted': False,
+        },
     }
 
 
@@ -231,6 +238,14 @@ def apply_remote_setting(conn, category: str, fields: dict) -> None:
         if 'dedup' in val and isinstance(val['dedup'], dict):
             from .models import GiteeDedupConfig
             s.gitee_dedup = GiteeDedupConfig.model_validate(val['dedup'])
+            changed = True
+    elif category == 'manual':
+        from .models import ManualTemplate
+        if isinstance(val.get('manual_templates'), list):
+            s.manual_templates = [ManualTemplate.model_validate(t) for t in val['manual_templates']]
+            changed = True
+        if isinstance(val.get('project_options'), list):
+            s.project_options = [str(p) for p in val['project_options'] if str(p).strip()]
             changed = True
 
     if changed:

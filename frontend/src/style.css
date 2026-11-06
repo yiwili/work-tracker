@@ -6580,3 +6580,20 @@ code {
     scroll-behavior: auto !important;
   }
 }
+
+/* 添加人工事项：模板与快捷待办 */
+.manual-quick { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,.06); }
+.manual-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.manual-templates-label { font-size: 13px; color: #6b7280; margin-right: 4px; }
+.template-chip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid #d1d5db; border-radius: 999px; padding: 3px 10px; font-size: 13px; background: #fff; cursor: pointer; }
+.template-chip button { background: none; border: 0; padding: 0 2px; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
+.template-chip.active { border-color: #0a6cff; color: #0a6cff; background: rgba(10,108,255,.08); }
+.template-chip.add { color: #0a6cff; border-style: dashed; }
+.template-new { display: inline-flex; align-items: center; gap: 4px; }
+.template-new input { height: 28px; padding: 0 10px; font-size: 13px; width: 180px; }
+.manual-quick-todo { display: flex; gap: 8px; }
+.manual-quick-todo input { flex: 1; }
+.manual-quick-todo button { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+.manual-quick-notice { font-size: 12px; color: #16a34a; }
+.link-button { align-self: flex-start; background: none; border: 0; padding: 0; color: #0a6cff; font-size: 13px; cursor: pointer; }
+.state.rejected { color: #dc2626; background: rgba(220,38,38,.08); }

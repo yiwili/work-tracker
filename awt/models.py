@@ -228,6 +228,23 @@ class GitVerifyQuery(GitIdentityQuery):
     author: GitAuthor | None = None
 
 
+TaskStatus = Literal["requested", "attempted", "changed", "verified", "delivered", "rejected"]
+WORK_TYPES = ("需求", "任务", "缺陷")
+
+
+class ManualTemplate(BaseModel):
+    """人工事项模板：固定字段在快捷创建时不再展示。"""
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="", max_length=500)
+    details: str = Field(default="", max_length=20000)
+    project: str = Field(default="", max_length=200)
+    category: str = Field(default="任务", max_length=100)
+    status: TaskStatus = "requested"
+    confirmed_minutes: int = Field(default=0, ge=0, le=1440)
+    time_locked: bool = False
+
+
 class Settings(BaseModel):
     timezone: str = "Asia/Shanghai"
     target_minutes: int = Field(default=480, ge=1, le=1440)
@@ -270,6 +287,9 @@ class Settings(BaseModel):
     gitee_enterprise: GiteeEnterpriseConfig = Field(default_factory=GiteeEnterpriseConfig)
     gitee_dedup: GiteeDedupConfig = Field(default_factory=GiteeDedupConfig)
     activity_gap_minutes: int = Field(default=5, ge=1, le=30)
+    manual_templates: list[ManualTemplate] = Field(default_factory=list, max_length=50)
+    # 企业令牌拉取到的项目名称，本地保存并经云同步到服务器，供人工事项选择。
+    project_options: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode='before')
     @classmethod
@@ -367,7 +387,7 @@ class TaskInput(BaseModel):
     details: str = Field(default="", max_length=20000)
     project: str = Field(default="未归属项目", max_length=500)
     category: str = Field(default="其他", min_length=1, max_length=100)
-    status: Literal["requested", "attempted", "changed", "verified", "delivered"] = "requested"
+    status: TaskStatus = "requested"
     confirmed_minutes: int = Field(default=0, ge=0, le=1440, strict=True)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -402,7 +422,7 @@ class TaskPatch(BaseModel):
     details: str | None = Field(default=None, max_length=20000)
     project: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, min_length=1, max_length=100)
-    status: Literal["requested", "attempted", "changed", "verified", "delivered"] | None = None
+    status: TaskStatus | None = None
     confirmed_minutes: int | None = Field(default=None, ge=0, le=1440, strict=True)
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -420,7 +440,7 @@ class AnalysisImportItem(BaseModel):
     details: str | None = Field(default=None, max_length=20000)
     project: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, min_length=1, max_length=100)
-    status: Literal["requested", "attempted", "changed", "verified", "delivered"] | None = None
+    status: TaskStatus | None = None
 
 
 class AnalysisImportInput(BaseModel):

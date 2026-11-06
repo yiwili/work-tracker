@@ -16,7 +16,7 @@ from sqlalchemy.exc import OperationalError
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
 from . import usage, cloud_sync, history_upload
 from .cloud_client import CloudClient
-from .models import MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
+from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
@@ -313,6 +313,22 @@ def create_app(engine=None):
     def delete_enterprise_token():
         (db.data_dir()/'gitee-enterprise-credential.json').unlink(missing_ok=True)
         return {'configured':bool(gitee_enterprise.token())}
+
+    @app.get('/api/manual-options')
+    def manual_options():
+        with engine.connect() as conn:
+            s=service.get_settings(conn)
+            return {'templates':[t.model_dump(mode='json') for t in s.manual_templates],'projects':s.project_options}
+
+    @app.put('/api/manual-templates')
+    def put_manual_templates(payload:list[ManualTemplate]):
+        if len(payload)>50:
+            raise HTTPException(422,'模板最多50个')
+        with transaction() as conn:
+            s=service.get_settings(conn)
+            s.manual_templates=payload
+            service.save_settings(conn,s)
+            return [t.model_dump(mode='json') for t in s.manual_templates]
 
     @app.get('/api/gitee/enterprise/enterprises')
     def enterprises():
