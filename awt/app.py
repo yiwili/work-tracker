@@ -128,15 +128,32 @@ def create_app(engine=None):
     def source_check(payload: SourceCheckInput):
         items = []
         detected = {}
+        seen = set()
+        defaults = Settings() if payload.rediscover else None
+
+        def probe(name, raw, from_default=False):
+            path = Path(raw).expanduser()
+            try:
+                key = (name, str(path.resolve()))
+            except OSError:
+                key = (name, str(path))
+            if key in seen:
+                return
+            seen.add(key)
+            try:
+                exists = path.exists()
+            except OSError:
+                exists = False
+            items.append({'source': name, 'path': str(path), 'exists': exists, 'default': from_default})
+            detected[name] = detected.get(name, False) or exists
+
         for name, paths in payload.sources.items():
             for raw in paths:
-                path = Path(raw).expanduser()
-                try:
-                    exists = path.exists()
-                except OSError:
-                    exists = False
-                items.append({'source': name, 'path': str(path), 'exists': exists})
-                detected[name] = detected.get(name, False) or exists
+                probe(name, raw)
+            if defaults is not None:
+                # 用户填写的路径优先展示；默认目录只用于补齐“新安装但未配置”的来源。
+                for raw in getattr(defaults, name).paths:
+                    probe(name, raw, True)
         return {'items': items, 'detected': [name for name, ok in detected.items() if ok]}
 
     @app.post('/api/git/scan')

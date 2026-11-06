@@ -388,7 +388,9 @@ export function Conversations({
                 title="本机未检测到该 Agent 日志路径，点击前往系统设置配置"
               >
                 <div className="apple-checkbox-circle disabled" />
-                <SourceIcon source={s.source} size={18} />
+                <span className="agent-icon-tile">
+                  <SourceIcon source={s.source} size={18} />
+                </span>
                 <span className="agent-card-title">{names[s.source] || s.source}</span>
                 <span className="unconfigured-tag">
                   未配置 <Settings2 size={11} />
@@ -411,7 +413,9 @@ export function Conversations({
               <div className="apple-checkbox-circle">
                 {isChecked && <Check size={11} strokeWidth={3} />}
               </div>
-              <SourceIcon source={s.source} size={18} />
+              <span className="agent-icon-tile">
+                <SourceIcon source={s.source} size={18} />
+              </span>
               <span className="agent-card-title">{names[s.source] || s.source}</span>
               <span className={`count-tag ${count > 0 ? "has-data" : ""}`}>
                 {count > 0 ? (

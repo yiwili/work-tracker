@@ -43,7 +43,12 @@ export const sourceLabels: Record<SourceKey, string> = {
   trae_intl: "Trae 国际版（会话摘要）",
 };
 
-type PathStatus = { source: SourceKey; path: string; exists: boolean };
+type PathStatus = {
+  source: SourceKey;
+  path: string;
+  exists: boolean;
+  default?: boolean;
+};
 type CheckResult = { items: PathStatus[]; detected: SourceKey[] };
 
 export function SourcePicker({
@@ -60,8 +65,14 @@ export function SourcePicker({
   const [error, setError] = useState("");
   const [open, setOpen] = useState<Partial<Record<SourceKey, boolean>>>({});
   const [notice, setNotice] = useState("");
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
-  const check = async (candidate: Settings = settings, focus?: SourceKey) => {
+  const check = async (
+    candidate: Settings = settings,
+    focus?: SourceKey,
+    rediscover = false,
+  ) => {
     setBusy(true);
     setError("");
     setNotice("");
@@ -73,12 +84,39 @@ export function SourcePicker({
             candidate[key].paths.map((path) => path.trim()).filter(Boolean),
           ]),
         ),
+        rediscover,
       });
       setStatus(result.items);
       onDetected?.(result.detected);
       let next = candidate;
       let changed = false;
+      const adopted: SourceKey[] = [];
       for (const key of sourceKeys) {
+        if (rediscover) {
+          // 保存的路径都失效时，采用后端刚扫描到的默认目录，让“重新检测”真的能发现新装的 Agent。
+          const configuredOk = result.items.some(
+            (item) => item.source === key && !item.default && item.exists,
+          );
+          if (!configuredOk) {
+            const known = candidate[key].paths.map((path) => path.trim().toLowerCase());
+            const discovered = result.items
+              .filter((item) => item.source === key && item.default && item.exists)
+              .map((item) => item.path)
+              .filter((path) => !known.includes(path.toLowerCase()));
+            if (discovered.length) {
+              next = {
+                ...next,
+                [key]: {
+                  ...next[key],
+                  paths: [...candidate[key].paths.filter((path) => path.trim()), ...discovered],
+                  enabled: true,
+                },
+              };
+              changed = true;
+              adopted.push(key);
+            }
+          }
+        }
         const found = result.detected.includes(key);
         if (focus === key && found && !next[key].enabled) {
           next = { ...next, [key]: { ...next[key], enabled: true } };
@@ -91,9 +129,15 @@ export function SourcePicker({
           changed = true;
         }
       }
+      if (adopted.length)
+        setNotice(
+          `已发现 ${adopted.map((key) => sourceLabels[key]).join("、")} 的默认路径并加入采集。`,
+        );
       if (focus && !result.detected.includes(focus))
         setNotice(`${sourceLabels[focus]} 仍未检测到有效路径，请检查路径。`);
       if (changed) onChange(next);
+      setCheckedAt(new Date());
+      setRefreshTick((tick) => tick + 1);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -122,11 +166,18 @@ export function SourcePicker({
   return (
     <div className="source-picker">
       <div className="source-picker-head">
+        <span className="source-picker-status" role="status" aria-live="polite">
+          {busy
+            ? "正在扫描本机默认目录…"
+            : checkedAt
+              ? `检测完成 · ${new Set(status?.filter((item) => item.exists).map((item) => item.source)).size} 个来源可用 · ${checkedAt.toLocaleTimeString("zh-CN", { hour12: false })}`
+              : ""}
+        </span>
         <button
           type="button"
-          className="outline"
+          className="outline source-detect-btn"
           disabled={busy}
-          onClick={() => void check(settings)}
+          onClick={() => void check(settings, undefined, true)}
         >
           {busy ? (
             <LoaderCircle className="spin" size={15} />
@@ -147,7 +198,7 @@ export function SourcePicker({
           {error ? "检测失败，请点击“重新检测全部”。" : "正在检测默认路径…"}
         </p>
       ) : (
-        <div className="source-tags">
+        <div className="source-tags" key={refreshTick}>
           {sourceKeys.map((key) => {
             const rows = status.filter((item) => item.source === key);
             const found = rows.filter((item) => item.exists);

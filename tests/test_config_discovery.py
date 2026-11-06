@@ -80,6 +80,29 @@ def test_source_check_accepts_unsaved_paths(client, tmp_path):
     assert data['detected'] == ['codex']
 
 
+def test_source_check_rediscover_includes_builtin_defaults(client, tmp_path, monkeypatch):
+    existing = tmp_path / 'codex-default'
+    existing.mkdir()
+    missing = tmp_path / 'codex-missing'
+
+    class FakeSettings:
+        codex = type('Source', (), {'paths': [str(existing), str(missing)]})
+        claude_code = type('Source', (), {'paths': []})
+
+    monkeypatch.setattr('awt.app.Settings', FakeSettings)
+    response = client.post('/api/sources/check', json={
+        'sources': {'codex': []},
+        'rediscover': True,
+    })
+    response.raise_for_status()
+    data = response.json()
+    assert [(item['path'], item['exists'], item['default']) for item in data['items']] == [
+        (str(existing), True, True),
+        (str(missing), False, True),
+    ]
+    assert data['detected'] == ['codex']
+
+
 def test_source_check_rejects_unknown_source(client):
     response = client.post('/api/sources/check', json={'sources': {'unknown': ['C:/tmp']}})
     assert response.status_code in (400, 422)

@@ -30,6 +30,17 @@ def _antigravity_source():
     return _source(Path.home() / ".gemini" / "antigravity" / "brain")
 
 
+def _claude_code_source():
+    return _source(Path.home() / ".claude" / "projects")
+
+
+def _codex_source():
+    return SourceConfig(paths=[
+        str(Path.home() / ".codex" / "sessions"),
+        str(Path.home() / ".codex" / "archived_sessions"),
+    ])
+
+
 def _gemini_source():
     return SourceConfig(paths=[
         str(Path.home() / ".gemini" / "tmp"),
@@ -174,6 +185,8 @@ class GitAuthor(BaseModel):
 
 class SourceCheckInput(BaseModel):
     sources: dict[str, list[str]] = Field(default_factory=dict)
+    # 重新检测时会额外扫描各来源的内置默认目录，便于发现新安装的 Agent。
+    rediscover: bool = False
 
     @field_validator('sources')
     @classmethod
@@ -222,8 +235,8 @@ class Settings(BaseModel):
     antigravity: SourceConfig = Field(default_factory=_antigravity_source)
     gemini: SourceConfig = Field(default_factory=_gemini_source)
     doubao: SourceConfig = Field(default_factory=_doubao_source)
-    claude_code: SourceConfig = Field(default_factory=SourceConfig)
-    codex: SourceConfig = Field(default_factory=SourceConfig)
+    claude_code: SourceConfig = Field(default_factory=_claude_code_source)
+    codex: SourceConfig = Field(default_factory=_codex_source)
     workbuddy_cn: SourceConfig = Field(default_factory=_workbuddy_cn_source)
     workbuddy_intl: SourceConfig = Field(default_factory=_workbuddy_intl_source)
     deepseek_harness: SourceConfig = Field(default_factory=_deepseek_harness_source)

@@ -84,6 +84,36 @@
   /* Animation Easings */
   --ease-apple: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* 弹簧阻尼：轻微回弹，替代死板的 ease-in-out */
+  --spring-damped: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --spring-glide: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ------------------------------------------------------------------
+     Liquid Glass 材质令牌
+     玻璃基底 = 半透明色 + backdrop-filter 折射；::before 负责 135° 边缘
+     反光，::after 提供极细噪点。暗色模式只需替换下面这组变量即可。
+     ------------------------------------------------------------------ */
+  --glass-radius-lg: 16px;
+  --glass-radius-md: 12px;
+  --glass-radius-sm: 8px;
+  --glass-border: rgba(255, 255, 255, 0.66);
+  --glass-tint-strong: rgba(255, 255, 255, 0.74);
+  --glass-tint: rgba(255, 255, 255, 0.42);
+  --glass-fill: rgba(242, 242, 247, 0.46);
+  --glass-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.045);
+  --glass-shadow:
+    0 14px 34px -18px rgba(16, 24, 40, 0.26),
+    0 4px 12px -6px rgba(16, 24, 40, 0.1);
+  --glass-shadow-hover:
+    0 20px 44px -18px rgba(16, 24, 40, 0.28),
+    0 6px 16px -8px rgba(16, 24, 40, 0.12);
+  --glass-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E");
+  /* 超椭圆遮罩：对 |x|^n + |y|^n = 1（n≈4）采样，
+     四段三次贝塞尔控制点取边长的 6%，让曲率连续过渡而不是四段圆弧拼接。
+     用于固定正方形容器（图标底、徽标）；大卡片改用 corner-shape。 */
+  --squircle-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpath d='M50 0C6 0 0 6 0 50C0 94 6 100 50 100C94 100 100 94 100 50C100 6 94 0 50 0Z' fill='%23000'/%3E%3C/svg%3E");
 
   color-scheme: light;
   font-family: var(--apple-font);
@@ -96,6 +126,24 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* 暗色材质：只替换玻璃变量，光影与过渡自然衔接，无需改动组件选择器。
+   项目目前默认浅色，接入暗色主题时给 <html> 加上 data-theme="dark" 即可。 */
+[data-theme="dark"] {
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-tint-strong: rgba(44, 44, 46, 0.72);
+  --glass-tint: rgba(28, 28, 30, 0.5);
+  --glass-fill: rgba(28, 28, 30, 0.46);
+  --glass-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.42);
+  --glass-shadow:
+    0 16px 38px -18px rgba(0, 0, 0, 0.7),
+    0 4px 12px -6px rgba(0, 0, 0, 0.4);
+  --glass-shadow-hover:
+    0 24px 50px -18px rgba(0, 0, 0, 0.78),
+    0 8px 18px -8px rgba(0, 0, 0, 0.46);
 }
 
 /* ==========================================================================
@@ -1474,6 +1522,16 @@ h2 {
   white-space: nowrap;
 }
 
+/* ==========================================================================
+   AI Agent 来源 —— Apple Liquid Glass
+   曲率：大卡片用 corner-shape: squircle —— 这是标准化的连续曲率，
+   效果等同 SVG 超椭圆 clip-path，但能随卡片宽高自适应；旧浏览器自动退回
+   border-radius。固定正方形（图标底/徽标）用底层 --squircle-mask 遮罩。
+   同心圆角：内层半径 = 外层半径 - 间距（分段控件 7px = 10px - 3px）。
+   玻璃：半透明底色 + backdrop-filter 折射 + inset 厚度高光 + 135° 反光
+   + feTurbulence 噪点 + 大半径低透明弥散阴影。
+   ========================================================================== */
+
 /* 顶部控制栏：分段选择器 + 快捷操作 */
 .source-segmented-toolbar {
   display: flex;
@@ -1484,12 +1542,21 @@ h2 {
   gap: 10px;
 }
 
+/* 分段控件：玻璃凹槽 + squircle；内层按钮半径 7px = 外层 10px - 3px 间距 */
 .apple-segmented-group {
   display: inline-flex;
-  background: rgba(0, 0, 0, 0.05);
+  position: relative;
+  background: rgba(118, 118, 128, 0.12);
   padding: 3px;
-  border-radius: 9px;
+  border-radius: 10px;
+  corner-shape: squircle;
+  border: 1px solid rgba(255, 255, 255, 0.42);
   gap: 2px;
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.06),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .apple-segmented-btn {
@@ -1497,23 +1564,36 @@ h2 {
   background: transparent;
   padding: 4px 11px;
   border-radius: 7px;
+  corner-shape: squircle;
   font-size: 12px;
   font-weight: 500;
   color: var(--apple-text-secondary);
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   user-select: none;
+  transition:
+    color 0.35s var(--spring-glide),
+    background-color 0.35s var(--spring-glide),
+    box-shadow 0.5s var(--spring-damped),
+    transform 0.5s var(--spring-damped);
 }
 
 .apple-segmented-btn:hover:not(.active) {
   color: var(--apple-text-primary);
 }
 
+.apple-segmented-btn:active {
+  transform: scale(0.96);
+}
+
+/* 选中态做成一小块“抬起的玻璃”，内高光模拟厚度 */
 .apple-segmented-btn.active {
-  background: #ffffff;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f6f9 100%);
   color: var(--apple-text-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0.5px 1px rgba(0, 0, 0, 0.04);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 4px 10px -6px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
 
 .source-quick-actions {
@@ -1528,14 +1608,21 @@ h2 {
   color: var(--apple-blue);
   font-size: 11.5px;
   font-weight: 500;
-  padding: 3px 6px;
+  padding: 3px 7px;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    color 0.3s var(--spring-glide),
+    background-color 0.3s var(--spring-glide),
+    transform 0.45s var(--spring-damped);
 }
 
 .source-quick-btn:hover:not(:disabled) {
   background: rgba(0, 122, 255, 0.08);
+}
+
+.source-quick-btn:active:not(:disabled) {
+  transform: scale(0.94);
 }
 
 .source-quick-btn:disabled {
@@ -1548,27 +1635,91 @@ h2 {
   font-size: 11px;
 }
 
-/* AI Agent 网格卡片 */
+/* AI Agent 网格：统一行高与卡片尺寸，不再让不同状态撑出不同大小的框 */
 .conversation-sources-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 9px;
+  grid-auto-rows: minmax(48px, auto);
+  gap: 10px;
   padding: 0 20px 12px;
 }
 
+/* 所有状态共用同一套几何：同一高度、内边距、边框宽度与圆角。
+   状态差异只体现在色调/图标，不改变盒子大小。 */
 .agent-card {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #f5f5f7;
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  border-radius: 11px;
-  padding: 8px 12px;
   min-width: 0;
+  height: 100%;
+  min-height: 48px;
+  /* 覆盖全局 label { margin: 14px 0 }，否则 label 卡片会比 div 卡片高 28px */
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  corner-shape: squircle;
+  background:
+    linear-gradient(180deg, var(--glass-tint-strong) 0%, var(--glass-tint) 100%),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  backdrop-filter: blur(22px) saturate(1.7);
+  box-shadow: var(--glass-inset), var(--glass-shadow);
+  overflow: hidden;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  position: relative;
   user-select: none;
+  transition:
+    transform 0.5s var(--spring-damped),
+    box-shadow 0.5s var(--spring-glide),
+    border-color 0.4s var(--spring-glide),
+    background-color 0.4s var(--spring-glide);
+}
+
+/* 135° 边缘反光：一大层斜向渐变，悬停时整体旋转 8°，视觉上反光角度偏移。
+   用 transform 而不是 background 角度，才能被弹簧曲线平滑补间。 */
+.agent-card::before {
+  content: "";
+  position: absolute;
+  inset: -70% -35%;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.62) 0%,
+    rgba(255, 255, 255, 0.18) 26%,
+    rgba(255, 255, 255, 0) 52%
+  );
+  opacity: 0.85;
+  transform: rotate(0deg) scale(1);
+  transition:
+    transform 0.7s var(--spring-glide),
+    opacity 0.45s var(--spring-glide);
+}
+
+/* 极细噪点，避免大面积纯色玻璃显得“塑料” */
+.agent-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--glass-noise);
+  background-size: 120px 120px;
+  opacity: 0.26;
+  mix-blend-mode: soft-light;
+}
+
+.agent-card:hover::before {
+  transform: rotate(-8deg) scale(1.06);
+  opacity: 1;
+}
+
+/* 内容压在反光与噪点之上 */
+.agent-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .agent-card input[type="checkbox"] {
@@ -1580,21 +1731,36 @@ h2 {
 }
 
 .agent-card:hover:not(.unconfigured):not(.discover-more) {
-  background: #ffffff;
-  border-color: rgba(0, 0, 0, 0.1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--glass-inset), var(--glass-shadow-hover);
 }
 
+.agent-card:active:not(.unconfigured):not(.discover-more) {
+  transform: translateY(0) scale(0.99);
+}
+
+/* 选中态：蓝色玻璃染色，仍保留反光与厚度 */
 .agent-card.active {
-  background: rgba(0, 122, 255, 0.075);
-  border-color: rgba(0, 122, 255, 0.32);
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.08);
+  border-color: rgba(0, 122, 255, 0.38);
+  background:
+    linear-gradient(135deg, rgba(0, 122, 255, 0.14) 0%, rgba(0, 122, 255, 0.04) 48%, rgba(0, 122, 255, 0) 80%),
+    var(--glass-fill);
+  box-shadow:
+    var(--glass-inset),
+    0 16px 34px -20px rgba(0, 122, 255, 0.6),
+    0 3px 12px -6px rgba(0, 122, 255, 0.24);
+}
+
+.agent-card.has-data:not(.active) {
+  border-color: rgba(52, 199, 89, 0.22);
 }
 
 .agent-card-title {
   min-width: 0;
   font-size: 12.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--apple-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -1602,51 +1768,107 @@ h2 {
   flex: 1;
 }
 
+/* 图标底：同尺寸的玻璃小方块，用 SVG 超椭圆遮罩获得连续曲率；
+   26px 方块放在 12px 圆角卡片内，视觉上形成同心收拢。 */
+.agent-icon-tile {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.34));
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: var(--glass-radius-sm);
+  -webkit-mask-image: var(--squircle-mask);
+  mask-image: var(--squircle-mask);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  filter: drop-shadow(0 1px 2px rgba(16, 24, 40, 0.08));
+  transition: transform 0.5s var(--spring-damped);
+}
+
+.agent-card:hover .agent-icon-tile {
+  transform: scale(1.04);
+}
+
+.agent-icon-tile .source-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* iOS 风格勾选圆环（圆形是 Apple 控件的既定语义，保持正圆） */
 .apple-checkbox-circle {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.22);
+  border: 1.5px solid rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition:
+    background-color 0.4s var(--spring-glide),
+    border-color 0.4s var(--spring-glide),
+    box-shadow 0.5s var(--spring-damped),
+    transform 0.5s var(--spring-damped);
+}
+
+.agent-card:hover .apple-checkbox-circle {
+  border-color: rgba(0, 122, 255, 0.42);
+  transform: scale(1.05);
 }
 
 .agent-card.active .apple-checkbox-circle,
 .git-evidence-card.active .apple-checkbox-circle {
-  background: var(--apple-blue);
+  background: linear-gradient(180deg, #0a84ff 0%, #007aff 100%);
   border-color: var(--apple-blue);
   color: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 122, 255, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    0 3px 8px -2px rgba(0, 122, 255, 0.55);
 }
 
 .apple-checkbox-circle.disabled {
-  border-style: dashed;
-  border-color: rgba(0, 0, 0, 0.18);
+  border-style: solid;
+  border-color: rgba(0, 0, 0, 0.14);
+  background: rgba(0, 0, 0, 0.03);
   opacity: 0.55;
+  box-shadow: none;
 }
 
-.count-tag {
+/* 标签：三种状态统一字号、内边距、圆角与高度，只有配色不同 */
+.count-tag,
+.unconfigured-tag,
+.discover-tag {
   margin-left: auto;
   flex-shrink: 0;
-  color: var(--apple-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.03);
+  min-height: 21px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  color: var(--apple-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .count-tag.has-data {
-  background: rgba(52, 199, 89, 0.12);
-  color: #248a3d;
+  background: rgba(52, 199, 89, 0.14);
+  border-color: rgba(52, 199, 89, 0.2);
+  color: var(--apple-green-text);
   font-weight: 600;
 }
 
@@ -1659,70 +1881,96 @@ h2 {
   display: inline-block;
 }
 
-/* 未配置 Agent 卡片 */
+/* 未配置：同样的玻璃盒子，只降低图标/文字存在感，不再用虚线改变几何 */
 .agent-card.unconfigured {
-  background: rgba(0, 0, 0, 0.015);
-  border: 1px dashed rgba(0, 0, 0, 0.1);
-  opacity: 0.72;
-  cursor: pointer;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0.18) 100%),
+    var(--glass-fill);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.agent-card.unconfigured .agent-card-title {
+  color: var(--apple-text-secondary);
+}
+
+.agent-card.unconfigured .agent-icon-tile {
+  opacity: 0.62;
 }
 
 .agent-card.unconfigured:hover {
-  opacity: 1;
-  background: #ffffff;
+  transform: translateY(-1px);
   border-color: rgba(0, 122, 255, 0.3);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-
-.unconfigured-tag {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 10.5px;
-  color: var(--apple-text-tertiary);
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  background: rgba(0, 0, 0, 0.04);
-  padding: 2px 6px;
-  border-radius: 6px;
+  box-shadow: var(--glass-inset), var(--glass-shadow-hover);
 }
 
 .agent-card.unconfigured:hover .unconfigured-tag {
   color: var(--apple-blue);
-  background: rgba(0, 122, 255, 0.08);
+  background: rgba(0, 122, 255, 0.1);
+  border-color: rgba(0, 122, 255, 0.16);
 }
 
-/* 更多 Agent 探索卡片 */
+/* 更多 Agent：仍是同尺寸玻璃卡，仅用蓝色染色提示可点击 */
 .agent-card.discover-more {
-  background: transparent;
-  border: 1px dashed rgba(0, 122, 255, 0.25);
+  border-color: rgba(0, 122, 255, 0.26);
+  background:
+    linear-gradient(120deg, rgba(0, 122, 255, 0.12) 0%, rgba(0, 122, 255, 0.03) 55%, rgba(0, 122, 255, 0) 85%),
+    var(--glass-fill);
+  color: var(--apple-blue);
+}
+
+.agent-card.discover-more .agent-card-title {
   color: var(--apple-blue);
 }
 
 .agent-card.discover-more:hover {
-  background: rgba(0, 122, 255, 0.04);
-  border-color: var(--apple-blue);
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.06);
+  transform: translateY(-1px);
+  border-color: rgba(0, 122, 255, 0.42);
+  box-shadow:
+    var(--glass-inset),
+    0 18px 38px -20px rgba(0, 122, 255, 0.5),
+    0 4px 12px -6px rgba(0, 122, 255, 0.18);
+}
+
+.agent-card.discover-more .discover-tag {
+  background: rgba(0, 122, 255, 0.1);
+  border-color: rgba(0, 122, 255, 0.16);
+  color: var(--apple-blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-card,
+  .agent-card::before,
+  .agent-icon-tile,
+  .apple-checkbox-circle,
+  .apple-segmented-btn,
+  .source-quick-btn {
+    transition-duration: 0.01ms;
+  }
+
+  .agent-card:hover,
+  .agent-card.unconfigured:hover,
+  .agent-card.discover-more:hover,
+  .agent-card:hover .agent-icon-tile,
+  .agent-card:hover .apple-checkbox-circle {
+    transform: none;
+  }
 }
 
 .discover-icon-wrap {
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--apple-blue);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-}
-
-.discover-tag {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 10.5px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, rgba(0, 122, 255, 0.2), rgba(0, 122, 255, 0.08));
   color: var(--apple-blue);
-  font-weight: 500;
+  border-radius: var(--glass-radius-sm);
+  -webkit-mask-image: var(--squircle-mask);
+  mask-image: var(--squircle-mask);
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
 /* 辅助证据：Git 提交卡片 */
@@ -4984,16 +5232,49 @@ code {
 .source-picker-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   min-height: 32px;
   margin: 0 0 12px;
 }
 
-.source-picker-head > .outline {
+/* 检测反馈：时间 + 可用来源数，让“重新检测”每次都有明确结果 */
+.source-picker-status {
+  min-width: 0;
+  color: var(--apple-text-tertiary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.4s var(--spring-glide);
+}
+
+/* 检测按钮：小型液态玻璃胶囊，内层半径与胶囊保持同心 */
+.source-picker-head > .source-detect-btn {
   padding: 7px 13px;
   font-size: 12px;
   border-radius: 9px;
+  corner-shape: squircle;
+  border: 1px solid var(--glass-border);
+  background:
+    linear-gradient(180deg, var(--glass-tint-strong), var(--glass-tint)),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow: var(--glass-inset), 0 8px 20px -16px rgba(16, 24, 40, 0.35);
+  transition:
+    transform 0.5s var(--spring-damped),
+    box-shadow 0.5s var(--spring-glide),
+    border-color 0.4s var(--spring-glide),
+    background-color 0.4s var(--spring-glide);
+}
+
+.source-picker-head > .source-detect-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(0, 122, 255, 0.35);
+  box-shadow: var(--glass-inset), var(--glass-shadow-hover);
+}
+
+.source-picker-head > .source-detect-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .source-notice {
@@ -5009,29 +5290,112 @@ code {
   min-width: 0;
 }
 
+/* 每次检测完成重放一次轻柔的浮现动画，点击后不再“像没反应” */
+.source-tags {
+  animation: source-tags-refresh 0.5s var(--spring-glide) both;
+}
+
+@keyframes source-tags-refresh {
+  from {
+    opacity: 0.45;
+    transform: translateY(4px);
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* 来源卡片：与首页 Agent 卡片同一套玻璃材质；
+   16px 外层圆角，内部文本域使用 8px（≈16 - 8 内边距）形成同心曲率。 */
 .source-tag,
 .repo-tag {
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 12px;
-  background: #ffffff;
+  position: relative;
+  isolation: isolate;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-lg);
+  corner-shape: squircle;
+  background:
+    linear-gradient(180deg, var(--glass-tint-strong) 0%, var(--glass-tint) 100%),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: var(--glass-inset), 0 12px 30px -24px rgba(16, 24, 40, 0.4);
   overflow: hidden;
-  transition:
-    border-color 0.2s var(--ease-apple),
-    box-shadow 0.2s var(--ease-apple),
-    background-color 0.2s var(--ease-apple);
   min-width: 0;
+  transition:
+    border-color 0.4s var(--spring-glide),
+    box-shadow 0.5s var(--spring-glide),
+    background-color 0.4s var(--spring-glide);
+}
+
+/* 135° 反光层；悬停时旋转，营造玻璃随视角移动的高光 */
+.source-tag::before,
+.repo-tag::before {
+  content: "";
+  position: absolute;
+  inset: -70% -25%;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.16) 26%,
+    rgba(255, 255, 255, 0) 52%
+  );
+  opacity: 0.8;
+  transform: rotate(0deg);
+  transition:
+    transform 0.7s var(--spring-glide),
+    opacity 0.45s var(--spring-glide);
+}
+
+.source-tag:hover::before,
+.repo-tag:hover::before {
+  transform: rotate(-6deg) scale(1.04);
+  opacity: 1;
+}
+
+/* 细微噪点，模拟真实玻璃/磨砂表面的颗粒感 */
+.source-tag::after,
+.repo-tag::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--glass-noise);
+  background-size: 120px 120px;
+  opacity: 0.22;
+  mix-blend-mode: soft-light;
+}
+
+.source-tag > *,
+.repo-tag > * {
+  position: relative;
+  z-index: 1;
 }
 
 .source-tag.selected,
 .repo-tag.selected {
-  border-color: rgba(0, 122, 255, 0.35);
-  background: linear-gradient(180deg, #ffffff 0%, rgba(0, 122, 255, 0.02) 100%);
-  box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.16);
+  border-color: rgba(0, 122, 255, 0.36);
+  background:
+    linear-gradient(135deg, rgba(0, 122, 255, 0.1) 0%, rgba(0, 122, 255, 0.02) 50%, rgba(0, 122, 255, 0) 82%),
+    var(--glass-fill);
+  box-shadow:
+    var(--glass-inset),
+    0 16px 34px -26px rgba(0, 122, 255, 0.55),
+    0 0 0 1px rgba(0, 122, 255, 0.1);
 }
 
+/* 未检测到：保持相同盒子几何，用降低饱和度的玻璃表达“缺失” */
 .source-tag.missing {
-  border-style: dashed;
-  background: #fbfbfd;
+  border-color: rgba(0, 0, 0, 0.07);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.14)),
+    var(--glass-fill);
 }
 
 .source-tag-head,
@@ -5042,13 +5406,13 @@ code {
   padding: 11px 14px;
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.15s ease;
   min-width: 0;
+  transition: background-color 0.35s var(--spring-glide);
 }
 
 .source-tag-head:hover,
 .repo-tag-head:hover {
-  background: #f9f9fb;
+  background: rgba(255, 255, 255, 0.26);
 }
 
 .tag-check {
@@ -5060,6 +5424,7 @@ code {
 .repo-tag-head > strong {
   font-size: 12.5px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--apple-text-primary);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -5086,7 +5451,7 @@ code {
 .repo-tag-head .tag-chevron {
   margin-left: auto;
   color: var(--apple-text-tertiary);
-  transition: transform 0.2s var(--ease-apple);
+  transition: transform 0.5s var(--spring-damped);
   flex-shrink: 0;
   display: inline-flex;
 }
@@ -5103,6 +5468,9 @@ code {
   color: var(--apple-text-tertiary);
   padding: 5px;
   border-radius: 8px;
+  transition:
+    color 0.3s var(--spring-glide),
+    background-color 0.3s var(--spring-glide);
 }
 
 .tag-delete:hover {
@@ -5110,12 +5478,23 @@ code {
   background: var(--apple-red-tint);
 }
 
+/* 展开区：半透明内衬，与外层玻璃形成“玻璃里再嵌一层”的层次 */
 .source-tag-body,
 .repo-tag-body {
-  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  border-top: 1px solid rgba(255, 255, 255, 0.5);
   padding: 14px 16px;
-  background: #fbfbfd;
+  background: rgba(250, 250, 252, 0.5);
   min-width: 0;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.03);
+}
+
+.source-tag-body textarea,
+.repo-tag-body textarea {
+  border-radius: var(--glass-radius-sm);
+  corner-shape: squircle;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .repo-tag-body > code {
