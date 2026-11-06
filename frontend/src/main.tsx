@@ -53,6 +53,8 @@ import { AnalysisResultsModal } from "./AnalysisResultsModal";
 import { DeletedRecoveryModal } from "./DeletedRecoveryModal";
 import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
+import { useTodos } from "./useTodos";
+import { TodoReminderBar, TodoSideDock } from "./TodoWidgets";
 
 // 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
 const statuses: Record<string, string> = {
@@ -174,7 +176,8 @@ function App() {
     [settingsEpoch, setSettingsEpoch] = useState(0),
     [settingsTab, setSettingsTab] = useState<SettingsTab>("sources"),
     [proof, setProof] = useState<Task | null>(null),
-    [selected, setSelected] = useState<string[]>([]);
+    [selected, setSelected] = useState<string[]>([]),
+    [todoDrawerOpen, setTodoDrawerOpen] = useState(false);
   const [collecting, setCollecting] = useState(false),
     [analyzing, setAnalyzing] = useState(false),
     [collectDay, setCollectDay] = useState<string | null>(null),
@@ -200,18 +203,24 @@ function App() {
     [search, setSearch] = useState("");
   const dayRef = useRef(day);
   dayRef.current = day;
-  const refresh = async (d = day) => {
+  const refreshReportOnly = async (d = dayRef.current) => {
     const [r, e, s] = await Promise.all([
       api<Report>("/reports/" + d),
       api<WorkEvent[]>("/events?date=" + d),
       api<Settings>("/settings"),
     ]);
     setSettings(s);
-    // A background job for an older date must not overwrite the date now on screen.
     if (dayRef.current !== d) return;
     setReport(r);
     setEvents(e);
     setSelected([]);
+  };
+  const todoModel = useTodos({
+    getToday: () => today(settings?.timezone),
+    onChanged: () => refreshReportOnly(),
+  });
+  const refresh = async (d = day) => {
+    await Promise.all([refreshReportOnly(d), todoModel.reload()]);
   };
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -764,6 +773,33 @@ function App() {
                   </div>
                 </div>
               </div>
+              <TodoReminderBar
+                model={todoModel}
+                onOpenDrawer={() => setTodoDrawerOpen(true)}
+                onEditItem={(item) =>
+                  setEditor({
+                    task: {
+                      ...item,
+                      confidence: "人工录入",
+                      evidence_level: "人工说明",
+                      suggested_minutes: null,
+                      started_at: null,
+                      ended_at: null,
+                      evidence: [],
+                      time_source: "manual",
+                      time_reason: "",
+                      timing: {
+                        session_span_minutes: 0,
+                        observable_active_minutes: 0,
+                        tool_runtime_minutes: null,
+                        gap_minutes: 5,
+                        confidence: "",
+                        method: "",
+                      },
+                    },
+                  })
+                }
+              />
               {settings && (
                 <Conversations
                   overview={report.conversations}
@@ -1412,10 +1448,40 @@ function App() {
           }}
         />
       )}
+      <TodoSideDock
+        model={todoModel}
+        open={todoDrawerOpen}
+        onToggle={setTodoDrawerOpen}
+        onEditItem={(item) => {
+          setTodoDrawerOpen(false);
+          setEditor({
+            task: {
+              ...item,
+              confidence: "人工录入",
+              evidence_level: "人工说明",
+              suggested_minutes: null,
+              started_at: null,
+              ended_at: null,
+              evidence: [],
+              time_source: "manual",
+              time_reason: "",
+              timing: {
+                session_span_minutes: 0,
+                observable_active_minutes: 0,
+                tool_runtime_minutes: null,
+                gap_minutes: 5,
+                confidence: "",
+                method: "",
+              },
+            },
+          });
+        }}
+      />
       {editor && (
         <TaskEditor
           editor={editor}
           day={day}
+          todayStr={today(settings?.timezone)}
           step={settings?.step_minutes || 15}
           onClose={() => setEditor(null)}
           onQuickAdded={refresh}
@@ -1611,6 +1677,7 @@ const syncCloud = () => {
 function TaskEditor({
   editor,
   day,
+  todayStr,
   step,
   onClose,
   onSave,
@@ -1618,6 +1685,7 @@ function TaskEditor({
 }: {
   editor: Editor;
   day: string;
+  todayStr: string;
   step: number;
   onClose: () => void;
   onSave: (parts: Draft[]) => Promise<void>;
@@ -1679,6 +1747,10 @@ function TaskEditor({
               ...p,
               [key]: value,
               ...(key === "confirmed_minutes" ? { time_locked: true } : {}),
+              // 待办设为已完成时，工作日期自动选为当天
+              ...(key === "status" && value === "delivered" && p.status === "requested"
+                ? { date: todayStr }
+                : {}),
             }
           : p,
       ),

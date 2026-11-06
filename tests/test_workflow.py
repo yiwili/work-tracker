@@ -423,3 +423,17 @@ def model_answer(monkeypatch,tasks):
             return json.dumps({'work_refs':value['required_refs'],'excluded':[],'uncertain_refs':[]})
         return json.dumps({'summary':'按全天工作目标整理','tasks':tasks},ensure_ascii=False)
     monkeypatch.setattr(model_provider,'complete',respond)
+
+
+def test_cross_day_todos_and_complete_moves_to_today(client):
+    old_id = client.post('/api/tasks', json=manual(0, date='2026-10-20', title='补齐部署脚本', status='requested')).json()['id']
+    done_id = client.post('/api/tasks', json=manual(30, date='2026-10-21', title='已上线任务', status='delivered')).json()['id']
+    todos = client.get('/api/todos').json()
+    assert [t['id'] for t in todos] == [old_id]
+    # 将待办设为已完成并把日期改为当天
+    client.patch(f'/api/tasks/{old_id}', json={'status': 'delivered', 'date': DAY}).raise_for_status()
+    assert client.get('/api/todos').json() == []
+    today_tasks = client.get(f'/api/tasks?date={DAY}').json()
+    assert any(t['id'] == old_id and t['status'] == 'delivered' and t['date'] == DAY for t in today_tasks)
+    assert done_id not in [t['id'] for t in today_tasks]
+

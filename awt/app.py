@@ -328,7 +328,11 @@ def create_app(engine=None):
             s=service.get_settings(conn)
             s.manual_templates=payload
             service.save_settings(conn,s)
-            return [t.model_dump(mode='json') for t in s.manual_templates]
+            res = [t.model_dump(mode='json') for t in s.manual_templates]
+        scheduler = getattr(app.state, 'cloud_scheduler', None)
+        if scheduler is not None:
+            scheduler.trigger_now()
+        return res
 
     @app.get('/api/gitee/enterprise/enterprises')
     def enterprises():
@@ -503,6 +507,16 @@ def create_app(engine=None):
         with engine.connect() as conn:
             return [dict(r) for r in conn.execute(select(db.repositories)).mappings()]
 
+    def trigger_cloud_sync():
+        scheduler = getattr(app.state, 'cloud_scheduler', None)
+        if scheduler is not None:
+            scheduler.trigger_now()
+
+    @app.get('/api/todos')
+    def todos():
+        with engine.connect() as conn:
+            return service.list_todos(conn)
+
     @app.get('/api/tasks')
     def tasks(date: date):
         with engine.connect() as conn:
@@ -511,7 +525,9 @@ def create_app(engine=None):
     @app.post('/api/tasks')
     def add_task(payload: TaskInput):
         with transaction() as conn:
-            return {'id': service.save_task(conn, payload)}
+            res = {'id': service.save_task(conn, payload)}
+        trigger_cloud_sync()
+        return res
 
     @app.patch('/api/tasks/{task_id}')
     def edit_task(task_id: str, payload: TaskPatch):
@@ -523,13 +539,16 @@ def create_app(engine=None):
             merged.update(payload.model_dump(exclude_unset=True))
             if 'confirmed_minutes' in payload.model_fields_set and 'time_locked' not in payload.model_fields_set:
                 merged['time_locked']=bool(merged['confirmed_minutes'])
-            return {'id': service.save_task(conn, TaskInput.model_validate(merged), task_id)}
+            res = {'id': service.save_task(conn, TaskInput.model_validate(merged), task_id)}
+        trigger_cloud_sync()
+        return res
 
     @app.delete('/api/tasks/{task_id}')
     def delete_task(task_id: str):
         with transaction() as conn:
             service.delete_task(conn, task_id)
-            return {'ok': True}
+        trigger_cloud_sync()
+        return {'ok': True}
 
     @app.post('/api/tasks/merge')
     def merge(payload: MergeInput):

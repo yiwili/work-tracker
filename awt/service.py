@@ -265,6 +265,24 @@ def state_for(group):
     return "attempted" if any(e['kind'] in ('tool_call', 'shell_command', 'tool_result') for e in group) else "requested"
 
 
+def list_todos(conn):
+    """查询跨日期的未完成待办事项（status='requested' 且未删除），按日期倒序。"""
+    rows = conn.execute(
+        select(
+            db.tasks,
+            db.worklogs.c.suggested_minutes,
+            db.worklogs.c.confirmed_minutes,
+            db.worklogs.c.time_locked,
+            db.worklogs.c.time_source,
+            db.worklogs.c.time_reason,
+        )
+        .join(db.worklogs)
+        .where(and_(db.tasks.c.status == "requested", db.tasks.c.deleted == False))
+        .order_by(db.tasks.c.date.desc(), db.tasks.c.id.desc())
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def list_tasks(conn, day):
     rows = conn.execute(select(db.tasks, db.worklogs.c.suggested_minutes, db.worklogs.c.confirmed_minutes, db.worklogs.c.time_locked, db.worklogs.c.time_source, db.worklogs.c.time_reason)
                         .join(db.worklogs).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == False))
