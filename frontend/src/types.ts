@@ -216,8 +216,24 @@ export type PendingTask = {
   previously_deleted?: boolean;
 };
 
+export type GitCommitItem = {
+  id: string;
+  session_id?: string;
+  repo_id?: string;
+  project: string;
+  cwd?: string;
+  sha: string;
+  subject: string;
+  occurred_at: string;
+  authored_at?: string;
+  author_name?: string;
+  author_email?: string;
+  changes?: string;
+};
+
 export type ConversationOverview = {
   running?: boolean;
+  git_commits?: GitCommitItem[];
   timing: Timing;
   work_timing: Timing | null;
   date: string;

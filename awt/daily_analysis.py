@@ -93,7 +93,27 @@ def overview(conn, day, settings, end_day=None):
                              'user_messages': counts['user_prompt'], 'assistant_messages': counts['assistant_message'], 'events': len(items)})
     detected_sources = {s['source'] for s in source_stats if s['detected']}
     selected = [e for e in all_rows if e['source'] in selected_names and e['source'] in detected_sources]
-    result = {'date': str(day), 'sources': source_stats,
+    git_commits = []
+    for e in all_rows:
+        if e['source'] == 'git' and e['kind'] == 'git_commit':
+            meta = e.get('metadata') or {}
+            sha = meta.get('sha') or (e.get('raw_ref', '').split('@')[-1] if '@' in e.get('raw_ref', '') else '')
+            git_commits.append({
+                'id': e['id'],
+                'session_id': e.get('session_id', ''),
+                'repo_id': e.get('repo_id') or e.get('session_id', ''),
+                'project': e.get('project', ''),
+                'cwd': e.get('cwd', ''),
+                'sha': sha,
+                'subject': e.get('summary', ''),
+                'occurred_at': e.get('occurred_at', ''),
+                'authored_at': meta.get('authored_at') or e.get('occurred_at', ''),
+                'author_name': meta.get('author_name', ''),
+                'author_email': meta.get('author_email', ''),
+                'changes': meta.get('changes', ''),
+            })
+    git_commits.sort(key=lambda c: c['occurred_at'], reverse=True)
+    result = {'date': str(day), 'sources': source_stats, 'git_commits': git_commits,
               'sessions': [{**value, 'projects': sorted(value['projects'])} for value in sessions.values()],
               'session_count': len({(e['source'], e['session_id']) for e in selected if e['source'] != 'git'}),
               'user_messages': sum(e['kind'] == 'user_prompt' for e in selected),

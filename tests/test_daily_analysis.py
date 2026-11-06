@@ -565,3 +565,31 @@ def test_overview_filters_undetected_sources_and_marks_detected(app_client, tmp_
         assert 'codex' in res['selected_sources']
         assert 'gemini' not in res['selected_sources']
         assert 'deepseek_harness' not in res['selected_sources']
+
+
+def test_overview_and_api_return_git_commits(app_client):
+    client, engine = app_client
+    s = client.get('/api/settings').json()
+    s['git_author'] = {'name': 'Developer', 'email': 'dev@example.com'}
+    client.put('/api/settings', json=s).raise_for_status()
+    with engine.begin() as conn:
+        conn.execute(insert(db.events).values(
+            id='git-event-1', source='git', session_id='repo-1', repo_id='repo-1',
+            occurred_at='2026-10-24T02:00:00+00:00', kind='git_commit',
+            summary='feat: add git commit viewer', cwd='D:/Projects/repo-1', project='repo-1',
+            raw_ref='D:/Projects/repo-1@1234567890abcdef',
+            metadata={'sha': '1234567890abcdef', 'authored_at': '2026-10-24T02:00:00+00:00',
+                      'author_name': 'Developer', 'author_email': 'dev@example.com',
+                      'changes': '10\t2\tfile.py'}
+        ))
+    ov = client.get('/api/conversations?date=2026-10-24').json()
+    assert 'git_commits' in ov
+    assert len(ov['git_commits']) == 1
+    assert ov['git_commits'][0]['sha'] == '1234567890abcdef'
+    assert ov['git_commits'][0]['subject'] == 'feat: add git commit viewer'
+    assert ov['git_commits'][0]['project'] == 'repo-1'
+    assert ov['git_commits'][0]['author_name'] == 'Developer'
+
+    commits_api = client.get('/api/git/commits?date=2026-10-24').json()
+    assert len(commits_api) == 1
+    assert commits_api[0]['sha'] == '1234567890abcdef'

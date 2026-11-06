@@ -180,6 +180,12 @@ def create_app(engine=None):
             settings=settings.model_copy(update={'git_author':payload.author})
         return verify_author(roots,settings)
 
+    @app.get('/api/git/commits')
+    def git_commits(date: date, start_date: date | None = None, end_date: date | None = None):
+        with engine.connect() as conn:
+            ov = daily_analysis.overview(conn, start_date or date, service.get_settings(conn), end_day=end_date or date)
+            return ov.get('git_commits', [])
+
     @app.get('/api/doctor')
     def doctor():
         with engine.connect() as conn:

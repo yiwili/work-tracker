@@ -3,13 +3,17 @@ import {
   Activity,
   ArrowUpRight,
   Check,
+  ChevronDown,
+  ChevronUp,
   LoaderCircle,
   Plus,
   Settings2,
   Sparkles,
   CalendarRange,
 } from "lucide-react";
-import type { ConversationOverview, Settings } from "./types";
+import type { ConversationOverview, GitCommitItem, Settings } from "./types";
+import { api } from "./api";
+import { GitCommitsViewer } from "./GitCommitsViewer";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
 import { AnalysisLog } from "./AnalysisLog";
@@ -60,6 +64,9 @@ export function Conversations({
   onViewPending: () => void;
 }) {
   const [sourceTab, setSourceTab] = useState<"ready" | "all">("ready");
+  const [showGitCommits, setShowGitCommits] = useState(false);
+  const [fetchedCommits, setFetchedCommits] = useState<GitCommitItem[] | null>(null);
+  const [loadingCommits, setLoadingCommits] = useState(false);
   const effectiveDay = currentDay || overview.date || new Date().toISOString().slice(0, 10);
   const [showMultiDay, setShowMultiDay] = useState(false);
   const [startDate, setStartDate] = useState(() => {
@@ -103,6 +110,24 @@ export function Conversations({
   ).length;
 
   const displayedAgents = sourceTab === "ready" ? detectedAgents : agentSources;
+
+  useEffect(() => {
+    setFetchedCommits(null);
+  }, [effectiveDay]);
+
+  useEffect(() => {
+    if (showGitCommits && (!overview.git_commits || overview.git_commits.length === 0) && gitEvents > 0 && !fetchedCommits && !loadingCommits) {
+      setLoadingCommits(true);
+      api<GitCommitItem[]>('/git/commits?date=' + (effectiveDay || overview.date))
+        .then((items) => setFetchedCommits(items))
+        .catch(() => setFetchedCommits([]))
+        .finally(() => setLoadingCommits(false));
+    }
+  }, [showGitCommits, overview.git_commits, gitEvents, fetchedCommits, loadingCommits, effectiveDay, overview.date]);
+
+  const activeGitCommits = overview.git_commits && overview.git_commits.length > 0
+    ? overview.git_commits
+    : (fetchedCommits || []);
 
   // 只有 Git 提交时 AI 分析一定是灰的：后端也要求当天存在对话才归纳。
   // 不解释一句，用户会以为按钮坏了或者自己点漏了。
@@ -450,40 +475,82 @@ export function Conversations({
 
       {/* 辅助证据：Git 提交 */}
       {gitSource && (gitSource.detected ?? true) && (
-        <div className="auxiliary-evidence-section">
-          <label
-            className={`git-evidence-card ${isGitChecked ? "active" : ""} ${gitEvents > 0 ? "has-data" : ""}`}
+        <div className={`auxiliary-evidence-section ${showGitCommits ? "expanded" : ""}`}>
+          <div
+            className={`git-evidence-card ${isGitChecked ? "active" : ""} ${gitEvents > 0 ? "has-data" : ""} ${showGitCommits ? "panel-open" : ""}`}
           >
-            <input
-              type="checkbox"
-              checked={isGitChecked}
-              disabled={busy}
-              onChange={(e) => {
-                const next = e.target.checked
-                  ? [...settings.analysis_sources, "git"]
-                  : settings.analysis_sources.filter((x) => x !== "git");
-                onSources(next);
-              }}
-            />
-            <div className="apple-checkbox-circle">
-              {isGitChecked && <Check size={11} strokeWidth={3} />}
-            </div>
-            <SourceIcon source="git" size={17} />
-            <div className="git-evidence-text">
-              <strong className="git-title">Git 仓库代码提交</strong>
-              <span className="git-sub">代码变更辅助归纳证据，不单独作为工作会话</span>
-            </div>
-            <span className={`count-tag ${gitEvents > 0 ? "has-data" : ""}`}>
-              {gitEvents > 0 ? (
-                <>
-                  <span className="live-dot" />
-                  {gitEvents} 提交
-                </>
-              ) : (
-                "今日无提交"
+            <label
+              className="git-check-label"
+              title={isGitChecked ? "点击取消勾选 Git 作为 AI 分析辅助证据" : "点击勾选 Git 作为 AI 分析辅助证据"}
+            >
+              <input
+                type="checkbox"
+                checked={isGitChecked}
+                disabled={busy}
+                onChange={(e) => {
+                  const next = e.target.checked
+                    ? [...settings.analysis_sources, "git"]
+                    : settings.analysis_sources.filter((x) => x !== "git");
+                  onSources(next);
+                }}
+              />
+              <div className="apple-checkbox-circle">
+                {isGitChecked && <Check size={11} strokeWidth={3} />}
+              </div>
+              <SourceIcon source="git" size={17} />
+              <div className="git-evidence-text">
+                <strong className="git-title">Git 仓库代码提交</strong>
+                <span className="git-sub">代码变更辅助归纳证据，不单独作为工作会话</span>
+              </div>
+            </label>
+
+            <div className="git-evidence-actions">
+              <button
+                type="button"
+                className={`count-tag git-clickable-tag ${gitEvents > 0 ? "has-data" : ""} ${showGitCommits ? "active" : ""}`}
+                disabled={gitEvents === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (gitEvents > 0) setShowGitCommits((v) => !v);
+                }}
+                title={gitEvents > 0 ? (showGitCommits ? "点击收起今日提交" : "点击展开今日提交") : "今日无提交"}
+              >
+                {gitEvents > 0 ? (
+                  <>
+                    <span className="live-dot" />
+                    {gitEvents} 提交
+                    <ChevronDown size={12} className={`git-tag-chevron ${showGitCommits ? "rotated" : ""}`} />
+                  </>
+                ) : (
+                  "今日无提交"
+                )}
+              </button>
+
+              {gitEvents > 0 && (
+                <button
+                  type="button"
+                  className={`apple-button-subtle git-action-toggle-btn ${showGitCommits ? "active" : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowGitCommits((v) => !v);
+                  }}
+                  title={showGitCommits ? "收起今日代码提交详情" : "展开查看今日代码提交详情"}
+                >
+                  <span>{showGitCommits ? "收起提交" : "查看今日提交"}</span>
+                  <ChevronDown size={13} className={`git-btn-chevron ${showGitCommits ? "rotated" : ""}`} />
+                </button>
               )}
-            </span>
-          </label>
+            </div>
+          </div>
+
+          {showGitCommits && (
+            <GitCommitsViewer
+              commits={activeGitCommits}
+              timezone={settings.timezone}
+              onViewTimeline={onView}
+              onClose={() => setShowGitCommits(false)}
+            />
+          )}
         </div>
       )}
 
