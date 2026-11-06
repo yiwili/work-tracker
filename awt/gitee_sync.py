@@ -37,9 +37,9 @@ def fetch_all_unfinished(engine) -> list[dict[str, Any]]:
         except Exception as exc:
             logger.warning("Failed to fetch Gitee Enterprise unfinished issues: %s", exc)
 
-    # 2. Gitee V5
+    # 2. Gitee V5 fallback (only if enterprise is not configured)
     v5_config = settings.gitee
-    if gitee.token():
+    if not ent_config.enterprise_id and gitee.token():
         try:
             v5_items = gitee.fetch_unfinished(v5_config)
             remote_issues.extend(v5_items)

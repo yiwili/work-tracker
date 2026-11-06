@@ -142,6 +142,45 @@ def unfinished_issues(enterprise_id, program_id=None):
     return items
 
 
+def fetch_all_issues(enterprise_id, since=None, state='all'):
+    if not enterprise_id:
+        return []
+    args = {'enterprise_id': enterprise_id, 'state': state}
+    try:
+        rows = _paged('list_enterprise_issues', args)
+    except EnterpriseError:
+        try:
+            open_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'open'})
+            closed_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'closed'})
+            rows = open_rows + closed_rows
+        except EnterpriseError:
+            try:
+                rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id})
+            except EnterpriseError:
+                return []
+    items = []
+    for r in rows:
+        if type(r.get('id')) is int and r['id'] > 0:
+            created_at = str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
+            if since and created_at and created_at < str(since):
+                continue
+            prog_name = str(r.get('program_name') or '')
+            if not prog_name and isinstance(r.get('program'), dict):
+                prog_name = str(r['program'].get('name', ''))
+            items.append({
+                'id': str(r['id']),
+                'title': str(r.get('title') or ''),
+                'details': str(r.get('description') or ''),
+                'project': prog_name,
+                'program_name': prog_name,
+                'work_date': created_at,
+                'url': safe_url(r.get('issue_url')),
+                'source': 'gitee_enterprise',
+                'source_id': str(r.get('ident') or r['id']),
+            })
+    return items
+
+
 def normalized(text):
     return re.sub(r'[\W_]+','',text.casefold())
 

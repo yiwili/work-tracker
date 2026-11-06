@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 import httpx
 from sqlalchemy import select
-from . import db, model_provider, style_reference
+from . import db, model_provider, style_reference, gitee_enterprise
 from .collectors import stable
 
 lock=Lock()
@@ -36,23 +36,45 @@ def token(service='gitee'):
             return model_provider._crypt(base64.b64decode(json.loads(path.read_text())['encrypted']),decrypt=True).decode()
         except (ValueError,KeyError,OSError):
             raise ValueError('Gitee本机凭据无法读取，请重新保存Token') from None
-    return os.environ.get('GITEE_ENTERPRISE_TOKEN' if service=='gitee-enterprise' else 'GITEE_ACCESS_TOKEN','')
+    if service=='gitee':
+        ent_path=db.data_dir()/'gitee-enterprise-credential.json'
+        if ent_path.exists():
+            try:
+                return model_provider._crypt(base64.b64decode(json.loads(ent_path.read_text())['encrypted']),decrypt=True).decode()
+            except (ValueError,KeyError,OSError):
+                pass
+    val = os.environ.get('GITEE_ENTERPRISE_TOKEN' if service=='gitee-enterprise' else 'GITEE_ACCESS_TOKEN','')
+    if not val and service=='gitee':
+        val = os.environ.get('GITEE_ENTERPRISE_TOKEN','')
+    return val
 
 
 def save_token(value,service='gitee'):
     if not value.strip():
         raise ValueError('Token不能为空')
-    path=db.data_dir()/(service+'-credential.json')
-    path.parent.mkdir(parents=True,exist_ok=True)
-    temporary=path.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'encrypted':base64.b64encode(model_provider._crypt(value.strip().encode())).decode()}))
-    temporary.replace(path)
+    services = [service, 'gitee-enterprise'] if service == 'gitee' else [service]
+    for svc in services:
+        path=db.data_dir()/(svc+'-credential.json')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        temporary=path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'encrypted':base64.b64encode(model_provider._crypt(value.strip().encode())).decode()}))
+        temporary.replace(path)
 
 
 def status(conn):
     from .service import get_settings
     state=conn.execute(select(db.integrations.c.value).where(db.integrations.c.id=='gitee')).scalar() or {}
-    return {'configured':bool(token()),'config':get_settings(conn).gitee.model_dump(mode='json'),**state}
+    has_token = False
+    try:
+        has_token = bool(token())
+    except Exception:
+        pass
+    if not has_token:
+        try:
+            has_token = bool(token('gitee-enterprise'))
+        except Exception:
+            pass
+    return {'configured': has_token, 'config': get_settings(conn).gitee.model_dump(mode='json'), **state}
 
 
 def fetch(config):
@@ -155,7 +177,34 @@ def sync(engine):
         raise ValueError('历史导入或Gitee同步正在进行，请稍后重试')
     try:
         with engine.connect() as conn:
-            config=get_settings(conn).gitee
+            settings = get_settings(conn)
+            config = settings.gitee
+            ent_config = settings.gitee_enterprise
+
+        # If enterprise is configured, fetch enterprise issues using Enterprise Gitee!
+        has_ent_token = False
+        try:
+            has_ent_token = bool(token('gitee-enterprise'))
+        except TypeError:
+            has_ent_token = bool(token())
+        except Exception:
+            pass
+        if not has_ent_token:
+            try:
+                has_ent_token = bool(token())
+            except Exception:
+                pass
+        if ent_config.enterprise_id and has_ent_token:
+            issues = gitee_enterprise.fetch_all_issues(ent_config.enterprise_id, since=config.since)
+            with engine.begin() as conn:
+                result = style_reference.ingest(conn, issues, config.since, source='gitee', label=f'Gitee Enterprise / #{ent_config.enterprise_id}')
+                state = {'last_synced_at': now(), 'account': {'login': f'Enterprise #{ent_config.enterprise_id}'}, 'records': len(issues), 'error': ''}
+                upsert(conn, db.integrations, {'id': 'gitee', 'value': state}, 'id')
+            with engine.connect() as conn:
+                result['style'] = style_reference.initial_template(conn)
+                conn.commit()
+            return {**result, **state}
+
         rows,user=fetch(config)
         with engine.begin() as conn:
             if get_settings(conn).gitee!=config:

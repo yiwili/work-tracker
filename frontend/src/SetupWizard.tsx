@@ -114,7 +114,7 @@ export function SetupWizard({
     sources: sourcesReady,
     model: modelReady,
     git: gitReady,
-    gitee: giteeReady || entReady,
+    gitee: entReady,
     done: false,
   };
   const hints: Record<StepKey, string> = {
@@ -230,20 +230,14 @@ export function SetupWizard({
       }
       case "gitee":
         return (
-          <>
-            <p>
-              <strong>历史 Issue</strong>
-              <span>{giteeReady ? "私人令牌已保存" : "未配置"}</span>
-            </p>
-            <p>
-              <strong>企业工作项</strong>
-              <span>
-                {entReady
-                  ? `企业 ID ${s.gitee_enterprise.enterprise_id}`
-                  : "未配置"}
-              </span>
-            </p>
-          </>
+          <p>
+            <strong>Gitee 企业版</strong>
+            <span>
+              {entReady
+                ? `企业 ID ${s.gitee_enterprise.enterprise_id}`
+                : "未配置"}
+            </span>
+          </p>
         );
       default:
         return null;
@@ -363,22 +357,18 @@ export function SetupWizard({
     });
   const saveGitee = () =>
     run("正在保存 Gitee 配置", async () => {
-      if (giteeToken.trim())
-        await api("/gitee/token", "POST", { api_key: giteeToken.trim() });
       if (entToken.trim())
         await enterpriseApi("token", { api_key: entToken.trim() });
       await saveSettings(s);
-      setGiteeToken("");
       setEntToken("");
       const status = await loadStatus();
-      const configured =
-        status.gitee.configured || status.enterprise.configured;
+      const configured = status.enterprise.configured;
       go(4);
       setFeedback({
         tone: configured ? "ok" : "info",
         text: configured
-          ? "Gitee 接入配置已保存，可在系统设置「企业同步」中继续完善。"
-          : "尚未填写 Gitee 凭据，可稍后在系统设置中补充。",
+          ? "Gitee 企业接入配置已保存，可在系统设置「Gitee 企业版」中继续完善。"
+          : "尚未填写 Gitee 企业凭据，可稍后在系统设置中补充。",
       });
     });
 
@@ -657,131 +647,86 @@ export function SetupWizard({
         return (
           <>
             <h3>
-              <GitBranch size={18} /> 第 4 步 · Gitee 接入（可选）
+              <Building2 size={18} /> 第 4 步 · Gitee 企业版接入（可选）
             </h3>
-            <div className="gitee-cards">
-              <div className="config-card">
-                <h3>
-                  <GitBranch size={16} /> 历史 Issue
-                </h3>
-                <div className="quick-help">
-                  <span>
-                    头像 → 账号设置 → 安全设置 → 私人令牌，勾选 projects
-                    只读权限后生成并复制。
-                  </span>
-                  <a
-                    href="https://gitee.com/profile/personal_access_tokens"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    获取私人令牌 <ExternalLink size={12} />
-                  </a>
-                </div>
+            <div className="config-card">
+              <h3>
+                <Building2 size={16} /> Gitee 企业版配置
+              </h3>
+              <div className="quick-help">
+                <span>
+                  统一使用 Gitee 企业令牌获取与提交工作项。进入个人设置 → MCP 企业令牌，选择目标企业并授予项目读取、工作项创建权限。
+                </span>
+                <a
+                  href="https://gitee.com/profile/mcp_gitee_ent_access_tokens"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  获取 MCP 企业令牌 <ExternalLink size={12} />
+                </a>
+              </div>
+              <label>
+                MCP 企业令牌（加密保存于本机）
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={entToken}
+                  onChange={(e) => setEntToken(e.target.value)}
+                  placeholder={
+                    entStatus?.configured
+                      ? "已保存，留空表示保留"
+                      : "粘贴 MCP 企业令牌"
+                  }
+                />
+              </label>
+              <div className="setup-inline">
+                <button
+                  type="button"
+                  className="outline small"
+                  disabled={
+                    !!busy || (!entToken && !entStatus?.configured)
+                  }
+                  onClick={saveEntToken}
+                >
+                  保存并读取企业列表
+                </button>
+                <span className="muted">
+                  {entStatus?.configured
+                    ? "企业凭据已配置"
+                    : "尚未保存企业凭据"}
+                </span>
+              </div>
+              {companies.length > 0 ? (
                 <label>
-                  Gitee 私人令牌
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={giteeToken}
-                    onChange={(e) => setGiteeToken(e.target.value)}
-                    placeholder={
-                      giteeReady ? "已保存，留空表示保留" : "粘贴私人令牌"
-                    }
-                  />
-                </label>
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={s.gitee.enabled}
+                  目标企业
+                  <select
+                    value={s.gitee_enterprise.enterprise_id || ""}
                     onChange={(e) =>
                       setS({
                         ...s,
-                        gitee: { ...s.gitee, enabled: e.target.checked },
+                        gitee_enterprise: {
+                          ...s.gitee_enterprise,
+                          enterprise_id: Number(e.target.value),
+                        },
                       })
                     }
-                  />
-                  启用服务运行期间的定时同步
-                </label>
-              </div>
-              <div className="config-card">
-                <h3>
-                  <Building2 size={16} /> 企业工作项
-                </h3>
-                <div className="quick-help">
-                  <span>
-                    个人设置 → MCP 企业令牌，选择目标企业并授予项目读取、工作项创建权限。与私人令牌不通用。
-                  </span>
-                  <a
-                    href="https://gitee.com/profile/mcp_gitee_ent_access_tokens"
-                    target="_blank"
-                    rel="noreferrer"
                   >
-                    获取 MCP 企业令牌 <ExternalLink size={12} />
-                  </a>
-                </div>
-                <label>
-                  MCP 企业令牌（与私人令牌分开保存）
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={entToken}
-                    onChange={(e) => setEntToken(e.target.value)}
-                    placeholder={
-                      entStatus?.configured
-                        ? "已保存，留空表示保留"
-                        : "粘贴 MCP 企业令牌"
-                    }
-                  />
+                    <option value="">请选择企业</option>
+                    {companies.map((company) => (
+                      <option key={company.id} value={company.id}>
+                        {company.name}（{company.id}）
+                      </option>
+                    ))}
+                  </select>
                 </label>
-                <div className="setup-inline">
-                  <button
-                    type="button"
-                    className="outline small"
-                    disabled={
-                      !!busy || (!entToken && !entStatus?.configured)
-                    }
-                    onClick={saveEntToken}
-                  >
-                    保存并读取企业列表
-                  </button>
-                  <span className="muted">
-                    {entStatus?.configured
-                      ? "企业凭据已配置"
-                      : "尚未保存企业凭据"}
-                  </span>
-                </div>
-                {companies.length > 0 ? (
-                  <label>
-                    目标企业
-                    <select
-                      value={s.gitee_enterprise.enterprise_id || ""}
-                      onChange={(e) =>
-                        setS({
-                          ...s,
-                          gitee_enterprise: {
-                            ...s.gitee_enterprise,
-                            enterprise_id: Number(e.target.value),
-                          },
-                        })
-                      }
-                    >
-                      <option value="">请选择企业</option>
-                      {companies.map((company) => (
-                        <option key={company.id} value={company.id}>
-                          {company.name}（{company.id}）
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  s.gitee_enterprise.enterprise_id > 0 && (
-                    <p className="muted">
-                      当前目标企业 ID：{s.gitee_enterprise.enterprise_id}
-                      。如需切换，请先读取企业列表。
-                    </p>
-                  )
-                )}
-              </div>
+              ) : (
+                s.gitee_enterprise.enterprise_id > 0 && (
+                  <p className="muted">
+                    当前目标企业 ID：{s.gitee_enterprise.enterprise_id}
+                    。如需切换，请先读取企业列表。
+                  </p>
+                )
+              )}
             </div>
           </>
         );
@@ -797,7 +742,7 @@ export function SetupWizard({
                   ["sources", sourcesReady, sourcesReady ? "已找到本地对话记录" : "未找到可采集目录"],
                   ["model", modelReady, modelReady ? modelStatus?.model || "已开启" : "未开启，AI 功能暂不可用"],
                   ["git", gitReady, gitReady ? `${s.git_roots.filter(Boolean).length} 个仓库` : "未配置（可选）"],
-                  ["gitee", giteeReady || entReady, giteeReady && entReady ? "私人令牌与企业凭据已保存" : giteeReady ? "私人令牌已保存" : entReady ? `企业 ID ${s.gitee_enterprise.enterprise_id}` : "未配置（可选）"],
+                  ["gitee", entReady, entReady ? `企业 ID ${s.gitee_enterprise.enterprise_id}` : "未配置（可选）"],
                 ] as [StepKey, boolean, string][]
               ).map(([key, ok, text]) => {
                 const expanded = !!summaryOpen[key];

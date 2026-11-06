@@ -76,8 +76,11 @@ export function EnterpriseSettings({
     <section className="settings-section enterprise-settings">
       <h2>
         <Building2 size={19} />
-        Gitee 企业版项目与工作项
+        Gitee 企业版配置
       </h2>
+      <p className="muted" style={{ fontSize: "13px", margin: "4px 0 12px 0" }}>
+        统一配置 Gitee 企业令牌、目标企业、项目映射与去重规则。工作项获取、提交以及历史同步均统一由此接管。
+      </p>
       <label>
         MCP 企业令牌（留空保留）
         <input
@@ -125,6 +128,28 @@ export function EnterpriseSettings({
             }
           >
             移除企业版 Token
+          </button>
+        )}
+        {configured && !!config.enterprise_id && (
+          <button
+            type="button"
+            className="outline"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                await saveKey();
+                const r = await fetch("/api/gitee/sync", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: "{}",
+                }).then((res) => res.json());
+                setMessage(
+                  `已成功同步 ${r.records || 0} 条企业工作项到历史参考库。`,
+                );
+              })
+            }
+          >
+            同步企业工作项到历史库
           </button>
         )}
       </div>

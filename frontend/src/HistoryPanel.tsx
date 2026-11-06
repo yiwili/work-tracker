@@ -50,7 +50,6 @@ export function HistoryPanel({
     }),
     [offset, setOffset] = useState(0);
   const [config, setConfig] = useState(s.gitee),
-    [token, setToken] = useState(""),
     [status, setStatus] = useState<Status>({ configured: false });
   const refresh = async (start = offset) => {
     const [hist, remote] = await Promise.all([
@@ -238,41 +237,11 @@ export function HistoryPanel({
         />
       </details>
       <h3>
-        <Download size={18} /> Gitee API 自动抓取
+        <Download size={18} /> Gitee 企业工作项历史同步
       </h3>
-      <label>
-        Gitee Token（留空保留）
-        <input
-          type="password"
-          autoComplete="new-password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder={
-            status.configured
-              ? "已配置，本机加密保存"
-              : "填写具备 Issues 读取权限的私人令牌"
-          }
-        />
-      </label>
-      <label>
-        工作项范围
-        <select
-          value={config.filter}
-          onChange={(e) => setConfig({ ...config, filter: e.target.value })}
-        >
-          <option value="all">本人负责或创建</option>
-          <option value="assigned">本人负责</option>
-          <option value="created">本人创建</option>
-        </select>
-      </label>
-      <label>
-        限定仓库（可选，owner/repo）
-        <input
-          value={config.repository}
-          onChange={(e) => setConfig({ ...config, repository: e.target.value })}
-          placeholder="留空读取上述范围的所有仓库"
-        />
-      </label>
+      <p className="muted" style={{ fontSize: "13px", margin: "4px 0 12px 0" }}>
+        统一使用已在「Gitee 企业版」配置的 MCP 企业令牌与目标企业，抓取工作项沉淀到历史参考库与命名模板中。
+      </p>
       <label>
         抓取起始日期
         <input
@@ -281,95 +250,33 @@ export function HistoryPanel({
           onChange={(e) => setConfig({ ...config, since: e.target.value })}
         />
       </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={config.enabled}
-          onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
-        />
-        启用自动抓取
-      </label>
-      <label>
-        抓取间隔（小时）
-        <input
-          type="number"
-          min={1}
-          max={168}
-          value={config.interval_hours}
-          onChange={(e) =>
-            setConfig({ ...config, interval_hours: Number(e.target.value) })
-          }
-        />
-      </label>
       <div className="actions">
         <button
           type="button"
           className="outline"
           disabled={!!busy}
           onClick={() =>
-            run("保存Gitee配置", async () => {
-              if (token) {
-                await api("gitee/token", { api_key: token });
-                setToken("");
-              }
-              const value = await api("gitee/config", config, "PUT");
-              setStatus(value);
-              onChange({ ...s, gitee: config });
-              setMessage(
-                "Gitee配置已保存" +
-                  (config.enabled ? "，本地服务将定时抓取。" : "。"),
-              );
-            })
-          }
-        >
-          保存 Gitee 配置
-        </button>
-        <button
-          type="button"
-          className="outline"
-          disabled={!!busy || (!status.configured && !token)}
-          onClick={() =>
-            run("抓取Gitee工作项", async () => {
-              if (token) {
-                await api("gitee/token", { api_key: token });
-                setToken("");
-              }
+            run("抓取企业工作项", async () => {
               await api("gitee/config", config, "PUT");
               const r = await api("gitee/sync", {});
               await loadStyle();
               setMessage(
-                `已抓取 ${r.records} 条，新增 ${r.added} 条。${r.style.message}`,
+                `已抓取 ${r.records} 条企业工作项，新增 ${r.added} 条。${r.style.message}`,
               );
             })
           }
         >
-          立即抓取工作项
+          立即抓取企业历史工作项
         </button>
-        {status.configured && (
-          <button
-            type="button"
-            className="outline"
-            disabled={!!busy}
-            onClick={() =>
-              run("移除Gitee凭据", async () => {
-                await api("gitee/token", undefined, "DELETE");
-                await refresh();
-                setMessage("已移除本机保存的Token；已有历史保留。");
-              })
-            }
-          >
-            移除本机 Token
-          </button>
-        )}
       </div>
       <p>
-        凭据{status.configured ? "已配置" : "未配置"}
+        企业同步凭据{status.configured ? "已配置" : "未配置"}
         {status.account ? ` · ${status.account.login}` : ""}
         {status.last_synced_at
           ? ` · 上次成功 ${new Date(status.last_synced_at).toLocaleString()}`
           : ""}
       </p>
-      {status.error && <p role="alert">上次自动抓取失败：{status.error}</p>}
+      {status.error && <p role="alert">上次抓取失败：{status.error}</p>}
       {busy && <p role="status">{busy}中…</p>}
       {message && <p role="status">{message}</p>}
     </section>
