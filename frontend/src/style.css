@@ -6581,7 +6581,7 @@ code {
   }
 }
 
-/* 添加人工事项：模板与快捷待办 */
+/* 添加人工事项：模板 */
 .manual-quick { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(0,0,0,.06); }
 .manual-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .manual-templates-label { font-size: 13px; color: #6b7280; margin-right: 4px; }
@@ -6591,10 +6591,6 @@ code {
 .template-chip.add { color: #0a6cff; border-style: dashed; }
 .template-new { display: inline-flex; align-items: center; gap: 4px; }
 .template-new input { height: 28px; padding: 0 10px; font-size: 13px; width: 180px; }
-.manual-quick-todo { display: flex; gap: 8px; }
-.manual-quick-todo input { flex: 1; }
-.manual-quick-todo button { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
-.manual-quick-notice { font-size: 12px; color: #16a34a; }
 .link-button { align-self: flex-start; background: none; border: 0; padding: 0; color: #0a6cff; font-size: 13px; cursor: pointer; }
 .state.rejected { color: #dc2626; background: rgba(220,38,38,.08); }
 

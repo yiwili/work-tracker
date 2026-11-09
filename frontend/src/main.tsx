@@ -1484,7 +1484,6 @@ function App() {
           todayStr={today(settings?.timezone)}
           step={settings?.step_minutes || 15}
           onClose={() => setEditor(null)}
-          onQuickAdded={refresh}
           onSave={async (parts) => {
             setError("");
             if (editor.split) {
@@ -1681,7 +1680,6 @@ function TaskEditor({
   step,
   onClose,
   onSave,
-  onQuickAdded,
 }: {
   editor: Editor;
   day: string;
@@ -1689,7 +1687,6 @@ function TaskEditor({
   step: number;
   onClose: () => void;
   onSave: (parts: Draft[]) => Promise<void>;
-  onQuickAdded: () => Promise<void> | void;
 }) {
   const isNew = !editor.task && !editor.split;
   const [parts, setParts] = useState<Draft[]>(() =>
@@ -1717,9 +1714,11 @@ function TaskEditor({
     [templates, setTemplates] = useState<ManualTemplate[]>([]),
     [active, setActive] = useState<ManualTemplate | null>(null),
     [showAll, setShowAll] = useState(false),
-    [templateName, setTemplateName] = useState<string | null>(null),
-    [quick, setQuick] = useState(""),
-    [quickNotice, setQuickNotice] = useState("");
+    [templateName, setTemplateName] = useState<string | null>(null);
+  const firstTitleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    firstTitleRef.current?.focus();
+  }, []);
   const loadManualOptions = (refresh = false) => {
     if (refresh) setRefreshingProjects(true);
     return api<{
@@ -1820,23 +1819,6 @@ function TaskEditor({
       await saveTemplates([...templates, t]);
       setTemplateName(null);
       setActive(t);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  const quickAdd = async () => {
-    const title = quick.trim();
-    if (!title) return;
-    setError("");
-    try {
-      const base = active
-        ? { ...parts[0], title }
-        : { ...fromTask(undefined, parts[0].date || day), title };
-      await api("/tasks", "POST", payload({ ...base, status: "requested" }));
-      setQuick("");
-      setQuickNotice(`已添加待办：${title}`);
-      syncCloud();
-      await onQuickAdded();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1957,28 +1939,6 @@ function TaskEditor({
                 </span>
               )}
             </div>
-            <div className="manual-quick-todo">
-              <input
-                value={quick}
-                maxLength={500}
-                placeholder={
-                  active
-                    ? `快捷添加待办（按模板「${active.name}」），回车添加`
-                    : "快捷添加待办项，输入标题后回车"
-                }
-                onChange={(e) => setQuick(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void quickAdd();
-                  }
-                }}
-              />
-              <button type="button" className="outline" onClick={() => void quickAdd()}>
-                <Plus size={14} /> 添加待办
-              </button>
-            </div>
-            {quickNotice && <div className="manual-quick-notice">{quickNotice}</div>}
             {active && hidden.size > 0 && (
               <button
                 type="button"
@@ -1997,6 +1957,8 @@ function TaskEditor({
               <label>
                 任务标题
                 <input
+                  ref={i === 0 ? firstTitleRef : undefined}
+                  autoFocus={i === 0}
                   required
                   maxLength={500}
                   value={p.title}
