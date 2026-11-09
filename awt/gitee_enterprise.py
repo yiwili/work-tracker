@@ -252,7 +252,7 @@ def cache_programs(engine,enterprise_id):
         upsert(conn,db.integrations,{'id':f'gitee-enterprise-programs:{enterprise_id}','value':{'items':catalog,'fetched_at':now()}},'id')
         # 同步保存为人工事项可选项目；设置变更会触发云同步写入服务器。
         settings=get_settings(conn)
-        names=list(dict.fromkeys(r['name'] for r in catalog if r['name']))[:500]
+        names=list(dict.fromkeys(r.get('name', '') for r in catalog if r.get('name')))[:500]
         if names and names!=settings.project_options:
             settings.project_options=names
             save_settings(conn,settings)

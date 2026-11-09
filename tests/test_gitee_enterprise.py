@@ -260,3 +260,47 @@ def test_invalid_mapping_prefix_rejected_without_overwriting_config(client):
     r=c.put('/api/gitee/enterprise/config',json={'enterprise_id':7,'rules':[{'pattern':'【】','program_id':11}]})
     assert r.status_code==422
     assert c.get('/api/settings').json()['gitee_enterprise']['rules']==[]
+
+
+def test_manual_options_auto_populates_projects_from_enterprise(client):
+    c, engine = client
+    r = c.get('/api/manual-options')
+    r.raise_for_status()
+    data = r.json()
+    assert data['enterprise_configured'] is True
+    assert data['enterprise_id'] == 7
+    assert '上海工程技术大学档案系统' in data['projects']
+    assert len(data['projects']) == 3
+
+    r2 = c.get('/api/manual-options?refresh=true')
+    r2.raise_for_status()
+    assert len(r2.json()['projects']) == 3
+
+
+def test_manual_options_recovers_from_cached_integrations(tmp_path, monkeypatch):
+    monkeypatch.setenv('AWT_DATA_DIR', str(tmp_path))
+    engine = db.make_engine(tmp_path / 'cache_recovery.db')
+    db.migrate(engine)
+    with engine.begin() as conn:
+        service.upsert(
+            conn,
+            db.integrations,
+            {
+                'id': 'gitee-enterprise-programs:88',
+                'value': {'items': [{'id': 1, 'name': '离线缓存项目', 'status': 0}]},
+            },
+            'id',
+        )
+        s = service.get_settings(conn)
+        s.gitee_enterprise.enterprise_id = 88
+        service.save_settings(conn, s)
+
+    monkeypatch.setattr(ge, 'token', lambda: None)
+    with TestClient(create_app(engine)) as c:
+        r = c.get('/api/manual-options')
+        r.raise_for_status()
+        data = r.json()
+        assert data['enterprise_configured'] is False
+        assert data['enterprise_id'] == 88
+        assert data['projects'] == ['离线缓存项目']
+    engine.dispose()

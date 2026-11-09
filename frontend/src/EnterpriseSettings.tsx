@@ -159,8 +159,21 @@ export function EnterpriseSettings({
           aria-label="目标企业"
           value={config.enterprise_id || ""}
           onChange={(e) => {
+            const entId = Number(e.target.value);
             setPrograms([]);
-            change({ enterprise_id: Number(e.target.value), rules: [] });
+            change({ enterprise_id: entId, rules: [] });
+            if (entId > 0 && (configured || token)) {
+              run(async () => {
+                await saveKey();
+                const list = await enterpriseApi(
+                  `programs?enterprise_id=${entId}`,
+                  undefined,
+                  "GET",
+                );
+                setPrograms(list);
+                setMessage("已读取企业项目列表。");
+              });
+            }
           }}
         >
           <option value="">请选择企业</option>

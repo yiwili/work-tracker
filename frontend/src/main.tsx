@@ -1711,19 +1711,40 @@ function TaskEditor({
   const [error, setError] = useState(""),
     [saving, setSaving] = useState(false),
     [projects, setProjects] = useState<string[]>([]),
+    [enterpriseConfigured, setEnterpriseConfigured] = useState(false),
+    [enterpriseId, setEnterpriseId] = useState(0),
+    [refreshingProjects, setRefreshingProjects] = useState(false),
     [templates, setTemplates] = useState<ManualTemplate[]>([]),
     [active, setActive] = useState<ManualTemplate | null>(null),
     [showAll, setShowAll] = useState(false),
     [templateName, setTemplateName] = useState<string | null>(null),
     [quick, setQuick] = useState(""),
     [quickNotice, setQuickNotice] = useState("");
-  useEffect(() => {
-    api<{ templates: ManualTemplate[]; projects: string[] }>("/manual-options")
+  const loadManualOptions = (refresh = false) => {
+    if (refresh) setRefreshingProjects(true);
+    return api<{
+      templates: ManualTemplate[];
+      projects: string[];
+      enterprise_configured?: boolean;
+      enterprise_id?: number;
+    }>(`/manual-options${refresh ? "?refresh=true" : ""}`)
       .then((r) => {
         setTemplates(r.templates || []);
         setProjects(r.projects || []);
+        if (typeof r.enterprise_configured === "boolean") {
+          setEnterpriseConfigured(r.enterprise_configured);
+        }
+        if (typeof r.enterprise_id === "number") {
+          setEnterpriseId(r.enterprise_id);
+        }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (refresh) setRefreshingProjects(false);
+      });
+  };
+  useEffect(() => {
+    void loadManualOptions();
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1998,7 +2019,31 @@ function TaskEditor({
             <div className="form-grid">
               {!hidden.has("project") && (
                 <label>
-                  所属项目
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    <span>所属项目</span>
+                    {enterpriseConfigured && enterpriseId > 0 && (
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={refreshingProjects}
+                        onClick={() => void loadManualOptions(true)}
+                        style={{
+                          fontSize: "12px",
+                          padding: 0,
+                          cursor: refreshingProjects ? "wait" : "pointer",
+                        }}
+                      >
+                        {refreshingProjects ? "读取中…" : "刷新企业项目"}
+                      </button>
+                    )}
+                  </div>
                   <input
                     list={"projects-" + i}
                     value={p.project}
@@ -2006,6 +2051,10 @@ function TaskEditor({
                     placeholder={
                       projects.length
                         ? "选择 Gitee 企业项目或手动输入"
+                        : enterpriseConfigured && enterpriseId > 0
+                        ? "暂未读取到企业项目，可点击右上角刷新"
+                        : enterpriseConfigured
+                        ? "已配置令牌，请在系统设置中选择企业"
                         : "项目或客户名称，可不绑定 Git"
                     }
                   />

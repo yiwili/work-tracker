@@ -701,15 +701,23 @@ export function SetupWizard({
                   目标企业
                   <select
                     value={s.gitee_enterprise.enterprise_id || ""}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const entId = Number(e.target.value);
                       setS({
                         ...s,
                         gitee_enterprise: {
                           ...s.gitee_enterprise,
-                          enterprise_id: Number(e.target.value),
+                          enterprise_id: entId,
                         },
-                      })
-                    }
+                      });
+                      if (entId > 0) {
+                        void enterpriseApi(
+                          `programs?enterprise_id=${entId}`,
+                          undefined,
+                          "GET",
+                        ).catch(() => undefined);
+                      }
+                    }}
                   >
                     <option value="">请选择企业</option>
                     {companies.map((company) => (

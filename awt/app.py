@@ -315,10 +315,51 @@ def create_app(engine=None):
         return {'configured':bool(gitee_enterprise.token())}
 
     @app.get('/api/manual-options')
-    def manual_options():
+    def manual_options(refresh: bool = False):
+        ent_token_configured = bool(gitee_enterprise.token())
         with engine.connect() as conn:
-            s=service.get_settings(conn)
-            return {'templates':[t.model_dump(mode='json') for t in s.manual_templates],'projects':s.project_options}
+            s = service.get_settings(conn)
+            ent_id = s.gitee_enterprise.enterprise_id
+
+        if (refresh or not s.project_options) and ent_id and ent_token_configured:
+            try:
+                gitee_enterprise.cache_programs(engine, ent_id)
+                with engine.connect() as conn:
+                    s = service.get_settings(conn)
+            except Exception:
+                if not s.project_options:
+                    with engine.begin() as conn:
+                        cached = conn.execute(
+                            select(db.integrations.c.value).where(
+                                db.integrations.c.id == f'gitee-enterprise-programs:{ent_id}'
+                            )
+                        ).scalar() or {}
+                        items = cached.get('items', [])
+                        if items:
+                            names = list(dict.fromkeys(r.get('name', '') for r in items if r.get('name')))[:500]
+                            if names:
+                                s.project_options = names
+                                service.save_settings(conn, s)
+        elif not s.project_options and ent_id:
+            with engine.begin() as conn:
+                cached = conn.execute(
+                    select(db.integrations.c.value).where(
+                        db.integrations.c.id == f'gitee-enterprise-programs:{ent_id}'
+                    )
+                ).scalar() or {}
+                items = cached.get('items', [])
+                if items:
+                    names = list(dict.fromkeys(r.get('name', '') for r in items if r.get('name')))[:500]
+                    if names:
+                        s.project_options = names
+                        service.save_settings(conn, s)
+
+        return {
+            'templates': [t.model_dump(mode='json') for t in s.manual_templates],
+            'projects': s.project_options,
+            'enterprise_configured': ent_token_configured,
+            'enterprise_id': ent_id,
+        }
 
     @app.put('/api/manual-templates')
     def put_manual_templates(payload:list[ManualTemplate]):
