@@ -11,7 +11,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { TodoItem, UseTodosResult } from "./useTodos";
+import {
+  hasBracketPrefix,
+  formatTitleWithPrefix,
+  type TodoItem,
+  type UseTodosResult,
+} from "./useTodos";
 
 const TODO_CATEGORIES = ["需求", "任务", "缺陷"] as const;
 
@@ -116,7 +121,21 @@ export function TodoReminderBar({
           list="todo-projects-bar"
           value={project}
           placeholder="所属项目（可选）"
-          onChange={(e) => setProject(e.target.value)}
+          onChange={(e) => {
+            const nextProj = e.target.value;
+            setProject(nextProj);
+            if (title.trim() && !hasBracketPrefix(title)) {
+              setTitle(
+                formatTitleWithPrefix(
+                  title,
+                  nextProj,
+                  model.projectPrefixes,
+                  model.bracketStyle,
+                  model.defaultPrefix,
+                ),
+              );
+            }
+          }}
         />
         <datalist id="todo-projects-bar">
           {model.projects.map((p) => (
@@ -331,7 +350,21 @@ export function TodoSideDock({
               list="todo-projects-drawer"
               value={project}
               placeholder="所属项目（可选）"
-              onChange={(e) => setProject(e.target.value)}
+              onChange={(e) => {
+                const nextProj = e.target.value;
+                setProject(nextProj);
+                if (title.trim() && !hasBracketPrefix(title)) {
+                  setTitle(
+                    formatTitleWithPrefix(
+                      title,
+                      nextProj,
+                      model.projectPrefixes,
+                      model.bracketStyle,
+                      model.defaultPrefix,
+                    ),
+                  );
+                }
+              }}
             />
             <datalist id="todo-projects-drawer">
               {model.projects.map((p) => (

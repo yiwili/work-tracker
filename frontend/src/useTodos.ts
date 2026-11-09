@@ -29,6 +29,61 @@ export type UseTodosOptions = {
   onChanged?: () => void | Promise<void>;
 };
 
+export const HAS_BRACKET_PREFIX_RE = /^\s*([【\[（(])([^】\]）)]+)([】\]）)])/;
+
+export function hasBracketPrefix(title: string | null | undefined): boolean {
+  if (!title) return false;
+  const match = HAS_BRACKET_PREFIX_RE.exec(title.trim());
+  return Boolean(match && match[2].trim());
+}
+
+export function formatTitleWithPrefix(
+  rawTitle: string,
+  project: string,
+  projectPrefixes: Record<string, string>,
+  bracketStyle: string = "【】",
+  defaultPrefix: string = "其他",
+): string {
+  const trimmed = (rawTitle || "").trim();
+  if (!trimmed) return "";
+  if (hasBracketPrefix(trimmed)) {
+    return trimmed;
+  }
+  const openB = bracketStyle[0] || "【";
+  const closeB = bracketStyle[1] || "】";
+  const proj = (project || "").trim();
+  let pfx = "";
+
+  if (proj && proj !== "未归属项目" && proj !== "None") {
+    pfx = projectPrefixes[proj] || "";
+    if (!pfx) {
+      for (const [k, v] of Object.entries(projectPrefixes)) {
+        if (k && (proj.includes(k) || k.includes(proj))) {
+          pfx = v;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!pfx) {
+    if (!proj || proj === "未归属项目") {
+      pfx = defaultPrefix || "其他";
+    } else {
+      const parts = proj.split("/");
+      const clean = parts[parts.length - 1].trim();
+      pfx = clean.slice(0, 6) || defaultPrefix || "其他";
+    }
+  }
+
+  let cleanContent = trimmed;
+  if (cleanContent.startsWith(pfx)) {
+    cleanContent = cleanContent.slice(pfx.length).replace(/^[\s:：\-_—·]+/, "");
+  }
+
+  return `${openB}${pfx}${closeB}${cleanContent}`;
+}
+
 export type UseTodosResult = {
   todos: TodoItem[];
   count: number;
@@ -36,6 +91,9 @@ export type UseTodosResult = {
   syncing: boolean;
   error: string;
   projects: string[];
+  projectPrefixes: Record<string, string>;
+  bracketStyle: string;
+  defaultPrefix: string;
   reload: () => Promise<void>;
   syncFromCloud: () => Promise<void>;
   addTodo: (draft: TodoDraft) => Promise<void>;
@@ -57,6 +115,9 @@ export type UseTodosResult = {
 export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResult {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  const [projectPrefixes, setProjectPrefixes] = useState<Record<string, string>>({});
+  const [bracketStyle, setBracketStyle] = useState("【】");
+  const [defaultPrefix, setDefaultPrefix] = useState("其他");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
@@ -70,10 +131,23 @@ export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResu
     try {
       const [items, opts] = await Promise.all([
         api<TodoItem[]>("/todos"),
-        api<{ projects: string[] }>("/manual-options").catch(() => ({ projects: [] })),
+        api<{
+          projects?: string[];
+          project_prefixes?: Record<string, string>;
+          bracket_style?: string;
+          default_prefix?: string;
+        }>("/manual-options").catch((): {
+          projects?: string[];
+          project_prefixes?: Record<string, string>;
+          bracket_style?: string;
+          default_prefix?: string;
+        } => ({})),
       ]);
       setTodos(items || []);
       setProjects(opts.projects || []);
+      if (opts.project_prefixes) setProjectPrefixes(opts.project_prefixes);
+      if (opts.bracket_style) setBracketStyle(opts.bracket_style);
+      if (opts.default_prefix) setDefaultPrefix(opts.default_prefix);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -114,14 +188,22 @@ export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResu
 
   const addTodo = useCallback(
     async (draft: TodoDraft) => {
-      const title = draft.title.trim();
-      if (!title) return;
+      const rawTitle = draft.title.trim();
+      if (!rawTitle) return;
       setError("");
+      const project = (draft.project || "").trim() || "未归属项目";
+      const title = formatTitleWithPrefix(
+        rawTitle,
+        project,
+        projectPrefixes,
+        bracketStyle,
+        defaultPrefix,
+      );
       await api("/tasks", "POST", {
         date: draft.date || getTodayRef.current(),
         title,
         details: draft.details || "",
-        project: (draft.project || "").trim() || "未归属项目",
+        project,
         category: draft.category || "任务",
         status: "requested",
         confirmed_minutes: 0,
@@ -129,7 +211,7 @@ export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResu
       });
       await afterMutate();
     },
-    [reload, pushAndPullCloud],
+    [reload, pushAndPullCloud, projectPrefixes, bracketStyle, defaultPrefix],
   );
 
   const completeTodo = useCallback(
@@ -173,6 +255,9 @@ export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResu
     syncing,
     error,
     projects,
+    projectPrefixes,
+    bracketStyle,
+    defaultPrefix,
     reload,
     syncFromCloud: pushAndPullCloud,
     addTodo,

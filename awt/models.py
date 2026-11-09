@@ -389,6 +389,7 @@ class TaskInput(BaseModel):
     category: str = Field(default="其他", min_length=1, max_length=100)
     status: TaskStatus = "requested"
     confirmed_minutes: int = Field(default=0, ge=0, le=1440, strict=True)
+    suggested_minutes: int | None = Field(default=None, ge=0, le=1440)
     started_at: datetime | None = None
     ended_at: datetime | None = None
     time_locked: bool | None = None
@@ -424,6 +425,7 @@ class TaskPatch(BaseModel):
     category: str | None = Field(default=None, min_length=1, max_length=100)
     status: TaskStatus | None = None
     confirmed_minutes: int | None = Field(default=None, ge=0, le=1440, strict=True)
+    suggested_minutes: int | None = Field(default=None, ge=0, le=1440)
     started_at: datetime | None = None
     ended_at: datetime | None = None
     time_locked: bool | None = None

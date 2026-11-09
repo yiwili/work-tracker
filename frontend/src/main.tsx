@@ -53,7 +53,8 @@ import { AnalysisResultsModal } from "./AnalysisResultsModal";
 import { DeletedRecoveryModal } from "./DeletedRecoveryModal";
 import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
-import { useTodos } from "./useTodos";
+import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister } from "./TaskQuickActions";
+import { useTodos, hasBracketPrefix, formatTitleWithPrefix } from "./useTodos";
 import { TodoReminderBar, TodoSideDock } from "./TodoWidgets";
 
 // 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
@@ -122,6 +123,7 @@ type Draft = {
   category: string;
   status: string;
   confirmed_minutes: number;
+  suggested_minutes?: number | null;
   time_locked: boolean;
   started_at: string;
   ended_at: string;
@@ -134,6 +136,7 @@ const fromTask = (t?: Task, day = ""): Draft => ({
   category: t?.category || "任务",
   status: t?.status || "requested",
   confirmed_minutes: t?.confirmed_minutes || 0,
+  suggested_minutes: t?.suggested_minutes ?? null,
   time_locked: t?.time_locked || false,
   started_at: t?.started_at ? toLocal(t.started_at) : "",
   ended_at: t?.ended_at ? toLocal(t.ended_at) : "",
@@ -148,6 +151,7 @@ function payload(d: Draft) {
   return {
     ...d,
     project: d.project || "未归属项目",
+    suggested_minutes: typeof d.suggested_minutes === "number" ? d.suggested_minutes : null,
     started_at: d.started_at ? new Date(d.started_at).toISOString() : null,
     ended_at: d.ended_at ? new Date(d.ended_at).toISOString() : null,
   };
@@ -1103,25 +1107,38 @@ function App() {
                               </div>
                             </td>
                             <td>
-                              <span className="project-name">{t.project}</span>
+                              <ProjectQuickSelect
+                                task={t}
+                                onUpdate={async (project) => {
+                                  await api(`/tasks/${t.id}`, "PATCH", { project });
+                                  await refresh();
+                                }}
+                              />
                               <span className="category">{t.category}</span>
                             </td>
                             <td>
-                              <span className={"state " + t.status}>
-                                {statuses[t.status]}
-                              </span>
+                              <StatusQuickSelect
+                                task={t}
+                                todayStr={today(settings?.timezone)}
+                                onUpdate={async (status, extra) => {
+                                  await api(`/tasks/${t.id}`, "PATCH", { status, ...extra });
+                                  await refresh();
+                                }}
+                              />
                             </td>
                             <td className="hours">
-                              <span className="tag">
-                                {t.time_locked
-                                  ? "固定工时"
-                                  : t.time_source === "ai_estimate"
-                                    ? "AI 分配"
-                                    : "待分配"}
-                              </span>
-                              <strong title={t.time_reason}>
-                                {hours(t.confirmed_minutes)} <small>h</small>
-                              </strong>
+                              <HoursQuickRegister
+                                task={t}
+                                step={settings?.step_minutes || 15}
+                                onUpdate={async (confirmed_minutes, suggested_minutes, time_locked) => {
+                                  await api(`/tasks/${t.id}`, "PATCH", {
+                                    confirmed_minutes,
+                                    suggested_minutes,
+                                    time_locked,
+                                  });
+                                  await refresh();
+                                }}
+                              />
                               {t.time_reason && (
                                 <details>
                                   <summary>估算依据</summary>
@@ -1712,6 +1729,9 @@ function TaskEditor({
     [enterpriseId, setEnterpriseId] = useState(0),
     [refreshingProjects, setRefreshingProjects] = useState(false),
     [templates, setTemplates] = useState<ManualTemplate[]>([]),
+    [projectPrefixes, setProjectPrefixes] = useState<Record<string, string>>({}),
+    [bracketStyle, setBracketStyle] = useState("【】"),
+    [defaultPrefix, setDefaultPrefix] = useState("其他"),
     [active, setActive] = useState<ManualTemplate | null>(null),
     [showAll, setShowAll] = useState(false),
     [templateName, setTemplateName] = useState<string | null>(null);
@@ -1726,10 +1746,16 @@ function TaskEditor({
       projects: string[];
       enterprise_configured?: boolean;
       enterprise_id?: number;
+      project_prefixes?: Record<string, string>;
+      bracket_style?: string;
+      default_prefix?: string;
     }>(`/manual-options${refresh ? "?refresh=true" : ""}`)
       .then((r) => {
         setTemplates(r.templates || []);
         setProjects(r.projects || []);
+        if (r.project_prefixes) setProjectPrefixes(r.project_prefixes);
+        if (r.bracket_style) setBracketStyle(r.bracket_style);
+        if (r.default_prefix) setDefaultPrefix(r.default_prefix);
         if (typeof r.enterprise_configured === "boolean") {
           setEnterpriseConfigured(r.enterprise_configured);
         }
@@ -1758,22 +1784,35 @@ function TaskEditor({
   const change = (
     i: number,
     key: keyof Draft,
-    value: string | number | boolean,
+    value: string | number | boolean | null,
   ) =>
     setParts(
-      parts.map((p, j) =>
-        i === j
-          ? {
-              ...p,
-              [key]: value,
-              ...(key === "confirmed_minutes" ? { time_locked: true } : {}),
-              // 待办设为已完成时，工作日期自动选为当天
-              ...(key === "status" && value === "delivered" && p.status === "requested"
-                ? { date: todayStr }
-                : {}),
-            }
-          : p,
-      ),
+      parts.map((p, j) => {
+        if (i !== j) return p;
+        let nextTitle = p.title;
+        if (key === "project") {
+          const nextProj = String(value);
+          if (p.title.trim() && !hasBracketPrefix(p.title)) {
+            nextTitle = formatTitleWithPrefix(
+              p.title,
+              nextProj,
+              projectPrefixes,
+              bracketStyle,
+              defaultPrefix,
+            );
+          }
+        }
+        return {
+          ...p,
+          [key]: value,
+          ...(key === "project" ? { title: nextTitle } : {}),
+          ...(key === "confirmed_minutes" ? { time_locked: true } : {}),
+          // 待办设为已完成时，工作日期自动选为当天
+          ...(key === "status" && value === "delivered" && p.status === "requested"
+            ? { date: todayStr }
+            : {}),
+        };
+      }),
     );
   const applyTemplate = (t: ManualTemplate | null) => {
     setActive(t);
@@ -1842,7 +1881,19 @@ function TaskEditor({
           setError("");
           setSaving(true);
           try {
-            await onSave(parts);
+            const formattedParts = parts.map((p) => ({
+              ...p,
+              title: hasBracketPrefix(p.title)
+                ? p.title
+                : formatTitleWithPrefix(
+                    p.title,
+                    p.project,
+                    projectPrefixes,
+                    bracketStyle,
+                    defaultPrefix,
+                  ),
+            }));
+            await onSave(formattedParts);
             syncCloud();
           } catch (e) {
             setError((e as Error).message);
@@ -2058,50 +2109,101 @@ function TaskEditor({
                 </label>
               )}
               {!hidden.has("confirmed_minutes") && (
-                <label>
-                  确认工时（分钟）
-                  <div className="minute-input">
-                    <button
-                      type="button"
-                      aria-label={"减少工时 " + (i + 1)}
-                      onClick={() =>
-                        change(
-                          i,
-                          "confirmed_minutes",
-                          Math.max(0, p.confirmed_minutes - step),
-                        )
-                      }
-                    >
-                      −
-                    </button>
-                    <input
-                      aria-label={"确认工时分钟 " + (i + 1)}
-                      type="number"
-                      required
-                      min="0"
-                      max="1440"
-                      step="1"
-                      value={p.confirmed_minutes}
-                      onChange={(e) =>
-                        change(i, "confirmed_minutes", Number(e.target.value))
-                      }
-                    />
-                    <button
-                      type="button"
-                      aria-label={"增加工时 " + (i + 1)}
-                      onClick={() =>
-                        change(
-                          i,
-                          "confirmed_minutes",
-                          Math.min(1440, p.confirmed_minutes + step),
-                        )
-                      }
-                    >
-                      +
-                    </button>
-                    <span>= {hours(p.confirmed_minutes)} h</span>
-                  </div>
-                </label>
+                <>
+                  <label>
+                    预计工时（Gitee 预估工时，分钟）
+                    <div className="minute-input">
+                      <button
+                        type="button"
+                        aria-label={"减少预计工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "suggested_minutes",
+                            Math.max(0, (p.suggested_minutes || 0) - step),
+                          )
+                        }
+                      >
+                        −
+                      </button>
+                      <input
+                        aria-label={"预计工时分钟 " + (i + 1)}
+                        type="number"
+                        min="0"
+                        max="1440"
+                        step="1"
+                        placeholder="未设置"
+                        value={p.suggested_minutes == null ? "" : p.suggested_minutes}
+                        onChange={(e) => {
+                          const val = e.target.value.trim();
+                          change(
+                            i,
+                            "suggested_minutes",
+                            val === "" ? null : Math.max(0, Number(val)),
+                          );
+                        }}
+                      />
+                      <button
+                        type="button"
+                        aria-label={"增加预计工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "suggested_minutes",
+                            Math.min(1440, (p.suggested_minutes || 0) + step),
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                      <span>= {hours(p.suggested_minutes ?? 0)} h</span>
+                    </div>
+                  </label>
+                  <label>
+                    完成工时（具体的完成工时，分钟）
+                    <div className="minute-input">
+                      <button
+                        type="button"
+                        aria-label={"减少工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "confirmed_minutes",
+                            Math.max(0, p.confirmed_minutes - step),
+                          )
+                        }
+                      >
+                        −
+                      </button>
+                      <input
+                        aria-label={"确认工时分钟 " + (i + 1)}
+                        type="number"
+                        required
+                        min="0"
+                        max="1440"
+                        step="1"
+                        value={p.confirmed_minutes}
+                        onChange={(e) =>
+                          change(i, "confirmed_minutes", Number(e.target.value))
+                        }
+                      />
+                      <button
+                        type="button"
+                        aria-label={"增加工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "confirmed_minutes",
+                            Math.min(1440, p.confirmed_minutes + step),
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                      <span>= {hours(p.confirmed_minutes)} h</span>
+                    </div>
+                  </label>
+                </>
               )}
             </div>
             <label>

@@ -6981,3 +6981,419 @@ code {
   color: #6b7280;
   white-space: pre-wrap;
 }
+
+/* ==========================================================================
+   工作项表格快捷操作：项目选择、完成情况、Gitee工时登记
+   ========================================================================== */
+
+.quick-select-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.quick-project-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #f3f4f6;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.quick-project-btn:hover {
+  background: #e5e7eb;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.quick-project-btn .project-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-chevron {
+  flex-shrink: 0;
+  color: #6b7280;
+  transition: transform 0.15s ease;
+}
+
+.quick-chevron.open {
+  transform: rotate(180deg);
+}
+
+.quick-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.quick-status-btn:hover {
+  filter: brightness(0.96);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.dot-requested { background-color: #9ca3af; }
+.dot-attempted { background-color: #f59e0b; }
+.dot-delivered { background-color: #10b981; }
+.dot-verified  { background-color: #3b82f6; }
+.dot-rejected  { background-color: #ef4444; }
+.dot-default   { background-color: #6b7280; }
+
+.quick-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 190px;
+  max-width: 280px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  z-index: 120;
+  overflow: hidden;
+  animation: fadeInQuick 0.15s ease-out;
+}
+
+@keyframes fadeInQuick {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.quick-dropdown-header {
+  padding: 8px 12px;
+  background: #f9fafb;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.quick-dropdown-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.quick-search-box {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.quick-search-box input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.quick-search-box input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.quick-dropdown-list {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #374151;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s ease;
+}
+
+.quick-dropdown-item:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.quick-dropdown-item.selected {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-weight: 500;
+}
+
+.quick-dropdown-item .item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-dropdown-item .item-check {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.quick-dropdown-item.custom-create {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.quick-dropdown-item.custom-create:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.quick-dropdown-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* 工时单元格与登记 */
+.quick-hours-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-hours-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-hours-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.quick-hours-entry-btn:hover {
+  background: rgba(37, 99, 235, 0.16);
+  border-color: #2563eb;
+}
+
+.quick-hours-display {
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.quick-hours-display:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.quick-hours-primary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.quick-hours-primary strong {
+  font-size: 16px;
+  color: #111827;
+}
+
+.quick-hours-primary small {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.quick-hours-suggested {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.hours-kind-label {
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+/* 工时登记弹窗样式 */
+.hours-register-modal {
+  max-width: 480px;
+  width: 90vw;
+}
+
+.task-title-sub {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 380px;
+}
+
+.hours-register-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.hours-tip-box {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hours-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #f9fafb;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.hours-group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.hours-group-header label {
+  font-size: 14px;
+  color: #1f2937;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.hours-sub-label {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: normal;
+}
+
+.hours-converted {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.minute-input .unit-label {
+  font-size: 12px;
+  color: #6b7280;
+  padding: 0 4px;
+}
+
+.hours-quick-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chips-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.hours-quick-chips .chip {
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.hours-quick-chips .chip:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.hours-quick-chips .chip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.hours-quick-chips .chip.match-suggested {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+  font-weight: 500;
+}
+
+.hours-quick-chips .chip.match-suggested:hover {
+  background: rgba(37, 99, 235, 0.15);
+}
+
+.hours-quick-chips .chip.reset {
+  color: #6b7280;
+  background: transparent;
+}
+
+.hours-lock-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+

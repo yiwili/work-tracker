@@ -437,3 +437,42 @@ def test_cross_day_todos_and_complete_moves_to_today(client):
     assert any(t['id'] == old_id and t['status'] == 'delivered' and t['date'] == DAY for t in today_tasks)
     assert done_id not in [t['id'] for t in today_tasks]
 
+
+def test_suggest_prefix_api_and_manual_options(client):
+    opts = client.get('/api/manual-options').json()
+    assert 'project_prefixes' in opts
+    assert 'bracket_style' in opts
+    assert 'default_prefix' in opts
+
+    # Suggest prefix with already prefixed title
+    res1 = client.post('/api/tasks/suggest-prefix', json={'title': '【2026】修复BUG', 'project': 'archive-system-2026'}).json()
+    assert res1['has_prefix'] is True
+    assert res1['prefix'] == '2026'
+    assert res1['formatted_title'] == '【2026】修复BUG'
+
+    # Suggest prefix without prefix
+    res2 = client.post('/api/tasks/suggest-prefix', json={'title': '梳理业务流程', 'project': ''}).json()
+    assert res2['has_prefix'] is False
+    assert res2['formatted_title'].startswith('【')
+
+
+
+def test_patch_suggested_and_confirmed_minutes(client):
+    task_id = client.post('/api/tasks', json=manual(0, title='联调Gitee工时登记')).json()['id']
+    # 初始状态：建议工时为空，确认工时为0
+    task = client.get(f'/api/tasks?date={DAY}').json()[0]
+    assert task['suggested_minutes'] is None
+    assert task['confirmed_minutes'] == 0
+
+    # 登记工时：设置预计工时 120 分钟（2h），具体完成工时 90 分钟（1.5h）
+    client.patch(f'/api/tasks/{task_id}', json={
+        'suggested_minutes': 120,
+        'confirmed_minutes': 90,
+        'time_locked': True,
+    }).raise_for_status()
+
+    updated = client.get(f'/api/tasks?date={DAY}').json()[0]
+    assert updated['suggested_minutes'] == 120
+    assert updated['confirmed_minutes'] == 90
+    assert updated['time_locked'] is True
+

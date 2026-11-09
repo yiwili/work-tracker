@@ -324,6 +324,8 @@ def save_task(conn, payload: TaskInput, task_id=None):
     settings = get_settings(conn)
     values = payload.model_dump(mode='json')
     minutes = values.pop('confirmed_minutes')
+    suggested = values.pop('suggested_minutes', None)
+    has_suggested = 'suggested_minutes' in payload.model_fields_set or suggested is not None
     locked = values.pop('time_locked')
     locked = bool(minutes) if locked is None else locked
     for key in ('title', 'details', 'project', 'category'):
@@ -332,13 +334,16 @@ def save_task(conn, payload: TaskInput, task_id=None):
         conn.execute(update(db.tasks).where(db.tasks.c.id == task_id).values(**values, edited=True))
         old_log=conn.execute(select(db.worklogs).where(db.worklogs.c.task_id==task_id)).mappings().one()
         source='manual' if minutes!=old_log['confirmed_minutes'] or locked else old_log['time_source']
-        conn.execute(update(db.worklogs).where(db.worklogs.c.task_id == task_id).values(confirmed_minutes=minutes, time_locked=locked, time_source=source, time_reason='' if source=='manual' else old_log['time_reason'], is_confirmed=False))
+        log_updates = {'confirmed_minutes': minutes, 'time_locked': locked, 'time_source': source, 'time_reason': '' if source=='manual' else old_log['time_reason'], 'is_confirmed': False}
+        if has_suggested:
+            log_updates['suggested_minutes'] = suggested
+        conn.execute(update(db.worklogs).where(db.worklogs.c.task_id == task_id).values(**log_updates))
         invalidate(conn, existing['date'])
     else:
         task_id = uuid4().hex
         conn.execute(insert(db.tasks).values(id=task_id, **values, origin='manual', edited=True, deleted=False,
                                             confidence='人工录入', evidence_level='人工说明'))
-        conn.execute(insert(db.worklogs).values(task_id=task_id, confirmed_minutes=minutes, suggested_minutes=None, time_locked=locked, time_source="manual", is_confirmed=False))
+        conn.execute(insert(db.worklogs).values(task_id=task_id, confirmed_minutes=minutes, suggested_minutes=suggested, time_locked=locked, time_source="manual", is_confirmed=False))
     invalidate(conn, values['date'])
     return task_id
 

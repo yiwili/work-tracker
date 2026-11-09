@@ -7,6 +7,9 @@ from awt.matching import (
     calculate_date_score,
     check_prefix_match,
     extract_prefix_and_content,
+    format_task_title_with_prefix,
+    get_prefix_metadata,
+    has_bracket_prefix,
     match_tasks_with_remote,
     merge_local_into_remote,
     normalize_text,
@@ -448,4 +451,85 @@ def test_date_proximity_boundaries():
     s31, e31 = calculate_confidence(t_local, {"title": "【AWT】核心任务", "date": "2026-12-02"})
     assert e31["date_score"] == 0.2
     assert s31 == 0.84
+
+
+def test_has_bracket_prefix():
+    assert has_bracket_prefix("【2026】修复卷内目录打印问题") is True
+    assert has_bracket_prefix("[2026] 优化首屏性能") is True
+    assert has_bracket_prefix("（核心架构）重写存储层") is True
+    assert has_bracket_prefix("(核心架构) 重写存储层") is True
+    assert has_bracket_prefix("   【上海工程】测试   ") is True
+    assert has_bracket_prefix("修复卷内目录打印问题") is False
+    assert has_bracket_prefix("2026数据迁移") is False
+    assert has_bracket_prefix("【】空括号测试") is False
+    assert has_bracket_prefix("") is False
+    assert has_bracket_prefix(None) is False
+
+
+def test_format_task_title_with_prefix(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWT_DATA_DIR", str(tmp_path / "data"))
+    from awt import db
+    from awt.models import Settings, GiteeEnterpriseConfig, GiteeProjectRule
+    from awt.matching import clear_prefix_cache
+
+    clear_prefix_cache()
+    engine = db.make_engine(tmp_path / "test_pfx.db")
+    db.migrate(engine)
+
+    with engine.begin() as conn:
+        # Insert historical items to teach the user's style
+        conn.execute(
+            db.history.insert().values(
+                [
+                    {"id": "h1", "title": "【2026】在线编研模块", "project": "档案系统2026"},
+                    {"id": "h2", "title": "【2026】优化相册预览", "project": "archive-system-2026"},
+                    {"id": "h3", "title": "【农林】元数据显示不完整", "project": "浙江农林大学"},
+                    {"id": "h4", "title": "【其他】录制帮助视频", "project": "未归属项目"},
+                ]
+            )
+        )
+
+        settings = Settings(
+            gitee_enterprise=GiteeEnterpriseConfig(
+                enterprise_id=1,
+                rules=[
+                    GiteeProjectRule(pattern="上海工程", mode="prefix", program_id=10),
+                ],
+            )
+        )
+
+        meta = get_prefix_metadata(conn, settings)
+        assert meta["bracket_style"] == "【】"
+        assert meta["project_prefixes"].get("archive-system-2026") == "2026"
+        assert meta["project_prefixes"].get("浙江农林大学") == "农林"
+        assert meta["default_prefix"] == "其他"
+
+        # 1. Title already has prefix: untouched (saves tokens)
+        res1 = format_task_title_with_prefix(conn, "【2026】修复卷内目录", "archive-system-2026", settings)
+        assert res1 == "【2026】修复卷内目录"
+
+        res2 = format_task_title_with_prefix(conn, "[上海工程] 制作案卷封面", "上海工程技术大学", settings)
+        assert res2 == "[上海工程] 制作案卷封面"
+
+        # 2. Title without prefix + mapped project
+        res3 = format_task_title_with_prefix(conn, "修复卷内目录打印问题", "archive-system-2026", settings)
+        assert res3 == "【2026】修复卷内目录打印问题"
+
+        # 3. Title without prefix + Gitee rule project
+        res4 = format_task_title_with_prefix(conn, "制作案卷封面模板", "上海工程技术大学", settings)
+        assert res4 == "【上海工程】制作案卷封面模板"
+
+        # 4. Title starting with mapped prefix name without brackets: bracketed without repetition
+        res5 = format_task_title_with_prefix(conn, "2026数据迁移方案", "archive-system-2026", settings)
+        assert res5 == "【2026】数据迁移方案"
+
+        # 5. Empty project falls back to general prefix (e.g. 【其他】)
+        res6 = format_task_title_with_prefix(conn, "整理部门月度汇报", "", settings)
+        assert res6 == "【其他】整理部门月度汇报"
+
+        res7 = format_task_title_with_prefix(conn, "整理部门月度汇报", "未归属项目", settings)
+        assert res7 == "【其他】整理部门月度汇报"
+
+    engine.dispose()
+
 

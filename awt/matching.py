@@ -19,6 +19,219 @@ def normalize_text(text: str | None) -> str:
     return re.sub(r"[\W_]+", "", text.casefold())
 
 
+BRACKET_PREFIX_RE = re.compile(r"^\s*([【\[（(])([^】\]）)]+)([】\]）)])\s*(.*)$", re.DOTALL)
+
+
+def has_bracket_prefix(title: str | None) -> bool:
+    """Return True if title begins with a non-empty bracketed prefix like 【上海工程】 or [2026]."""
+    if not title:
+        return False
+    match = BRACKET_PREFIX_RE.match(title.strip())
+    return bool(match and match.group(2).strip())
+
+
+_metadata_cache: dict[str, Any] = {"data": None, "timestamp": 0.0}
+
+
+def clear_prefix_cache() -> None:
+    _metadata_cache["data"] = None
+    _metadata_cache["timestamp"] = 0.0
+
+
+def get_prefix_metadata(conn, settings=None) -> dict[str, Any]:
+    """Dynamically discover user's bracket style, project-to-prefix mappings, and fallback prefix.
+
+    Scans SQLite historical records (work_tasks and history_work_items) and settings
+    (gitee_enterprise rules and title_examples) to adapt to the user's personal naming style.
+    """
+    import time
+    now = time.time()
+    if _metadata_cache["data"] is not None and (now - _metadata_cache["timestamp"] < 30.0):
+        return _metadata_cache["data"]
+
+    from . import db
+    from sqlalchemy import select
+
+    bracket_counts: dict[str, int] = {}
+    project_prefix_counts: dict[str, dict[str, int]] = {}
+    all_prefixes: dict[str, int] = {}
+
+    def record_pfx(b_open: str, b_close: str, pfx: str, proj: str | None):
+        pfx = pfx.strip()
+        if not pfx:
+            return
+        b_pair = b_open + b_close
+        bracket_counts[b_pair] = bracket_counts.get(b_pair, 0) + 1
+        all_prefixes[pfx] = all_prefixes.get(pfx, 0) + 1
+        if proj and proj.strip() and proj.strip() not in ("未归属项目", "None", "none", "null"):
+            p = proj.strip()
+            p_dict = project_prefix_counts.setdefault(p, {})
+            p_dict[pfx] = p_dict.get(pfx, 0) + 1
+
+    try:
+        rows = conn.execute(
+            select(db.tasks.c.title, db.tasks.c.project)
+            .where(db.tasks.c.deleted == False)
+            .limit(5000)
+        ).fetchall()
+        for t, p in rows:
+            if t:
+                m = BRACKET_PREFIX_RE.match(t)
+                if m:
+                    record_pfx(m.group(1), m.group(3), m.group(2), p)
+
+        h_rows = conn.execute(
+            select(db.history.c.title, db.history.c.project).limit(5000)
+        ).fetchall()
+        for t, p in h_rows:
+            if t:
+                m = BRACKET_PREFIX_RE.match(t)
+                if m:
+                    record_pfx(m.group(1), m.group(3), m.group(2), p)
+    except Exception:
+        pass
+
+    if settings:
+        for t in getattr(settings, "title_examples", []) or []:
+            m = BRACKET_PREFIX_RE.match(t)
+            if m:
+                record_pfx(m.group(1), m.group(3), m.group(2), None)
+
+    top_bracket = max(bracket_counts.items(), key=lambda x: x[1])[0] if bracket_counts else "【】"
+    if len(top_bracket) != 2:
+        top_bracket = "【】"
+
+    project_prefixes: dict[str, str] = {}
+    for p, counts in project_prefix_counts.items():
+        best_pfx = max(counts.items(), key=lambda x: x[1])[0]
+        project_prefixes[p] = best_pfx
+        if "/" in p:
+            short = p.split("/")[-1].strip()
+            if short and short not in project_prefixes:
+                project_prefixes[short] = best_pfx
+
+    if settings and getattr(settings, "gitee_enterprise", None):
+        rules = getattr(settings.gitee_enterprise, "rules", []) or []
+        for r in rules:
+            pat = getattr(r, "pattern", "") or ""
+            mode = getattr(r, "mode", "") or ""
+            if pat and mode in ("prefix", "exact"):
+                if pat not in project_prefixes:
+                    project_prefixes[pat] = pat
+
+    general_candidates = ["其他", "其它", "常规", "通用", "综合", "日常", "General", "Misc", "Other"]
+    default_pfx = next((p for p in general_candidates if p in all_prefixes), "其他")
+
+    result = {
+        "bracket_style": top_bracket,
+        "project_prefixes": project_prefixes,
+        "default_prefix": default_pfx,
+        "known_prefixes": sorted(all_prefixes.keys(), key=lambda k: -all_prefixes[k])[:50],
+    }
+    _metadata_cache["data"] = result
+    _metadata_cache["timestamp"] = now
+    return result
+
+
+def infer_prefix_via_ai(settings, title: str, project: str, known_prefixes: list[str]) -> str | None:
+    """Call AI (manual_writer) to infer appropriate project prefix matching user's style."""
+    from . import model_provider
+    import json
+
+    if not model_provider.status(settings).get("configured"):
+        return None
+
+    prompt_text = (
+        "你负责为用户手动添加的工作事项/待办推断最合适的单个项目前缀（2-6个字符）。\n"
+        "规则：\n"
+        "1. 必须根据关联项目推断；若关联项目为空，结合事项内容推断；若为通用/日常事务，返回历史中使用的通用前缀（如“其他”）。\n"
+        "2. 参考历史风格示例的命名习惯与缩写偏好。\n"
+        "3. 严格返回 JSON 格式：{\"prefix\":\"项目简称\"}，只需返回前缀文本，不要包含括号。\n"
+    )
+
+    payload = {
+        "title": title,
+        "project": project,
+        "style_examples": (getattr(settings, "title_examples", []) or [])[:10],
+        "known_prefixes": known_prefixes[:15],
+    }
+
+    try:
+        resp = model_provider.complete(
+            settings,
+            prompt_text,
+            json.dumps(payload, ensure_ascii=False),
+            max_tokens=200,
+            purpose="manual_writer",
+        )
+        data = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", resp.strip()))
+        pfx = str(data.get("prefix") or "").strip()
+        pfx = re.sub(r"^[【\[（(]+|[】\]）)]+$", "", pfx).strip()
+        if pfx:
+            return pfx[:10]
+    except Exception:
+        pass
+    return None
+
+
+def format_task_title_with_prefix(
+    conn,
+    title: str,
+    project: str,
+    settings=None,
+    allow_ai: bool = False,
+) -> str:
+    """Ensure title has a bracketed project prefix according to mapping or history.
+
+    - If title already has bracketed prefix (via regex), returns it untouched (saves tokens).
+    - Else determines prefix from mapping, history, or AI, and prepends it in user's bracket style.
+    """
+    raw = (title or "").strip()
+    if not raw:
+        return ""
+    if has_bracket_prefix(raw):
+        return raw
+
+    meta = get_prefix_metadata(conn, settings)
+    b_style = meta["bracket_style"]
+    open_b, close_b = b_style[0], b_style[1]
+    project_prefixes = meta["project_prefixes"]
+    default_pfx = meta["default_prefix"]
+
+    proj = (project or "").strip()
+    pfx = ""
+
+    if proj and proj not in ("未归属项目", "None", "none", "null"):
+        pfx = project_prefixes.get(proj, "")
+        if not pfx:
+            for k, v in project_prefixes.items():
+                if k and (k in proj or proj in k):
+                    pfx = v
+                    break
+
+    if not pfx:
+        for known in meta.get("known_prefixes", []):
+            if known and len(known) >= 2 and raw.startswith(known):
+                pfx = known
+                break
+
+    if not pfx and allow_ai and settings:
+        pfx = infer_prefix_via_ai(settings, raw, proj, meta.get("known_prefixes", [])) or ""
+
+    if not pfx:
+        if not proj or proj in ("未归属项目", "None", "none", "null"):
+            pfx = default_pfx
+        else:
+            clean = proj.split("/")[-1].strip()
+            pfx = clean[:6] if clean else default_pfx
+
+    clean_content = raw
+    if clean_content.startswith(pfx):
+        clean_content = clean_content[len(pfx):].lstrip(" :：-_—·")
+
+    return f"{open_b}{pfx}{close_b}{clean_content}"
+
+
 def extract_prefix_and_content(item: dict[str, Any]) -> tuple[str, str]:
     """Extract project prefix (like 【上海工程】 or [2026]) and remaining content.
 

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation
+from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching
 from . import usage, cloud_sync, history_upload
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
@@ -354,11 +354,17 @@ def create_app(engine=None):
                         s.project_options = names
                         service.save_settings(conn, s)
 
+        with engine.connect() as conn:
+            prefix_meta = matching.get_prefix_metadata(conn, s)
+
         return {
             'templates': [t.model_dump(mode='json') for t in s.manual_templates],
             'projects': s.project_options,
             'enterprise_configured': ent_token_configured,
             'enterprise_id': ent_id,
+            'project_prefixes': prefix_meta['project_prefixes'],
+            'bracket_style': prefix_meta['bracket_style'],
+            'default_prefix': prefix_meta['default_prefix'],
         }
 
     @app.put('/api/manual-templates')
@@ -563,9 +569,31 @@ def create_app(engine=None):
         with engine.connect() as conn:
             return service.list_tasks(conn, date)
 
+    @app.post('/api/tasks/suggest-prefix')
+    def suggest_prefix(payload: dict):
+        title = str(payload.get('title') or '').strip()
+        project = str(payload.get('project') or '').strip()
+        with engine.connect() as conn:
+            s = service.get_settings(conn)
+            has_pfx = matching.has_bracket_prefix(title)
+            formatted = matching.format_task_title_with_prefix(
+                conn, title, project, settings=s, allow_ai=True
+            )
+            pfx, _ = matching.extract_prefix_and_content({'title': formatted})
+            return {
+                'has_prefix': has_pfx,
+                'prefix': pfx,
+                'formatted_title': formatted,
+            }
+
     @app.post('/api/tasks')
-    def add_task(payload: TaskInput):
+    def add_task(payload: TaskInput, auto_prefix: bool = Query(False)):
         with transaction() as conn:
+            if auto_prefix and not matching.has_bracket_prefix(payload.title):
+                s = service.get_settings(conn)
+                payload.title = matching.format_task_title_with_prefix(
+                    conn, payload.title, payload.project, settings=s, allow_ai=False
+                )
             res = {'id': service.save_task(conn, payload)}
         trigger_cloud_sync()
         return res
@@ -575,8 +603,9 @@ def create_app(engine=None):
         with transaction() as conn:
             existing = service.get_task(conn, task_id)
             existing['confirmed_minutes'] = conn.execute(select(db.worklogs.c.confirmed_minutes).where(db.worklogs.c.task_id == task_id)).scalar_one()
+            existing['suggested_minutes'] = conn.execute(select(db.worklogs.c.suggested_minutes).where(db.worklogs.c.task_id == task_id)).scalar_one_or_none()
             existing['time_locked'] = conn.execute(select(db.worklogs.c.time_locked).where(db.worklogs.c.task_id==task_id)).scalar_one()
-            merged = {k: existing[k] for k in TaskInput.model_fields}
+            merged = {k: existing.get(k) for k in TaskInput.model_fields}
             merged.update(payload.model_dump(exclude_unset=True))
             if 'confirmed_minutes' in payload.model_fields_set and 'time_locked' not in payload.model_fields_set:
                 merged['time_locked']=bool(merged['confirmed_minutes'])
