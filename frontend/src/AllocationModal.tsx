@@ -36,10 +36,11 @@ function readDraft(day: string, report: Report) {
       (value.selected === null ||
         (Array.isArray(value.selected) &&
           value.selected.every((id: unknown) => typeof id === "string")))
-    )
+    ) {
+      const isConsumed = Boolean(report.time_allocation);
       return {
         enabled: value.enabled as boolean,
-        requestId: value.requestId as string,
+        requestId: isConsumed ? crypto.randomUUID() : (value.requestId as string),
         items: value.items as Quick[],
         selected:
           value.selected === null
@@ -48,6 +49,7 @@ function readDraft(day: string, report: Report) {
                 unlockedIds(report).includes(id),
               ),
       };
+    }
   } catch {
     /* A blocked or damaged browser draft must not prevent opening. */
   }
