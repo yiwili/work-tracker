@@ -7899,3 +7899,420 @@ code {
   font-size: 12px;
   border-radius: 7px;
 }
+
+/* =========================================================
+   Gitee Issue Browser & Dual-End Sync Modal
+   ========================================================= */
+.modal.gitee-issue-browser-modal {
+  width: min(880px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px;
+}
+
+.modal.gitee-issue-browser-modal .modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 0;
+}
+
+.modal.gitee-issue-browser-modal .modal-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.modal.gitee-issue-browser-modal .modal-head p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--apple-text-secondary, #6b7280);
+}
+
+.modal.gitee-issue-browser-modal .modal-head .actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.modal.gitee-issue-browser-modal .modal-head .icon-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.gitee-browser-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: #065f46;
+}
+
+.gitee-browser-loading-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  background: rgba(0, 113, 227, 0.08);
+  border: 1px solid rgba(0, 113, 227, 0.2);
+  color: #005bb5;
+}
+
+.gitee-browser-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(245, 245, 247, 0.85);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.gitee-browser-date-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gitee-date-nav-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gitee-date-nav-group > button {
+  height: 33px;
+  padding: 0 11px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.gitee-date-nav-group > input[type="date"] {
+  height: 33px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #1d1d1f;
+  width: auto;
+  margin: 0;
+}
+
+.gitee-sync-action-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gitee-sync-action-group > button {
+  height: 33px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.gitee-browser-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.gitee-browser-filter-bar label.gitee-filter-item {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  width: auto;
+  flex: 0 1 auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4b5563;
+}
+
+.gitee-browser-filter-bar label.gitee-filter-item > span {
+  white-space: nowrap;
+}
+
+.gitee-browser-filter-bar label.gitee-filter-item > select {
+  width: auto;
+  min-width: 128px;
+  max-width: 210px;
+  height: 32px;
+  padding: 0 10px;
+  margin: 0;
+  font-size: 12.5px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gitee-browser-filter-bar label.gitee-browser-search {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  flex: 1 1 200px;
+  min-width: 180px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  color: #6b7280;
+}
+
+.gitee-browser-filter-bar label.gitee-browser-search > input {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  font-size: 12.5px;
+  outline: none;
+  box-shadow: none;
+}
+
+.gitee-browser-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #4b5563;
+  padding: 0 2px;
+}
+
+.gitee-storage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: rgba(0, 113, 227, 0.08);
+  color: #0071e3;
+}
+
+.gitee-browser-empty {
+  padding: 28px 18px;
+  text-align: center;
+  border-radius: 14px;
+  background: rgba(245, 245, 247, 0.7);
+  border: 1px dashed rgba(15, 23, 42, 0.14);
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.gitee-browser-empty p {
+  margin: 0 0 14px;
+}
+
+.gitee-empty-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.gitee-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: 46vh;
+  padding-right: 4px;
+}
+
+.gitee-browser-card {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.gitee-browser-card:hover {
+  border-color: rgba(0, 113, 227, 0.25);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.gitee-browser-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gitee-issue-id-badge {
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.gitee-issue-title {
+  flex: 1 1 200px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #111827;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.gitee-issue-program-badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 113, 227, 0.09);
+  color: #0071e3;
+  white-space: nowrap;
+}
+
+.gitee-issue-state-pill {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.gitee-issue-state-pill.state-open {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.gitee-issue-state-pill.state-progressing {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.gitee-issue-state-pill.state-closed {
+  background: rgba(16, 185, 129, 0.13);
+  color: #047857;
+}
+
+.gitee-browser-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.gitee-link-tag {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.gitee-link-tag.linked {
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+}
+
+.gitee-link-tag.remote-only {
+  background: rgba(107, 114, 128, 0.1);
+  color: #4b5563;
+}
+
+.gitee-retain-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 25px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: rgba(0, 113, 227, 0.1);
+  color: #0071e3;
+  border: 1px solid rgba(0, 113, 227, 0.22);
+  cursor: pointer;
+}
+
+.gitee-retain-inline-btn:hover:not(:disabled) {
+  background: #0071e3;
+  color: #ffffff;
+}
+
+.gitee-browser-card-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: #0071e3;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.gitee-browser-card-meta a:hover {
+  text-decoration: underline;
+}
+
+.gitee-browser-card-desc summary {
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.gitee-browser-card-desc pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #374151;
+}
+
+.modal.gitee-issue-browser-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 6px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}

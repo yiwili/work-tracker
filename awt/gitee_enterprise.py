@@ -76,18 +76,23 @@ def _tool(tool, arguments, credential=None, uncertain=False):
 
 def _paged(tool, arguments):
     rows=[];seen=set();page=1
-    while page<=200:
+    max_pages = 3 if tool == 'list_enterprise_issues' else 200
+    while page<=max_pages:
         data=_tool(tool,{**arguments,'page':page,'per_page':100})
         if not isinstance(data,dict) or not isinstance(data.get('data'),list) or any(not isinstance(r,dict) for r in data['data']):
             raise EnterpriseError('Gitee企业版列表格式无效，请检查MCP企业令牌的权限范围')
         batch=data['data'];fingerprint=stable(batch)
         if batch and fingerprint in seen:
+            if tool == 'list_enterprise_issues':
+                return rows
             raise EnterpriseError('Gitee企业版返回重复分页，未使用不完整列表自动匹配')
         seen.add(fingerprint);rows.extend(batch)
         total=data.get('total_count')
         if len(batch)<100 or (isinstance(total,int) and len(rows)>=total):
             return rows
         page+=1
+    if tool == 'list_enterprise_issues':
+        return rows
     raise EnterpriseError('Gitee列表超过200页，未使用不完整列表自动匹配')
 
 
@@ -195,21 +200,25 @@ def unfinished_issues(enterprise_id, program_id=None):
     return items
 
 
-def fetch_all_issues(enterprise_id, since=None, state='all'):
+def fetch_all_issues(enterprise_id, since=None, state='all', raise_on_error=False):
     if not enterprise_id:
         return []
     args = {'enterprise_id': enterprise_id, 'state': state}
     try:
         rows = _paged('list_enterprise_issues', args)
-    except EnterpriseError:
+    except EnterpriseError as first_exc:
+        if raise_on_error and any(k in str(first_exc) for k in ('Token', '认证', '超时', '连接失败', 'npx', 'Node.js', 'HTTP 401', 'HTTP 403', 'HTTP 404')):
+            raise
         try:
             open_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'open'})
             closed_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'closed'})
             rows = open_rows + closed_rows
-        except EnterpriseError:
+        except EnterpriseError as second_exc:
             try:
                 rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id})
-            except EnterpriseError:
+            except EnterpriseError as third_exc:
+                if raise_on_error:
+                    raise third_exc from None
                 return []
     items = []
     for r in rows:
@@ -254,45 +263,282 @@ _orig_fetch_all_issues = fetch_all_issues
 _orig_unfinished_issues = unfinished_issues
 
 
-def issues_for_date(engine, target_date: str, program_id: int | None = None, state: str = 'all') -> dict:
+def _save_local_enterprise_issues(conn, enterprise_id: int, issues: list[dict], prog_map: dict | None = None) -> tuple[list[dict], str]:
+    from .service import upsert, now
+    prog_map = prog_map or {}
+    cache_key = f'gitee-enterprise-issues:{enterprise_id}'
+    existing_blob = conn.execute(
+        select(db.integrations.c.value).where(db.integrations.c.id == cache_key)
+    ).scalar() or {}
+    by_id: dict[str, dict] = {}
+    for old in existing_blob.get('items', []):
+        if isinstance(old, dict):
+            oid = str(old.get('issue_id') or old.get('id') or '').strip()
+            if oid:
+                by_id[oid] = dict(old)
+
+    ts = now()
+    for item in issues:
+        if not isinstance(item, dict):
+            continue
+        iid = str(item.get('issue_id') or item.get('id') or '').strip()
+        if not iid:
+            continue
+        ext_date = _extract_issue_date(item) or str(item.get('issue_date') or item.get('date') or item.get('work_date') or '')[:10]
+        dur = _issue_minutes(item)
+        prog_id = item.get('program_id')
+        prog_name = (
+            prog_map.get(prog_id, '')
+            or str(item.get('program_name') or item.get('project') or '')
+        )
+        normalized_item = {
+            **by_id.get(iid, {}),
+            **item,
+            'id': iid,
+            'issue_id': iid,
+            'title': str(item.get('title') or ''),
+            'description': str(item.get('description') or item.get('details') or ''),
+            'details': str(item.get('description') or item.get('details') or ''),
+            'state': str(item.get('state') or 'open'),
+            'program_id': prog_id,
+            'program_name': prog_name,
+            'project': prog_name,
+            'duration': dur,
+            'minutes': dur,
+            'hours': round(dur / 60.0, 2),
+            'issue_date': ext_date,
+            'date': ext_date,
+            'work_date': ext_date,
+            'url': safe_url(item.get('url') or item.get('issue_url')),
+            'source': 'gitee_enterprise',
+            'synced_at': ts,
+        }
+        by_id[iid] = normalized_item
+        upsert(
+            conn,
+            db.history,
+            {
+                'id': f'gitee-ent:{enterprise_id}:{iid}',
+                'title': normalized_item['title'],
+                'details': _issue_description(normalized_item),
+                'project': prog_name,
+                'work_date': ext_date,
+                'source': 'gitee_enterprise',
+                'source_id': iid,
+                'url': normalized_item['url'],
+                'imported_at': ts,
+            },
+            'id',
+        )
+
+    merged_list = sorted(
+        by_id.values(),
+        key=lambda x: (str(x.get('issue_date') or ''), str(x.get('issue_id') or '')),
+        reverse=True,
+    )[:2000]
+    upsert(
+        conn,
+        db.integrations,
+        {'id': cache_key, 'value': {'items': merged_list, 'synced_at': ts}},
+        'id',
+    )
+    return merged_list, ts
+
+
+def _load_local_enterprise_issues(conn, enterprise_id: int, prog_map: dict | None = None) -> tuple[list[dict], str | None]:
+    prog_map = prog_map or {}
+    cache_key = f'gitee-enterprise-issues:{enterprise_id}'
+    cached_blob = conn.execute(
+        select(db.integrations.c.value).where(db.integrations.c.id == cache_key)
+    ).scalar() or {}
+    synced_at = cached_blob.get('synced_at')
+    by_id: dict[str, dict] = {}
+
+    for item in cached_blob.get('items', []):
+        if isinstance(item, dict):
+            iid = str(item.get('issue_id') or item.get('id') or '').strip()
+            if iid:
+                by_id[iid] = dict(item)
+
+    # Merge any locally published/linked tasks from gitee_links + tasks + worklogs
+    linked_rows = conn.execute(
+        select(
+            db.gitee_links,
+            db.tasks.c.date.label('task_date'),
+            db.tasks.c.title.label('task_title'),
+            db.tasks.c.details.label('task_details'),
+            db.tasks.c.project.label('task_project'),
+            db.tasks.c.status.label('task_status'),
+            db.worklogs.c.confirmed_minutes.label('task_minutes'),
+        )
+        .select_from(
+            db.gitee_links.outerjoin(db.tasks, db.gitee_links.c.task_id == db.tasks.c.id)
+            .outerjoin(db.worklogs, db.tasks.c.id == db.worklogs.c.task_id)
+        )
+        .where(db.gitee_links.c.enterprise_id == enterprise_id)
+    ).mappings().all()
+
+    for r in linked_rows:
+        iid = str(r.get('issue_id') or '').strip()
+        if not iid or r.get('status') != 'created':
+            continue
+        existing = by_id.get(iid, {})
+        dur = int(existing.get('duration') or r.get('task_minutes') or 0)
+        prog_id = existing.get('program_id') or r.get('program_id')
+        prog_name = (
+            prog_map.get(prog_id, '')
+            or existing.get('program_name')
+            or str(r.get('task_project') or '')
+        )
+        t_date = existing.get('issue_date') or str(r.get('task_date') or '')
+        t_status = str(r.get('task_status') or '')
+        state_val = existing.get('state') or (
+            'closed' if t_status in ('delivered', 'verified')
+            else 'progressing' if t_status in ('attempted', 'changed')
+            else 'open'
+        )
+        by_id[iid] = {
+            **existing,
+            'id': iid,
+            'issue_id': iid,
+            'title': existing.get('title') or str(r.get('task_title') or ''),
+            'description': existing.get('description') or str(r.get('task_details') or ''),
+            'details': existing.get('details') or str(r.get('task_details') or ''),
+            'state': state_val,
+            'program_id': prog_id,
+            'program_name': prog_name,
+            'project': prog_name,
+            'duration': dur,
+            'minutes': dur,
+            'hours': round(dur / 60.0, 2),
+            'issue_date': t_date,
+            'date': t_date,
+            'work_date': t_date,
+            'url': safe_url(existing.get('url') or r.get('url') or ''),
+            'linked_task_id': str(r.get('task_id') or ''),
+            'source': 'gitee_enterprise',
+        }
+
+    # Also merge history table records from gitee / gitee_enterprise
+    hist_rows = conn.execute(
+        select(db.history)
+        .where(db.history.c.source.in_(['gitee_enterprise', 'gitee']))
+        .order_by(db.history.c.work_date.desc())
+        .limit(500)
+    ).mappings().all()
+    for hr in hist_rows:
+        iid = str(hr.get('source_id') or '').strip()
+        if not iid or iid in by_id:
+            continue
+        w_date = str(hr.get('work_date') or '')[:10]
+        by_id[iid] = {
+            'id': iid,
+            'issue_id': iid,
+            'title': str(hr.get('title') or ''),
+            'description': str(hr.get('details') or ''),
+            'details': str(hr.get('details') or ''),
+            'state': 'open',
+            'program_id': None,
+            'program_name': str(hr.get('project') or ''),
+            'project': str(hr.get('project') or ''),
+            'duration': 0,
+            'minutes': 0,
+            'hours': 0.0,
+            'issue_date': w_date,
+            'date': w_date,
+            'work_date': w_date,
+            'url': safe_url(hr.get('url') or ''),
+            'linked_task_id': '',
+            'source': 'gitee_enterprise',
+        }
+
+    items = sorted(
+        by_id.values(),
+        key=lambda x: (str(x.get('issue_date') or ''), str(x.get('issue_id') or '')),
+        reverse=True,
+    )
+    return items, synced_at
+
+
+def _state_matches(issue_state: str, state_filter: str) -> bool:
+    if not state_filter or state_filter == 'all':
+        return True
+    s = (issue_state or 'open').strip().lower()
+    if state_filter == 'closed':
+        return s in ('closed', 'finished', 'resolved', 'done', '已完成', '已关闭', '已解决')
+    if state_filter == 'progressing':
+        return s in ('progressing', 'in_progress', 'doing', '进行中')
+    if state_filter == 'open':
+        return s not in ('closed', 'finished', 'resolved', 'done', '已完成', '已关闭', '已解决', 'progressing', 'in_progress', 'doing', '进行中')
+    return True
+
+
+def issues_for_date(engine, target_date: str, program_id: int | None = None, state: str = 'all', source: str = 'auto') -> dict:
     from .service import get_settings
     with engine.connect() as conn:
         settings = get_settings(conn)
         enterprise_id = settings.gitee_enterprise.enterprise_id
         if not enterprise_id:
-            raise ValueError('请先在系统设置选择Gitee企业并保存')
-        cached = conn.execute(
-            select(db.integrations.c.value).where(
-                db.integrations.c.id == f'gitee-enterprise-programs:{enterprise_id}'
-            )
-        ).scalar() or {}
-        catalog = cached.get('items', [])
-        links_by_issue = {
-            str(r['issue_id']): dict(r)
-            for r in conn.execute(
-                select(db.gitee_links).where(db.gitee_links.c.enterprise_id == enterprise_id)
-            ).mappings()
-            if r['issue_id']
-        }
-        task_dates = {
-            r['id']: r['date']
-            for r in conn.execute(select(db.tasks.c.id, db.tasks.c.date)).mappings()
-        }
-    if not catalog:
-        try:
-            catalog = programs(enterprise_id)
-        except Exception:
+            if source != 'local':
+                raise ValueError('请先在系统设置选择Gitee企业并保存')
             catalog = []
-    prog_map = {p['id']: p['name'] for p in catalog if isinstance(p, dict) and 'id' in p}
-    all_issues = fetch_all_issues(
-        enterprise_id,
-        since=target_date if target_date != 'all' else None,
-        state=state,
-    )
+            links_by_issue = {}
+            task_dates = {
+                r['id']: r['date']
+                for r in conn.execute(select(db.tasks.c.id, db.tasks.c.date).where(db.tasks.c.deleted == False)).mappings()
+            }
+            prog_map = {}
+            local_issues, synced_at = _load_local_enterprise_issues(conn, 0, prog_map)
+        else:
+            cached = conn.execute(
+                select(db.integrations.c.value).where(
+                    db.integrations.c.id == f'gitee-enterprise-programs:{enterprise_id}'
+                )
+            ).scalar() or {}
+            catalog = cached.get('items', [])
+            links_by_issue = {
+                str(r['issue_id']): dict(r)
+                for r in conn.execute(
+                    select(db.gitee_links).where(db.gitee_links.c.enterprise_id == enterprise_id)
+                ).mappings()
+                if r['issue_id']
+            }
+            task_dates = {
+                r['id']: r['date']
+                for r in conn.execute(select(db.tasks.c.id, db.tasks.c.date).where(db.tasks.c.deleted == False)).mappings()
+            }
+            prog_map = {p['id']: p['name'] for p in catalog if isinstance(p, dict) and 'id' in p}
+            local_issues, synced_at = _load_local_enterprise_issues(conn, enterprise_id, prog_map)
+
+    if source == 'local':
+        all_issues = local_issues
+    else:
+        if not catalog:
+            try:
+                catalog = programs(enterprise_id)
+                prog_map = {p['id']: p['name'] for p in catalog if isinstance(p, dict) and 'id' in p}
+            except Exception:
+                catalog = []
+        remote_issues = fetch_all_issues(
+            enterprise_id,
+            since=target_date if (target_date != 'all' and source == 'auto') else None,
+            state=state if source == 'auto' else 'all',
+            raise_on_error=(source == 'remote'),
+        )
+        with engine.begin() as conn:
+            merged_local, synced_at = _save_local_enterprise_issues(conn, enterprise_id, remote_issues, prog_map)
+            local_issues, _ = _load_local_enterprise_issues(conn, enterprise_id, prog_map)
+        # Keep any remote_issues order/items while enriching with local persistence
+        remote_ids = {str(r.get('issue_id') or r.get('id') or '') for r in remote_issues}
+        all_issues = list(remote_issues) + [
+            li for li in local_issues
+            if str(li.get('issue_id') or li.get('id') or '') not in remote_ids
+        ]
+
     filtered = []
     for issue in all_issues:
         issue_id_str = str(issue.get('issue_id') or issue.get('id') or '')
-        ext_date = _extract_issue_date(issue)
+        ext_date = _extract_issue_date(issue) or str(issue.get('issue_date') or '')
         linked_info = links_by_issue.get(issue_id_str)
         linked_task_date = task_dates.get(linked_info['task_id']) if linked_info else None
         date_matched = (
@@ -304,21 +550,145 @@ def issues_for_date(engine, target_date: str, program_id: int | None = None, sta
             continue
         if program_id is not None and issue.get('program_id') != program_id:
             continue
+        if not _state_matches(str(issue.get('state') or 'open'), state):
+            continue
         enriched = dict(issue)
         enriched['issue_id'] = issue_id_str
-        enriched['issue_date'] = ext_date or (str(target_date) if target_date != 'all' else '')
-        enriched['program_name'] = prog_map.get(issue.get('program_id'), '') or issue.get('program_name', '')
+        enriched['issue_date'] = ext_date or linked_task_date or (str(target_date) if target_date != 'all' else '')
+        enriched['program_name'] = prog_map.get(issue.get('program_id'), '') or issue.get('program_name', '') or issue.get('project', '')
         dur = _issue_minutes(issue)
         enriched['duration'] = dur
         enriched['hours'] = round(dur / 60.0, 2)
-        enriched['linked_task_id'] = linked_info.get('task_id', '') if linked_info else ''
+        linked_tid = linked_info.get('task_id', '') if linked_info else str(issue.get('linked_task_id') or '')
+        enriched['linked_task_id'] = linked_tid if linked_tid in task_dates else ''
+        enriched['saved_locally'] = True
         filtered.append(enriched)
     return {
         'date': str(target_date),
         'enterprise_id': enterprise_id,
+        'enterprise_configured': bool(enterprise_id),
         'total': len(filtered),
+        'local_total': len(local_issues),
+        'synced_at': synced_at,
+        'source': source,
         'items': filtered,
         'programs': catalog,
+    }
+
+
+def retain_issues_locally(engine, target_date: str, issue_ids: list[str] | None = None) -> dict:
+    """Ensure remote Gitee issues are retained both on Gitee server and as local work_tasks."""
+    from .service import get_settings, upsert, invalidate, now
+    from sqlalchemy import insert
+    with engine.begin() as conn:
+        settings = get_settings(conn)
+        enterprise_id = settings.gitee_enterprise.enterprise_id
+        if not enterprise_id:
+            raise ValueError('请先在系统设置选择Gitee企业并保存')
+        cached = conn.execute(
+            select(db.integrations.c.value).where(
+                db.integrations.c.id == f'gitee-enterprise-programs:{enterprise_id}'
+            )
+        ).scalar() or {}
+        prog_map = {p['id']: p['name'] for p in cached.get('items', []) if isinstance(p, dict) and 'id' in p}
+        local_issues, _ = _load_local_enterprise_issues(conn, enterprise_id, prog_map)
+        links_by_issue = {
+            str(r['issue_id']): dict(r)
+            for r in conn.execute(
+                select(db.gitee_links).where(db.gitee_links.c.enterprise_id == enterprise_id)
+            ).mappings()
+            if r['issue_id']
+        }
+        active_task_ids = set(
+            conn.execute(select(db.tasks.c.id).where(db.tasks.c.deleted == False)).scalars()
+        )
+
+        wanted_ids = {str(i).strip() for i in (issue_ids or []) if str(i).strip()}
+        created_tasks = []
+        already_linked = []
+        affected_dates = set()
+
+        for issue in local_issues:
+            iid = str(issue.get('issue_id') or issue.get('id') or '').strip()
+            if not iid:
+                continue
+            if wanted_ids and iid not in wanted_ids:
+                continue
+            issue_day = _extract_issue_date(issue) or str(issue.get('issue_date') or '') or (
+                str(target_date) if target_date and target_date != 'all' else datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            )
+            if not wanted_ids and target_date != 'all' and issue_day != str(target_date):
+                continue
+
+            existing_link = links_by_issue.get(iid)
+            if existing_link and existing_link.get('task_id') in active_task_ids:
+                already_linked.append(iid)
+                continue
+
+            new_task_id = uuid4().hex
+            dur = _issue_minutes(issue)
+            proj = str(issue.get('program_name') or issue.get('project') or '未归属项目')
+            state_str = str(issue.get('state') or 'open').lower()
+            local_status = (
+                'delivered' if state_str in ('closed', 'finished', 'resolved', 'done', '已完成', '已关闭')
+                else 'attempted' if state_str in ('progressing', 'in_progress', 'doing', '进行中')
+                else 'requested'
+            )
+            conn.execute(
+                insert(db.tasks).values(
+                    id=new_task_id,
+                    date=issue_day,
+                    title=str(issue.get('title') or f'Gitee 工作项 #{iid}')[:500],
+                    details=_issue_description(issue),
+                    project=proj,
+                    category='任务',
+                    status=local_status,
+                    origin='gitee',
+                    confidence='Gitee 企业远端同步保留',
+                    evidence_level='Gitee 企业工作项',
+                    fingerprint=f'gitee-ent-retain:{enterprise_id}:{iid}',
+                    edited=True,
+                    deleted=False,
+                )
+            )
+            conn.execute(
+                insert(db.worklogs).values(
+                    task_id=new_task_id,
+                    suggested_minutes=dur if dur > 0 else None,
+                    confirmed_minutes=dur,
+                    time_locked=bool(dur > 0),
+                    time_source='manual',
+                    time_reason='从 Gitee 企业工作项同步保留',
+                    is_confirmed=False,
+                )
+            )
+            link_id = stable(enterprise_id, new_task_id)
+            upsert(
+                conn,
+                db.gitee_links,
+                {
+                    'id': link_id,
+                    'enterprise_id': enterprise_id,
+                    'task_id': new_task_id,
+                    'program_id': int(issue.get('program_id') or 0),
+                    'status': 'created',
+                    'issue_id': iid,
+                    'url': safe_url(issue.get('url')),
+                    'error': '',
+                    'updated_at': now(),
+                },
+                'id',
+            )
+            created_tasks.append({'issue_id': iid, 'task_id': new_task_id, 'date': issue_day, 'title': issue.get('title')})
+            affected_dates.add(issue_day)
+
+        for d in affected_dates:
+            invalidate(conn, d)
+
+    return {
+        'created_count': len(created_tasks),
+        'already_linked_count': len(already_linked),
+        'created_tasks': created_tasks,
     }
 
 
@@ -737,6 +1107,24 @@ def publish(engine,payload,cloud_client=None):
             record['updated_at']=now()
             with engine.begin() as conn:
                 upsert(conn,db.gitee_links,record,'id')
+                if record.get('status') == 'created' and record.get('issue_id'):
+                    _save_local_enterprise_issues(
+                        conn,
+                        enterprise_id,
+                        [
+                            {
+                                'issue_id': str(record['issue_id']),
+                                'title': item['title'],
+                                'description': item['description'],
+                                'state': 'open',
+                                'program_id': target.program_id,
+                                'duration': item['minutes'],
+                                'issue_date': str(snapshot['date']),
+                                'url': record.get('url', ''),
+                                'linked_task_id': target.task_id,
+                            }
+                        ],
+                    )
 
             if is_unified and c_client and req_id:
                 try:

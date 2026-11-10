@@ -493,3 +493,65 @@
   background: rgba(255, 159, 10, 0.18);
   color: #ffb340;
 }
+
+/* Gitee Issue Browser & Dual-End Sync in Dark Theme */
+:root[data-theme="apple-dark"] .gitee-browser-toolbar,
+:root[data-theme="apple-dark"] .gitee-browser-empty {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .gitee-date-nav-group > input[type="date"],
+:root[data-theme="apple-dark"] .gitee-browser-filter-bar label.gitee-filter-item > select,
+:root[data-theme="apple-dark"] .gitee-browser-filter-bar label.gitee-browser-search {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-filter-bar label.gitee-browser-search > input {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-filter-bar label.gitee-filter-item,
+:root[data-theme="apple-dark"] .gitee-browser-summary {
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-card {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme="apple-dark"] .gitee-issue-title {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .gitee-issue-id-badge {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-card-meta {
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-card-desc pre {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-notice {
+  background: rgba(48, 209, 88, 0.14);
+  border-color: rgba(48, 209, 88, 0.28);
+  color: #5de07d;
+}
+
+:root[data-theme="apple-dark"] .gitee-browser-loading-bar,
+:root[data-theme="apple-dark"] .gitee-storage-pill {
+  background: rgba(41, 151, 255, 0.14);
+  border-color: rgba(41, 151, 255, 0.26);
+  color: #64b5f6;
+}

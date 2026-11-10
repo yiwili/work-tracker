@@ -442,8 +442,21 @@ def create_app(engine=None):
         return gitee_enterprise.resolve(engine,payload)
 
     @app.get('/api/gitee/enterprise/issues')
-    def enterprise_issues_by_date(date: str = Query(default='all'), program_id: int | None = Query(default=None), state: str = Query(default='all')):
-        return gitee_enterprise.issues_for_date(engine, date, program_id=program_id, state=state)
+    def enterprise_issues_by_date(
+        date: str = Query(default='all'),
+        program_id: int | None = Query(default=None),
+        state: str = Query(default='all'),
+        source: str = Query(default='auto'),
+    ):
+        return gitee_enterprise.issues_for_date(engine, date, program_id=program_id, state=state, source=source)
+
+    @app.post('/api/gitee/enterprise/issues/retain')
+    def retain_enterprise_issues(payload: dict):
+        target_date = str(payload.get('date') or 'all')
+        issue_ids = payload.get('issue_ids')
+        if issue_ids is not None and not isinstance(issue_ids, list):
+            raise HTTPException(422, 'issue_ids 必须为列表')
+        return gitee_enterprise.retain_issues_locally(engine, target_date, issue_ids=issue_ids)
 
     @app.get('/api/gitee/enterprise/verify')
     def verify_enterprise_day(date: date):

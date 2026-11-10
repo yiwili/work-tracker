@@ -1682,6 +1682,7 @@ function App() {
         <GiteeIssueBrowserModal
           initialDate={day}
           onClose={() => setGiteeBrowserOpen(false)}
+          onChanged={refresh}
           onSettings={() => {
             setGiteeBrowserOpen(false);
             setPage("settings");

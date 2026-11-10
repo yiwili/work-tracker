@@ -187,3 +187,99 @@ def test_preview_replacement_detection_and_publish_and_verify(ent_client, monkey
     assert ver_data['items'][0]['verified'] is True
     assert ver_data['items'][0]['remote_duration'] == 150
     assert ver_data['items'][0]['remote_title'] == '【上海工程】电子文件归档接口联调'
+
+
+def test_enterprise_issues_local_history_manual_sync_and_retain(ent_client, monkeypatch):
+    c, _ = ent_client
+
+    # 1. Local browse works immediately with zero remote calls even before syncing
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda *a, **kw: pytest.fail('local browse must never hit remote Gitee MCP'),
+    )
+    local_empty = c.get('/api/gitee/enterprise/issues?date=2026-11-10&source=local')
+    local_empty.raise_for_status()
+    assert local_empty.json()['total'] == 0
+    assert local_empty.json()['source'] == 'local'
+
+    # 2. Manual remote sync fetches issues and caches them locally in history + integration cache
+    raw_issues = [
+        {
+            'id': 401,
+            'ident': 'SHGC-401',
+            'title': '【上海工程】数据库归档校验优化',
+            'description': '工作日期：2026-11-10\n预估工时：2.5h\n\n核对归档索引完整性',
+            'state': 'progressing',
+            'program_id': 11,
+            'duration': 150,
+            'plan_started_at': '2026-11-10T00:00:00',
+            'issue_url': 'https://gitee.com/ent/issue/401',
+        },
+        {
+            'id': 402,
+            'ident': 'SHGC-402',
+            'title': '【2026】历史凭证导出修复',
+            'description': '工作日期：2026-11-09\n预估工时：1h',
+            'state': 'closed',
+            'program_id': 22,
+            'duration': 60,
+            'plan_started_at': '2026-11-09T00:00:00',
+            'issue_url': 'https://gitee.com/ent/issue/402',
+        },
+    ]
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda tool, args: (
+            CATALOG if tool == 'list_programs'
+            else raw_issues if tool == 'list_enterprise_issues'
+            else []
+        ),
+    )
+
+    remote_sync = c.get('/api/gitee/enterprise/issues?date=2026-11-10&source=remote')
+    remote_sync.raise_for_status()
+    sync_data = remote_sync.json()
+    assert sync_data['total'] == 1
+    assert sync_data['local_total'] == 2
+    assert sync_data['synced_at']
+
+    # 3. Subsequent local browse on different dates & 'all' hits zero remote calls and returns cached records
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda *a, **kw: pytest.fail('local browse must use local persistence'),
+    )
+    local_all = c.get('/api/gitee/enterprise/issues?date=all&source=local').json()
+    assert local_all['total'] == 2
+    local_prev = c.get('/api/gitee/enterprise/issues?date=2026-11-09&source=local').json()
+    assert local_prev['total'] == 1
+    assert local_prev['items'][0]['issue_id'] == '402'
+
+    # 4. Retain issue into local daily work_tasks (dual-end server + local retention)
+    retain_res = c.post(
+        '/api/gitee/enterprise/issues/retain',
+        json={'date': '2026-11-10', 'issue_ids': ['401']},
+    )
+    retain_res.raise_for_status()
+    assert retain_res.json()['created_count'] == 1
+
+    # Verify it now appears in local daily report with preserved hours & link
+    rep = c.get('/api/reports/2026-11-10').json()
+    assert len(rep['tasks']) == 1
+    assert rep['tasks'][0]['title'] == '【上海工程】数据库归档校验优化'
+    assert rep['tasks'][0]['confirmed_minutes'] == 150
+    assert rep['tasks'][0]['origin'] == 'gitee'
+
+    # Local browse now marks #401 as linked to local report
+    local_today = c.get('/api/gitee/enterprise/issues?date=2026-11-10&source=local').json()
+    assert local_today['items'][0]['linked_task_id'] == rep['tasks'][0]['id']
+
+    # Re-retaining does not duplicate the task
+    retain_again = c.post(
+        '/api/gitee/enterprise/issues/retain',
+        json={'date': '2026-11-10', 'issue_ids': ['401']},
+    ).json()
+    assert retain_again['created_count'] == 0
+    assert retain_again['already_linked_count'] == 1
