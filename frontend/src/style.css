@@ -7044,6 +7044,12 @@ code {
   white-space: nowrap;
 }
 
+.quick-status-btn::before,
+.quick-status-btn.state::before {
+  content: none;
+  display: none;
+}
+
 .quick-status-btn:hover {
   filter: brightness(0.96);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
