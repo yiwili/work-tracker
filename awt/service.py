@@ -459,13 +459,17 @@ def report(conn, day):
     if allocation:
         allocation={**allocation,'stale':allocation['state_hash']!=state_hash(tasks,settings)}
 
+    from . import similarity
+    similarity_status = similarity.get_similarity_status(conn, day, tasks)
+
     legacy_count = sum(t['origin'] == 'auto' and not t['edited'] and not t['confirmed_minutes'] and not (t['fingerprint'] or '').startswith('daily-v2:') for t in tasks)
     effective_target = stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes
     return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
             "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,
             "merge_suggestions": merge_suggestions(tasks), "projects": len({t['project'] for t in tasks}),
-            "sources": len({e['source'] for t in tasks for e in t['evidence'] if e['source'] != 'git'})}
+            "sources": len({e['source'] for t in tasks for e in t['evidence'] if e['source'] != 'git'}),
+            "similarity_status": similarity_status}
 
 
 def set_report_target(conn, day, target_minutes):

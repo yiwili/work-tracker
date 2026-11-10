@@ -15,6 +15,7 @@ import {
   Clock3,
   FileText,
   FolderGit2,
+  GitCompare,
   GitMerge,
   Layers3,
   Link2,
@@ -32,7 +33,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { GiteeSyncResult, PendingTask, Report, Settings, Task, WorkEvent } from "./types";
+import type { DuplicatePair, GiteeSyncResult, PendingTask, Report, Settings, SimilarityCheckResponse, Task, WorkEvent } from "./types";
 import "./style.css";
 import { api } from "./api";
 import { Conversations } from "./Conversations";
@@ -41,6 +42,7 @@ import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal, type AllocationRequest } from "./AllocationModal";
 import { AllocationPreviewModal } from "./AllocationPreviewModal";
+import { SimilarityMergeModal } from "./SimilarityMergeModal";
 import { GiteePublishModal } from "./GiteePublishModal";
 import { GiteeDedupModal } from "./GiteeDedupModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
@@ -173,6 +175,10 @@ function App() {
     [allocationPreviewOpen, setAllocationPreviewOpen] = useState(false),
     [allocating, setAllocating] = useState(false),
     [allocationError, setAllocationError] = useState(""),
+    [similarityOpen, setSimilarityOpen] = useState(false),
+    [similarityPairs, setSimilarityPairs] = useState<DuplicatePair[]>([]),
+    [checkingSimilarity, setCheckingSimilarity] = useState(false),
+    [proceedToAllocationAfterSimilarity, setProceedToAllocationAfterSimilarity] = useState(false),
     [giteeOpen, setGiteeOpen] = useState(false),
     [giteeDedupOpen, setGiteeDedupOpen] = useState(false),
     [giteeSyncResult, setGiteeSyncResult] = useState<GiteeSyncResult | null>(null),
@@ -458,6 +464,14 @@ function App() {
         pending: boolean;
       }>("/reports/" + jobDay + "/estimate-time", "POST", request);
       await refresh(jobDay);
+      try {
+        const draftStr = sessionStorage.getItem(`allocation-draft:${jobDay}`);
+        if (draftStr) {
+          const draft = JSON.parse(draftStr);
+          draft.requestId = crypto.randomUUID();
+          sessionStorage.setItem(`allocation-draft:${jobDay}`, JSON.stringify(draft));
+        }
+      } catch {}
       const pending = result.pending ?? !result.applied;
       const kept = result.fixed_minutes + (result.preserved_minutes || 0);
       const warnings = result.warnings?.length
@@ -475,9 +489,71 @@ function App() {
         },
       });
     } catch (e) {
-      setAllocationError((e as Error).message);
+      const errMsg = (e as Error).message;
+      if (errMsg.includes("高度重复") || errMsg.includes("相似")) {
+        void runManualSimilarityCheck();
+      }
+      if (errMsg.includes("请求编号已使用")) {
+        try {
+          const draftStr = sessionStorage.getItem(`allocation-draft:${jobDay}`);
+          if (draftStr) {
+            const draft = JSON.parse(draftStr);
+            draft.requestId = crypto.randomUUID();
+            sessionStorage.setItem(`allocation-draft:${jobDay}`, JSON.stringify(draft));
+          }
+        } catch {}
+      }
+      setAllocationError(errMsg);
     } finally {
       setAllocating(false);
+    }
+  };
+  const handleOpenAllocation = async () => {
+    if (!report) return;
+    setAllocationError("");
+    const sim = report.similarity_status;
+    if (sim && sim.checked && !sim.tasks_changed && sim.handled) {
+      setAllocationOpen(true);
+      return;
+    }
+    setCheckingSimilarity(true);
+    try {
+      const res = await api<SimilarityCheckResponse>(`/reports/${day}/check-similarity`, "POST", { force: false });
+      if (res.has_duplicates && res.pairs.length > 0) {
+        setSimilarityPairs(res.pairs);
+        setProceedToAllocationAfterSimilarity(true);
+        setSimilarityOpen(true);
+      } else {
+        await refresh();
+        setAllocationOpen(true);
+      }
+    } catch (e) {
+      setAllocationError((e as Error).message);
+    } finally {
+      setCheckingSimilarity(false);
+    }
+  };
+  const runManualSimilarityCheck = async () => {
+    if (!report) return;
+    setAllocationError("");
+    setCheckingSimilarity(true);
+    try {
+      const res = await api<SimilarityCheckResponse>(`/reports/${day}/check-similarity`, "POST", { force: true });
+      await refresh();
+      if (res.has_duplicates && res.pairs.length > 0) {
+        setSimilarityPairs(res.pairs);
+        setProceedToAllocationAfterSimilarity(false);
+        setSimilarityOpen(true);
+      } else {
+        setToast({
+          title: "相似度检测通过",
+          message: "人工工作项与 AI 工作项未发现高度重复项，工时分配将不再重复检测。",
+        });
+      }
+    } catch (e) {
+      setAllocationError((e as Error).message);
+    } finally {
+      setCheckingSimilarity(false);
     }
   };
   const openAnalysisResults = () => {
@@ -914,6 +990,19 @@ function App() {
                       <Plus size={17} />
                       添加人工事项
                     </button>
+                    <button
+                      className="outline"
+                      disabled={!!busy || !report.tasks.length || checkingSimilarity}
+                      onClick={runManualSimilarityCheck}
+                      title="对比人工工作项与 AI 工作项的相似度并检查重复"
+                    >
+                      {checkingSimilarity ? (
+                        <LoaderCircle className="spin" size={15} />
+                      ) : (
+                        <GitCompare size={15} />
+                      )}
+                      相似度检测
+                    </button>
                   </div>
                 </div>
                 <div
@@ -950,6 +1039,7 @@ function App() {
                       disabled={
                         !!busy ||
                         allocating ||
+                        checkingSimilarity ||
                         Boolean(report.conversations.running) ||
                         Boolean(report.allocation_running) ||
                         !settings?.llm_enabled ||
@@ -962,19 +1052,18 @@ function App() {
                             ? "请先生成或补录工作项"
                             : undefined
                       }
-                      onClick={() => {
-                        setAllocationError("");
-                        setAllocationOpen(true);
-                      }}
+                      onClick={handleOpenAllocation}
                     >
-                      {allocating || report.allocation_running ? (
+                      {allocating || report.allocation_running || checkingSimilarity ? (
                         <LoaderCircle className="spin" size={16} />
                       ) : (
                         <Sparkles size={16} />
                       )}
                       {allocating || report.allocation_running
                         ? "AI 正在分配…"
-                        : `AI 估算并分配 ${hours(report.target_minutes)}h`}
+                        : checkingSimilarity
+                          ? "正在核对相似度…"
+                          : `AI 估算并分配 ${hours(report.target_minutes)}h`}
                     </button>
                     {report.time_allocation && (
                       <button
@@ -1445,6 +1534,21 @@ function App() {
             await refresh();
             setSettingsEpoch((value) => value + 1);
           }}
+        />
+      )}
+      {similarityOpen && (
+        <SimilarityMergeModal
+          day={day}
+          pairs={similarityPairs}
+          onClose={() => setSimilarityOpen(false)}
+          onApplied={async () => {
+            await refresh();
+          }}
+          onProceedToAllocation={
+            proceedToAllocationAfterSimilarity
+              ? () => setAllocationOpen(true)
+              : undefined
+          }
         />
       )}
       {allocationOpen && report && (

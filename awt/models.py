@@ -500,12 +500,33 @@ class AllocationInput(BaseModel):
     task_ids: list[str] | None = Field(default=None, max_length=200)
     manual_items: list[QuickItem] = Field(default_factory=list, max_length=20)
     target_minutes: int | None = Field(default=None, ge=1, le=1440 * 30)
+    force_skip_similarity: bool = Field(default=False)
 
     @model_validator(mode='after')
     def require_id(self):
         if self.manual_items and not self.request_id:
             raise ValueError('添加人工事项需要请求编号')
         return self
+
+
+class SimilarityCheckInput(BaseModel):
+    force: bool = Field(default=False)
+
+
+class SimilarityResolutionItem(BaseModel):
+    pair_id: str = Field(min_length=1, max_length=200)
+    action: Literal['ai_merge', 'keep_manual', 'keep_ai', 'ignore'] = 'ai_merge'
+    target_task_id: str | None = None
+    title: str | None = Field(default=None, max_length=500)
+    details: str | None = Field(default=None, max_length=20000)
+    project: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, max_length=100)
+    confirmed_minutes: int | None = Field(default=None, ge=0, le=1440)
+    status: TaskStatus | None = None
+
+
+class SimilarityResolveInput(BaseModel):
+    resolutions: list[SimilarityResolutionItem] = Field(default_factory=list, max_length=100)
 
 
 class ReportTargetInput(BaseModel):

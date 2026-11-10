@@ -80,6 +80,50 @@ export type Report = {
   conversations: ConversationOverview;
   legacy_count: number;
   merge_suggestions: { ids: string[]; reason: string }[];
+  similarity_status?: SimilarityStatus;
+};
+
+export type SimilarityStatus = {
+  checked: boolean;
+  tasks_changed: boolean;
+  handled: boolean;
+  has_duplicates: boolean;
+  pairs_count: number;
+  tasks_signature: string;
+};
+
+export type DuplicatePair = {
+  pair_id: string;
+  manual_task: Task;
+  ai_task: Task;
+  similarity_score: number;
+  reason: string;
+  recommended_title: string;
+  recommended_details: string;
+  recommended_project: string;
+  recommended_category: string;
+  recommended_minutes: number;
+  recommended_status: string;
+};
+
+export type SimilarityCheckResponse = {
+  status: "clean" | "duplicates_found";
+  tasks_changed: boolean;
+  has_duplicates: boolean;
+  pairs: DuplicatePair[];
+  tasks_signature: string;
+};
+
+export type SimilarityResolution = {
+  pair_id: string;
+  action: "ai_merge" | "keep_manual" | "keep_ai" | "ignore";
+  target_task_id?: string;
+  title?: string;
+  details?: string;
+  project?: string;
+  category?: string;
+  confirmed_minutes?: number;
+  status?: string;
 };
 export type SourceConfig = { enabled: boolean; paths: string[] };
 export type GiteeProjectRule = {

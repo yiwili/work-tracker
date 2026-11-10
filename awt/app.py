@@ -13,11 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching
+from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity
 from . import usage, cloud_sync, history_upload
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -430,6 +430,27 @@ def create_app(engine=None):
     def confirm_gitee_match_day(day: date, payload: GiteeConfirmMatchInput):
         return gitee_sync_svc.apply_user_decisions(engine, str(day), [d.model_dump() for d in payload.decisions])
 
+    @app.get('/api/reports/{day}/similarity-status')
+    def get_similarity_status_day(day: date):
+        with engine.connect() as conn:
+            tasks = service.list_tasks(conn, day)
+            return similarity.get_similarity_status(conn, day, tasks)
+
+    @app.post('/api/reports/{day}/check-similarity')
+    def check_similarity_day(day: date, payload: SimilarityCheckInput = SimilarityCheckInput()):
+        with engine.connect() as conn:
+            settings = service.get_settings(conn)
+            res = similarity.check_day_similarity(conn, day, settings=settings, force=payload.force)
+            conn.commit()
+            return res
+
+    @app.post('/api/reports/{day}/resolve-similarity')
+    def resolve_similarity_day(day: date, payload: SimilarityResolveInput):
+        with transaction() as conn:
+            settings = service.get_settings(conn)
+            res = similarity.resolve_similarity(conn, day, [r.model_dump() for r in payload.resolutions], settings=settings)
+            return res
+
     @app.get('/api/allocation/progress')
     def allocation_status(date: date):
         progress = allocation_runs.get(date)
@@ -451,6 +472,14 @@ def create_app(engine=None):
         progress.add('开始估算工时')
         try:
             with analysis_progress.track(progress), engine.connect() as conn:
+                if not payload.force_skip_similarity:
+                    sim_check = similarity.check_day_similarity(conn, day, force=False)
+                    conn.commit()
+                    if sim_check.get("has_duplicates"):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="检测到人工工作项与AI工作项存在高度重复，请先核对并处理相似工作项后再计算工时"
+                        )
                 try:
                     result=time_allocation.estimate(conn,day,payload)
                 except ValueError as exc:
