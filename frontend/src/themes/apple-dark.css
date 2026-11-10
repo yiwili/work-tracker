@@ -433,3 +433,63 @@
   background: var(--apple-control-bg);
   color: var(--apple-text-primary);
 }
+
+/* Structured Review Alert & Row Index in Dark Theme */
+:root[data-theme="apple-dark"] .task-row-index {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .task-row-has-warning {
+  background: rgba(255, 159, 10, 0.05) !important;
+}
+
+:root[data-theme="apple-dark"] .task-row-warning-tag {
+  background: rgba(255, 159, 10, 0.14) !important;
+  color: #ffb340 !important;
+  border-color: rgba(255, 159, 10, 0.32) !important;
+}
+
+:root[data-theme="apple-dark"] .alert-structured-card {
+  background: rgba(255, 159, 10, 0.06);
+  border-color: rgba(255, 159, 10, 0.24);
+}
+
+:root[data-theme="apple-dark"] .alert-task-row {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme="apple-dark"] .alert-task-title {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .alert-task-info,
+:root[data-theme="apple-dark"] .alert-modal-subtitle {
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .alert-structured-reason {
+  color: #ffb340;
+}
+
+:root[data-theme="apple-dark"] .alert-meta-pill.location {
+  background: rgba(41, 151, 255, 0.16);
+  color: #64b5f6;
+}
+
+:root[data-theme="apple-dark"] .alert-meta-pill.date {
+  background: rgba(48, 209, 88, 0.15);
+  color: #5de07d;
+}
+
+:root[data-theme="apple-dark"] .alert-meta-pill.project {
+  background: rgba(129, 140, 248, 0.16);
+  color: #a5b4fc;
+}
+
+:root[data-theme="apple-dark"] .alert-meta-pill.kind,
+:root[data-theme="apple-dark"] .alert-task-index {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ffb340;
+}

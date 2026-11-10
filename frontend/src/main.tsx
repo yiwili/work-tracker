@@ -34,7 +34,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { DuplicatePair, GiteeSyncResult, PendingTask, Report, Settings, SimilarityCheckResponse, Task, WorkEvent } from "./types";
+import type { DuplicatePair, GiteeSyncResult, PendingTask, Report, ReviewAlertItem, Settings, SimilarityCheckResponse, Task, WorkEvent } from "./types";
 import "./style.css";
 import { api, apiUrl } from "./api";
 import { Conversations } from "./Conversations";
@@ -215,6 +215,7 @@ function App() {
     [reviewAlert, setReviewAlert] = useState<{
       day: string;
       warnings: string[];
+      items?: ReviewAlertItem[];
     } | null>(null),
     [recoveryModal, setRecoveryModal] = useState<{
       day: string;
@@ -873,7 +874,7 @@ function App() {
                   <button
                     type="button"
                     className="warning-badge-pill"
-                    title="点击查看待审核提示"
+                    title="点击查看待审核提示（定位具体日期、所属区域与问题条目）"
                     onClick={() => {
                       const deletedPending = (
                         report.conversations.analysis?.pending_tasks || []
@@ -888,12 +889,13 @@ function App() {
                         setReviewAlert({
                           day,
                           warnings: [...new Set(report.warnings)],
+                          items: report.review_items || [],
                         });
                       }
                     }}
                   >
                     <AlertCircle size={13} />
-                    待审核提示
+                    待审核提示（{report.review_items?.length || report.warnings.length}）
                   </button>
                 )}
                 <button
@@ -1283,8 +1285,17 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {report.tasks.map((t) => (
-                          <tr key={t.id}>
+                        {report.tasks.map((t, rowIdx) => {
+                          const rowNumber = rowIdx + 1;
+                          const matchedAlerts = (report.review_items || []).filter(
+                            (ri) => ri.ids && ri.ids.includes(t.id),
+                          );
+                          return (
+                          <tr
+                            key={t.id}
+                            id={`task-row-${t.id}`}
+                            className={matchedAlerts.length > 0 ? "task-row-has-warning" : ""}
+                          >
                             <td>
                               <input
                                 type="checkbox"
@@ -1304,6 +1315,7 @@ function App() {
                                 className="task-title"
                                 onClick={() => setEditor({ task: t })}
                               >
+                                <span className="task-row-index">#{rowNumber}</span>
                                 {t.title}
                               </button>
                               {t.details && <p>{t.details}</p>}
@@ -1317,6 +1329,33 @@ function App() {
                                     ? "人工补录"
                                     : "AI / Git 提取"}
                                 </span>
+                                {matchedAlerts.length > 0 && (
+                                  <button
+                                    type="button"
+                                    className="task-row-warning-tag"
+                                    title={matchedAlerts.map((m) => m.reason).join("\n")}
+                                    onClick={() =>
+                                      setReviewAlert({
+                                        day,
+                                        warnings: [...new Set(report.warnings)],
+                                        items: report.review_items || [],
+                                      })
+                                    }
+                                  >
+                                    <AlertCircle size={11} />
+                                    待核对（与{" "}
+                                    {matchedAlerts
+                                      .flatMap((m) =>
+                                        m.indices.filter((idx) => idx !== rowNumber),
+                                      )
+                                      .map((idx) => `#${idx}`)
+                                      .join("、") || "其他项"}{" "}
+                                    {matchedAlerts[0].kind === "similarity"
+                                      ? "目标相似"
+                                      : "时间重叠"}
+                                    ）
+                                  </button>
+                                )}
                                 <button onClick={() => setProof(t)}>
                                   {t.evidence.length} 条证据{" "}
                                   <ArrowUpRight size={12} />
@@ -1389,7 +1428,8 @@ function App() {
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1852,7 +1892,33 @@ function App() {
       {reviewAlert && (
         <ReviewAlertModal
           alert={reviewAlert}
+          tasks={report?.tasks || []}
           onClose={() => setReviewAlert(null)}
+          onLocateAndSelect={(ids) => {
+            setSelected(ids);
+            setReviewAlert(null);
+            if (ids.length > 0) {
+              setTimeout(() => {
+                const el = document.getElementById(`task-row-${ids[0]}`);
+                el?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }, 80);
+            }
+          }}
+          onQuickMerge={async (ids) => {
+            try {
+              await api("/tasks/merge", "POST", { ids });
+              setReviewAlert(null);
+              await refresh();
+              setNotice("已合并所选重复工作项。");
+            } catch (e) {
+              setError((e as Error).message);
+              setReviewAlert(null);
+            }
+          }}
+          onRunSimilarityCheck={() => {
+            setReviewAlert(null);
+            void runManualSimilarityCheck();
+          }}
         />
       )}
       {toast && (
@@ -1864,11 +1930,23 @@ function App() {
 
 function ReviewAlertModal({
   alert,
+  tasks,
   onClose,
+  onLocateAndSelect,
+  onQuickMerge,
+  onRunSimilarityCheck,
 }: {
-  alert: { day: string; warnings: string[] };
+  alert: { day: string; warnings: string[]; items?: ReviewAlertItem[] };
+  tasks: Task[];
   onClose: () => void;
+  onLocateAndSelect: (ids: string[]) => void;
+  onQuickMerge: (ids: string[]) => Promise<void>;
+  onRunSimilarityCheck: () => void;
 }) {
+  const [mergingKey, setMergingKey] = useState<string | null>(null);
+  const taskMap = new Map(tasks.map((t, idx) => [t.id, { task: t, index: idx + 1 }]));
+  const structuredItems = alert.items && alert.items.length > 0 ? alert.items : null;
+
   return (
     <div
       className="modal-overlay"
@@ -1878,29 +1956,145 @@ function ReviewAlertModal({
       onClick={onClose}
     >
       <div
-        className="modal alert-modal"
+        className="modal alert-modal alert-modal-structured"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="alert-modal-badge">
-          <AlertCircle size={26} />
+        <div className="alert-modal-head-row">
+          <div className="alert-modal-badge">
+            <AlertCircle size={22} />
+          </div>
+          <div className="alert-modal-head-copy">
+            <h3 className="alert-modal-title">
+              待审核提示 · {alert.day}
+            </h3>
+            <p className="alert-modal-subtitle">
+              共发现 {structuredItems ? structuredItems.length : alert.warnings.length} 处需核对的数据项（已标明具体位置、日期与清单序号）
+            </p>
+          </div>
+          <button
+            type="button"
+            className="alert-modal-close"
+            aria-label="关闭待审核提示"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
         </div>
-        <h3 className="alert-modal-title">待审核提示</h3>
+
         <div className="alert-modal-body">
-          {alert.warnings.map((w, i) => (
-            <div key={i} className="alert-modal-warning-item">
-              {w}
-            </div>
-          ))}
+          {structuredItems ? (
+            structuredItems.map((item, i) => {
+              const key = `${item.kind}-${i}-${item.ids.join("-")}`;
+              const resolvedTasks = item.ids
+                .map((id) => taskMap.get(id))
+                .filter((x): x is { task: Task; index: number } => Boolean(x));
+              const canMerge =
+                resolvedTasks.length === 2 &&
+                resolvedTasks[0].task.project === resolvedTasks[1].task.project;
+              const kindLabel =
+                item.kind === "similarity"
+                  ? `目标高度相似${item.similarity ? ` (${Math.round(item.similarity * 100)}%)` : ""}`
+                  : item.kind === "tool_overlap"
+                    ? "工具活动时段重叠"
+                    : item.kind === "time_overlap"
+                      ? "起止时间重叠"
+                      : "AI 分析过滤提示";
+
+              return (
+                <div key={key} className="alert-structured-card">
+                  <div className="alert-structured-meta">
+                    <span className="alert-meta-pill location">{item.location}</span>
+                    <span className="alert-meta-pill date">日期：{item.date}</span>
+                    {item.evidence_dates &&
+                      item.evidence_dates.length > 0 &&
+                      item.evidence_dates.join("/") !== item.date && (
+                        <span className="alert-meta-pill date">
+                          证据日期：{item.evidence_dates.join(" / ")}
+                        </span>
+                      )}
+                    {item.project && (
+                      <span className="alert-meta-pill project">项目：{item.project}</span>
+                    )}
+                    <span className="alert-meta-pill kind">{kindLabel}</span>
+                  </div>
+
+                  {resolvedTasks.length > 0 ? (
+                    <div className="alert-structured-tasks">
+                      {resolvedTasks.map(({ task, index }) => (
+                        <div key={task.id} className="alert-task-row">
+                          <span className="alert-task-index">第 #{index} 条</span>
+                          <span className="alert-task-title">{task.title}</span>
+                          <span className="alert-task-info">
+                            {task.origin === "manual" ? "人工补录" : "AI / Git"} ·{" "}
+                            {hours(task.confirmed_minutes)}h
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="alert-modal-warning-item">{item.reason}</div>
+                  )}
+
+                  {item.detail && resolvedTasks.length > 0 && (
+                    <div className="alert-structured-reason">
+                      问题说明：{item.detail} — 建议工时不可直接叠加，请核对是否重复或需合并。
+                    </div>
+                  )}
+
+                  {item.ids.length > 0 && (
+                    <div className="alert-structured-actions">
+                      <button
+                        type="button"
+                        className="outline sm-btn"
+                        onClick={() => onLocateAndSelect(item.ids)}
+                      >
+                        在清单中定位并勾选（#{item.indices.join("、#")}）
+                      </button>
+                      {canMerge && (
+                        <button
+                          type="button"
+                          className="primary sm-btn"
+                          disabled={mergingKey === key}
+                          onClick={async () => {
+                            setMergingKey(key);
+                            try {
+                              await onQuickMerge(item.ids);
+                            } finally {
+                              setMergingKey(null);
+                            }
+                          }}
+                        >
+                          <GitMerge size={13} />
+                          {mergingKey === key ? "合并中…" : "直接合并这 2 条"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            alert.warnings.map((w, i) => (
+              <div key={i} className="alert-modal-warning-item">
+                {w}
+              </div>
+            ))
+          )}
           <p className="alert-modal-hint">
-            可在清单中勾选重复任务后合并；合并会保留确认工时，请人工核对。
+            提示：清单中每条任务左侧已标明序号（#1、#2…），可直接定位对应行，或使用「相似度检测」交由 AI 比对合并。
           </p>
         </div>
         <div className="alert-modal-actions">
+          <button
+            className="outline"
+            type="button"
+            onClick={onRunSimilarityCheck}
+          >
+            <GitCompare size={15} />
+            打开 AI 相似度检测
+          </button>
           <button className="primary" type="button" onClick={onClose}>
             我知道了
-          </button>
-          <button className="outline" type="button" onClick={onClose}>
-            关闭
           </button>
         </div>
       </div>

@@ -61,3 +61,52 @@ def test_theme_api_list_switch_and_customize(tmp_path, monkeypatch):
         remaining_ids = [t["id"] for t in del_custom.json()["themes"]]
         assert "nord-dark" not in remaining_ids
     engine.dispose()
+
+
+def test_report_review_items_specify_date_location_and_indices(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWT_DATA_DIR", str(tmp_path))
+    engine = db.make_engine(tmp_path / "review_items.db")
+    with TestClient(create_app(engine)) as client:
+        t1 = client.post(
+            "/api/tasks",
+            json={
+                "date": "2026-11-10",
+                "title": "【2026档案系统】优化登录页面表单校验与错误提示逻辑",
+                "details": "",
+                "project": "2026档案系统",
+                "category": "任务",
+                "status": "delivered",
+                "confirmed_minutes": 60,
+                "time_locked": True,
+            },
+        ).json()["id"]
+        t2 = client.post(
+            "/api/tasks",
+            json={
+                "date": "2026-11-10",
+                "title": "【2026档案系统】优化登录页面表单校验与错误提示样式",
+                "details": "",
+                "project": "2026档案系统",
+                "category": "任务",
+                "status": "delivered",
+                "confirmed_minutes": 60,
+                "time_locked": True,
+            },
+        ).json()["id"]
+
+        rep = client.get("/api/reports/2026-11-10").json()
+        assert len(rep["warnings"]) >= 1
+        assert "2026-11-10" in rep["warnings"][0]
+        assert "今日工作清单" in rep["warnings"][0]
+        assert "第 #1 条" in rep["warnings"][0]
+        assert "第 #2 条" in rep["warnings"][0]
+
+        assert len(rep["review_items"]) >= 1
+        item = rep["review_items"][0]
+        assert item["location"] == "今日工作清单"
+        assert item["date"] == "2026-11-10"
+        assert item["project"] == "2026档案系统"
+        assert item["indices"] == [1, 2]
+        assert set(item["ids"]) == {t1, t2}
+        assert item["ids"] == [t["id"] for t in rep["tasks"]]
+    engine.dispose()

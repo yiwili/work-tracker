@@ -347,14 +347,24 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     if scope.get('ambiguous_refs'):
         warnings.append(f"工作筛选有 {len(scope['ambiguous_refs'])} 条请求归类冲突，已放入待判断，不计工时：{','.join(scope['ambiguous_refs'][:10])}")
     used = set()
-    for task in result['tasks']:
+    for cand_idx, task in enumerate(result['tasks'], start=1):
         supporting = {refs[r]['id']: refs[r] for r in task['refs']}
         for ref in task['refs']:
             for event in segments.get(ref, []):
                 if event['id'] in set(scope['work_event_ids']):
                     supporting[event['id']] = event
+        ev_dates = sorted({str(e.get('occurred_at') or '')[:10] for e in supporting.values() if e.get('occurred_at')})
+        ev_date_label = '/'.join(ev_dates) if ev_dates else str(day)
         if set(supporting) & protected_ids:
-            warnings.append(f"已跳过与人工审核任务证据重叠的候选：{task['title']}")
+            matched_prot = [
+                f"第 #{idx + 1} 条「{pt['title']}」"
+                for idx, pt in enumerate(active_tasks)
+                if pt in protected and ({e['id'] for e in pt['evidence']} & set(supporting))
+            ]
+            prot_desc = "、".join(matched_prot) if matched_prot else "已审核任务"
+            warnings.append(
+                f"【{ev_date_label} · AI 分析候选】已跳过第 #{cand_idx} 条与人工审核任务（今日工作清单 {prot_desc}）证据重叠的候选：{task['title']}"
+            )
             continue
         if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
             # Assistant replies inherit the work request of their session turn.
@@ -368,7 +378,9 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         is_previously_deleted = bool(set(supporting) & deleted_ids)
         has_behavior = any(e['kind'] in ('tool_call', 'shell_command', 'git_commit') for e in supporting.values())
         if is_previously_deleted and not has_behavior:
-            warnings.append(f"已跳过历史曾删除且只有对话描述的弱证据候选：{task['title']}")
+            warnings.append(
+                f"【{ev_date_label} · AI 分析候选】已跳过第 #{cand_idx} 条历史曾删除且只有对话描述的弱证据候选：{task['title']}"
+            )
             continue
         projects = {e['project'] for e in supporting.values()}
         project = task.get('project') if task.get('project') in projects else next((e['project'] for e in supporting.values() if e['kind'] == 'user_prompt'), sorted(projects)[0])
