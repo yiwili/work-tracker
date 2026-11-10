@@ -72,27 +72,22 @@ export function TodoReminderBar({
           </span>
           <div>
             <div className="todo-headline-row">
-              <strong>待办提醒（To-Do）</strong>
+              <strong>待办事项</strong>
               <span className={"todo-count-pill" + (model.count > 0 ? " warn" : "")}>
                 {model.count > 0 ? `${model.count} 项待处理` : "全部已完成"}
               </span>
               <span className="todo-sync-hint" title="本地修改后自动实时同步至云端">
                 {model.syncing ? (
                   <>
-                    <LoaderCircle size={12} className="spin" /> 云端同步中…
+                    <LoaderCircle size={12} className="spin" /> 同步中…
                   </>
                 ) : (
                   <>
-                    <Cloud size={12} /> 实时云同步
+                    <Cloud size={12} /> 云同步
                   </>
                 )}
               </span>
             </div>
-            <p className="todo-subtext">
-              {model.count > 0
-                ? "勾选完成会自动将日期设为今天并计入今日工作清单"
-                : "记录需要做的事项，多端实时同步，不错过重要安排"}
-            </p>
           </div>
         </div>
         <div className="todo-reminder-actions">

@@ -6597,19 +6597,25 @@ code {
 /* 首页醒目待办提醒卡片 + 右侧常驻待办悬浮标签与抽屉（UI 层，可独立替换设计） */
 .todo-reminder-card {
   margin: 14px 0 18px;
-  padding: 16px 18px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(255, 251, 235, 0.92), rgba(255, 255, 255, 0.95));
-  border: 1.5px solid rgba(245, 158, 11, 0.45);
-  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+.todo-reminder-card {
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.todo-reminder-card.has-pending {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.5) 0%, #ffffff 100%);
 }
 .todo-reminder-card.all-clear {
-  background: linear-gradient(135deg, rgba(240, 253, 244, 0.88), rgba(255, 255, 255, 0.96));
-  border-color: rgba(34, 197, 94, 0.32);
-  box-shadow: 0 6px 18px rgba(34, 197, 94, 0.08);
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
 }
 .todo-reminder-head {
   display: flex;
@@ -6621,28 +6627,28 @@ code {
 .todo-reminder-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .todo-pulse-badge {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(34, 197, 94, 0.14);
+  background: rgba(52, 199, 89, 0.12);
   color: #15803d;
   flex-shrink: 0;
 }
 .todo-pulse-badge.active {
   background: linear-gradient(135deg, #f59e0b, #ea580c);
   color: #fff;
-  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55);
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45);
   animation: todo-pulse 2.2s infinite;
 }
 @keyframes todo-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
-  70% { box-shadow: 0 0 0 9px rgba(245, 158, 11, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
   100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
 }
 .todo-headline-row {
@@ -6652,44 +6658,68 @@ code {
   flex-wrap: wrap;
 }
 .todo-headline-row strong {
-  font-size: 15px;
-  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d1d1f;
 }
 .todo-count-pill {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(34, 197, 94, 0.15);
+  background: rgba(52, 199, 89, 0.12);
   color: #15803d;
 }
 .todo-count-pill.warn {
   background: #fef3c7;
   color: #b45309;
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 .todo-sync-hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
-  color: #6b7280;
+  font-size: 11.5px;
+  color: #86868b;
 }
 .todo-subtext {
-  margin: 2px 0 0;
-  font-size: 12.5px;
-  color: #4b5563;
+  display: none;
 }
 .todo-drawer-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 5px;
+  font-size: 12.5px;
+  padding: 5px 10px;
 }
 .todo-quick-form {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.todo-quick-input,
+.todo-quick-project,
+.todo-quick-category {
+  height: 34px;
+  padding: 0 11px;
+  border-radius: 9px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.todo-quick-input:focus,
+.todo-quick-project:focus,
+.todo-quick-category:focus {
+  background: #ffffff;
+  border-color: rgba(0, 113, 227, 0.45);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
 }
 .todo-quick-input {
   flex: 2 1 240px;
@@ -6700,7 +6730,7 @@ code {
   min-width: 130px;
 }
 .todo-quick-category {
-  flex: 0 0 96px;
+  flex: 0 0 92px;
 }
 .todo-inline-error {
   display: flex;
@@ -7404,66 +7434,24 @@ code {
 }
 
 /* =========================================================
-   Multi-Day Collection & Consolidation Workbench
+   Multi-Day Collection & Consolidation Workbench (Apple Compact)
    ========================================================= */
-.source-summary-pill.multiday-active-pill {
-  background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
-  border: 1px solid rgba(37, 99, 235, 0.22);
+.multiday-toggle-btn.active {
+  background: rgba(0, 113, 227, 0.09) !important;
+  color: var(--apple-blue, #0071e3) !important;
+  border-color: rgba(0, 113, 227, 0.28) !important;
   font-weight: 600;
 }
 
 .multi-day-workbench {
-  margin: 12px 0 18px 0;
-  padding: 16px 18px;
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.65) 0%, rgba(255, 255, 255, 0.92) 100%);
-  border: 1px solid rgba(59, 130, 246, 0.28);
+  margin: 10px 20px 14px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid rgba(0, 113, 227, 0.16);
   border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.05);
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-
-.multi-day-workbench-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 10px;
-}
-
-.multi-day-title-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: var(--apple-text, #111827);
-}
-
-.multi-day-icon-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-}
-
-.multi-day-target-badge {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
-  color: #047857;
-}
-
-.multi-day-meta {
-  font-size: 12px;
-  color: var(--apple-text-secondary, #6b7280);
 }
 
 .multi-day-controls-row {
@@ -7472,10 +7460,6 @@ code {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.07);
-  border-radius: 9px;
 }
 
 .multi-day-date-group {
@@ -7485,117 +7469,153 @@ code {
   flex-wrap: wrap;
 }
 
-.multi-day-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #374151;
-  font-weight: 500;
+.multi-day-inline-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--apple-text-secondary, #6e6e73);
+  white-space: nowrap;
 }
 
-.multi-day-field input[type="date"],
-.multi-day-hours-input {
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid #d1d5db;
-  background: #ffffff;
-  font-size: 13px;
-  color: #111827;
-}
-
-.multi-day-hours-input {
-  width: 68px;
+.multi-day-date-input {
+  width: 134px !important;
+  height: 32px;
+  padding: 0 9px !important;
+  margin: 0 !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  background: #ffffff !important;
+  font-size: 12.5px !important;
+  color: #1d1d1f !important;
+  display: inline-block !important;
 }
 
 .multi-day-date-sep {
   font-size: 12px;
-  color: #6b7280;
+  color: #86868b;
+  white-space: nowrap;
 }
 
 .multi-day-presets {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 4px;
+  background: rgba(118, 118, 128, 0.1);
+  padding: 3px;
+  border-radius: 8px;
 }
 
 .preset-pill {
-  padding: 4px 10px;
-  border-radius: 999px;
+  padding: 3px 9px;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
-  background: #f3f4f6;
+  background: transparent;
   color: #4b5563;
-  border: 1px solid transparent;
+  border: 0;
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s ease;
 }
 
 .preset-pill:hover:not(:disabled) {
-  background: #e5e7eb;
   color: #111827;
 }
 
 .preset-pill.active {
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-  border-color: rgba(37, 99, 235, 0.3);
+  background: #ffffff;
+  color: var(--apple-blue, #0071e3);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .multi-day-hours-group {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.multi-day-hours-box {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #ffffff;
+  gap: 4px;
+}
+
+.multi-day-hours-input {
+  width: 44px !important;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 13px !important;
+  font-weight: 600;
+  color: #1d1d1f !important;
+  text-align: right;
+  outline: none;
+}
+
+.multi-day-hours-unit {
+  font-size: 12px;
+  color: #86868b;
 }
 
 .multi-day-reset-hours {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  gap: 3px;
+  padding: 3px 7px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
   background: transparent;
-  color: #2563eb;
-  border: 1px solid rgba(37, 99, 235, 0.25);
+  color: var(--apple-blue, #0071e3);
+  border: 1px solid rgba(0, 113, 227, 0.25);
   cursor: pointer;
+  white-space: nowrap;
 }
 
-.multi-day-status-strip {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.multi-day-target-badge {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+  white-space: nowrap;
 }
 
-.multi-day-status-label {
+.multi-day-bottom-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #4b5563;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .multi-day-day-pills {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  max-height: 88px;
-  overflow-y: auto;
 }
 
 .day-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 5px;
+  padding: 3px 9px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11.5px;
   border: 1px solid transparent;
-  background: #f3f4f6;
+  background: #ffffff;
   color: #4b5563;
+  white-space: nowrap;
 }
 
 .day-status-pill .day-pill-dot {
@@ -7607,8 +7627,8 @@ code {
 }
 
 .day-status-pill.ready {
-  background: rgba(16, 185, 129, 0.1);
-  border-color: rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.09);
+  border-color: rgba(16, 185, 129, 0.22);
   color: #065f46;
 }
 
@@ -7617,8 +7637,8 @@ code {
 }
 
 .day-status-pill.git-only {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.09);
+  border-color: rgba(59, 130, 246, 0.22);
   color: #1e40af;
 }
 
@@ -7627,8 +7647,8 @@ code {
 }
 
 .day-status-pill.empty {
-  background: rgba(245, 158, 11, 0.1);
-  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.09);
+  border-color: rgba(245, 158, 11, 0.24);
   color: #92400e;
 }
 
@@ -7637,52 +7657,46 @@ code {
 }
 
 .multi-day-empty-hint {
-  font-size: 12px;
+  font-size: 11.5px;
   color: #b45309;
+  white-space: nowrap;
 }
 
 .multi-day-actions-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(59, 130, 246, 0.14);
-}
-
-.multi-day-btn-group {
-  display: flex;
-  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.multi-day-actions-bar > button {
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12.5px;
 }
 
 .multi-day-collect-btn {
-  border-color: rgba(37, 99, 235, 0.35) !important;
-  color: #1d4ed8 !important;
+  border-color: rgba(0, 113, 227, 0.3) !important;
+  color: var(--apple-blue, #0071e3) !important;
   background: #ffffff !important;
 }
 
 .multi-day-collect-btn:hover:not(:disabled) {
-  background: rgba(37, 99, 235, 0.06) !important;
-}
-
-.multi-day-footer-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  background: rgba(0, 113, 227, 0.06) !important;
 }
 
 .multi-day-autocollect-toggle {
-  display: inline-flex;
+  display: inline-flex !important;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  margin: 0 4px 0 0 !important;
   font-size: 12px;
   color: #4b5563;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
+
 
 
