@@ -191,6 +191,40 @@ def create_app(engine=None):
                     'paths': [{'source': name, 'path': path, 'exists': Path(path).expanduser().exists()} for name, source in sources.items() for path in source.paths],
                     'llm_enabled': config.llm_enabled, 'timezone': config.timezone}
 
+    @app.get('/api/themes')
+    def get_themes():
+        from . import themes as theme_svc
+        with engine.connect() as conn:
+            config = service.get_settings(conn)
+            return theme_svc.list_themes(getattr(config, 'theme_id', 'apple-hig'))
+
+    @app.put('/api/themes/active')
+    def set_active_theme(payload: dict):
+        from . import themes as theme_svc
+        next_id = str(payload.get('theme_id') or 'apple-hig').strip()[:64]
+        with transaction() as conn:
+            config = service.get_settings(conn)
+            catalog = theme_svc.list_themes(next_id)
+            config.theme_id = catalog['active_theme']
+            service.save_settings(conn, config)
+            return catalog
+
+    @app.put('/api/themes/{theme_id}')
+    def put_theme(theme_id: str, payload: dict):
+        from . import themes as theme_svc
+        return theme_svc.update_theme(theme_id.strip()[:64], payload)
+
+    @app.delete('/api/themes/{theme_id}')
+    def remove_theme(theme_id: str):
+        from . import themes as theme_svc
+        with transaction() as conn:
+            config = service.get_settings(conn)
+            res = theme_svc.delete_theme(theme_id.strip()[:64])
+            if config.theme_id == theme_id:
+                config.theme_id = res['active_theme']
+                service.save_settings(conn, config)
+            return res
+
     @app.get('/api/conversations')
     def conversations(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:

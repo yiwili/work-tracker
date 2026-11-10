@@ -60,7 +60,7 @@ import { UsageStats } from "./UsageStats";
 import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister } from "./TaskQuickActions";
 import { useTodos, hasBracketPrefix, formatTitleWithPrefix } from "./useTodos";
 import { TodoReminderBar, TodoSideDock } from "./TodoWidgets";
-import { useTheme, THEMES } from "./themes";
+import { useTheme, ThemeLibrarySection } from "./themes";
 
 // 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
 const statuses: Record<string, string> = {
@@ -722,28 +722,6 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="theme-switcher-bar" role="group" aria-label="界面主题">
-          {THEMES.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={theme === item.id ? "active" : ""}
-              aria-pressed={theme === item.id}
-              title={`${item.name} — ${item.description}`}
-              onClick={() => setTheme(item.id)}
-            >
-              <span
-                className={`theme-swatch theme-swatch-${item.id}`}
-                aria-hidden="true"
-              />
-              {item.id === "apple-hig"
-                ? "浅色"
-                : item.id === "apple-dark"
-                  ? "暗色"
-                  : "经典"}
-            </button>
-          ))}
-        </div>
         <button
           className={
             "setup-launch" + (settings && !settings.llm_enabled ? " attention" : "")
@@ -2526,59 +2504,6 @@ function TaskEditor({
         </div>
       </form>
     </div>
-  );
-}
-
-function ThemeLibrarySection({
-  theme,
-  onChange,
-}: {
-  theme: string;
-  onChange: (theme: string) => void;
-}) {
-  return (
-    <section className="settings-section theme-library-section">
-      <h2>
-        <Palette size={19} /> 本地主题库
-      </h2>
-      <p className="muted">
-        自由切换界面视觉风格；每个主题独立封装在模块化样式文件中，后续可由 AI 一键清理未使用的主题代码。
-      </p>
-      <div className="theme-library-grid">
-        {THEMES.map((item) => {
-          const active = theme === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={"theme-library-card" + (active ? " active" : "")}
-              aria-pressed={active}
-              onClick={() => onChange(item.id)}
-            >
-              <span
-                className={`theme-library-preview preview-${item.id}`}
-                aria-hidden="true"
-              >
-                <i />
-                <i />
-                <i />
-              </span>
-              <span className="theme-library-copy">
-                <span className="theme-card-head">
-                  <strong>{item.name}</strong>
-                  <span className="theme-badge">{item.badge}</span>
-                </span>
-                <small>{item.description}</small>
-                <code className="theme-file-hint">
-                  {item.file} · {item.removable ? "可独立清理" : "默认内置"}
-                </code>
-              </span>
-              {active && <Check size={16} />}
-            </button>
-          );
-        })}
-      </div>
-    </section>
   );
 }
 

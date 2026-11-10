@@ -1,0 +1,435 @@
+/* @theme-id: apple-dark — Standalone Apple Sequoia Dark theme.
+   Follows the exact layout, glass hierarchy, and card rhythm of the Apple Light theme
+   with refined Slate-Graphite surfaces and complete coverage of all subcomponents. */
+
+:root[data-theme='apple-dark'] {
+  color-scheme: dark;
+
+  --apple-font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --apple-font-mono: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+
+  /* Refined Slate-Graphite palette (soft, non-harsh contrast) */
+  --apple-bg: #131519;
+  --apple-card: #1c1f26;
+  --apple-card-hover: #242832;
+  --apple-card-subtle: #181b21;
+  --apple-material: rgba(28, 31, 38, 0.84);
+  --apple-material-thick: rgba(28, 31, 38, 0.96);
+  --apple-sidebar-bg: rgba(22, 24, 30, 0.86);
+  --apple-sidebar-border: rgba(255, 255, 255, 0.08);
+  --apple-topbar-bg: rgba(19, 21, 25, 0.82);
+
+  --apple-text-primary: #f2f4f8;
+  --apple-text-secondary: #9ba3b0;
+  --apple-text-tertiary: #6e7685;
+  --apple-text-quaternary: #525968;
+  --apple-border: rgba(255, 255, 255, 0.08);
+  --apple-border-strong: rgba(255, 255, 255, 0.15);
+  --apple-border-subtle: rgba(255, 255, 255, 0.05);
+  --apple-divider: rgba(255, 255, 255, 0.08);
+  --apple-control-bg: #252932;
+  --apple-control-hover: #2f3440;
+
+  --apple-blue: #2997ff;
+  --apple-blue-hover: #47a6ff;
+  --apple-blue-active: #0071e3;
+  --apple-blue-tint: rgba(41, 151, 255, 0.15);
+  --apple-blue-border: rgba(41, 151, 255, 0.34);
+
+  --apple-green: #30d158;
+  --apple-green-hover: #34c759;
+  --apple-green-tint: rgba(48, 209, 88, 0.15);
+  --apple-green-text: #4ade80;
+  --apple-green-border: rgba(48, 209, 88, 0.32);
+
+  --apple-orange: #ff9f0a;
+  --apple-orange-tint: rgba(255, 159, 10, 0.15);
+  --apple-orange-text: #fbbf24;
+  --apple-orange-border: rgba(255, 159, 10, 0.32);
+
+  --apple-red: #ff453a;
+  --apple-red-hover: #ff6961;
+  --apple-red-tint: rgba(255, 69, 58, 0.15);
+  --apple-red-text: #f87171;
+  --apple-red-border: rgba(255, 69, 58, 0.32);
+
+  --apple-purple: #bf5af2;
+  --apple-purple-tint: rgba(191, 90, 242, 0.16);
+  --apple-purple-text: #d8b4fe;
+
+  --apple-indigo: #6366f1;
+  --apple-teal: #38bdf8;
+  --apple-yellow: #facc15;
+  --apple-pink: #f43f5e;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.38), 0 2px 8px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.45), 0 4px 14px rgba(0, 0, 0, 0.28);
+  --shadow-modal: 0 32px 90px -12px rgba(0, 0, 0, 0.65), 0 0 1px rgba(255, 255, 255, 0.14);
+
+  --glass-border: rgba(255, 255, 255, 0.11);
+  --glass-tint-strong: rgba(36, 40, 50, 0.85);
+  --glass-tint: rgba(28, 31, 38, 0.72);
+  --glass-fill: rgba(28, 31, 38, 0.68);
+  --glass-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  --glass-shadow:
+    0 10px 26px -14px rgba(0, 0, 0, 0.55),
+    0 2px 8px -4px rgba(0, 0, 0, 0.32);
+  --glass-shadow-hover:
+    0 14px 34px -14px rgba(0, 0, 0, 0.65),
+    0 4px 12px -4px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='apple-dark'] body,
+:root[data-theme='apple-dark'] .app,
+:root[data-theme='apple-dark'] main {
+  background:
+    radial-gradient(1100px 380px at 50% -120px, rgba(41, 151, 255, 0.1), transparent 70%),
+    var(--apple-bg);
+  color: var(--apple-text-primary);
+}
+
+/* Sidebar & Navigation */
+:root[data-theme='apple-dark'] .sidebar {
+  background: var(--apple-sidebar-bg);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border-right: 1px solid var(--apple-sidebar-border);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme='apple-dark'] .brand {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .nav-item {
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme='apple-dark'] .nav-item > svg {
+  color: var(--apple-text-tertiary);
+}
+
+:root[data-theme='apple-dark'] .nav-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .nav-item.active,
+:root[data-theme='apple-dark'] .nav-item.active:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2997ff 0%, #0071e3 100%);
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(0, 113, 227, 0.35);
+}
+
+:root[data-theme='apple-dark'] .nav-item.active > svg {
+  color: #ffffff;
+}
+
+:root[data-theme='apple-dark'] .setup-launch {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+  color: var(--apple-text-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+:root[data-theme='apple-dark'] .setup-launch:hover:not(:disabled) {
+  background: var(--apple-card-hover);
+  border-color: var(--apple-blue-border);
+}
+
+/* Buttons */
+:root[data-theme='apple-dark'] .primary {
+  background: linear-gradient(180deg, #2997ff 0%, #0071e3 100%);
+  border-color: rgba(41, 151, 255, 0.4);
+  color: #ffffff;
+}
+
+:root[data-theme='apple-dark'] .primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #40a2ff 0%, #0077ed 100%);
+}
+
+:root[data-theme='apple-dark'] .outline,
+:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main) {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .outline:hover:not(:disabled) {
+  background: var(--apple-control-hover);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* Datebar & Stats */
+:root[data-theme='apple-dark'] .datebar {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+  box-shadow: var(--shadow-xs);
+}
+
+:root[data-theme='apple-dark'] .date-control {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .date-control input[type="date"] {
+  background: transparent;
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .date-control > button.today {
+  background: var(--apple-control-bg);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .day-status {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border);
+  color: var(--apple-text-secondary);
+}
+
+/* Cards & Sections */
+:root[data-theme='apple-dark'] .stat,
+:root[data-theme='apple-dark'] .conversations-panel,
+:root[data-theme='apple-dark'] .task-section,
+:root[data-theme='apple-dark'] .settings-section,
+:root[data-theme='apple-dark'] .event-card,
+:root[data-theme='apple-dark'] .confirmation {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme='apple-dark'] .stat::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+}
+
+:root[data-theme='apple-dark'] .time-stat {
+  background:
+    radial-gradient(120% 120% at 100% 0%, rgba(48, 209, 88, 0.14) 0%, rgba(41, 151, 255, 0.08) 55%, var(--apple-card) 100%);
+  border-color: rgba(48, 209, 88, 0.28);
+}
+
+:root[data-theme='apple-dark'] .mini-track {
+  background: var(--apple-control-bg);
+}
+
+/* Todo Reminder Bar & Side Drawer */
+:root[data-theme='apple-dark'] .todo-reminder-card,
+:root[data-theme='apple-dark'] .todo-reminder-card.all-clear {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme='apple-dark'] .todo-reminder-card.has-pending {
+  background: linear-gradient(180deg, rgba(255, 159, 10, 0.08) 0%, var(--apple-card) 100%);
+  border-color: rgba(255, 159, 10, 0.28);
+}
+
+:root[data-theme='apple-dark'] .todo-headline-row strong,
+:root[data-theme='apple-dark'] .todo-item-main {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .todo-quick-input,
+:root[data-theme='apple-dark'] .todo-quick-project,
+:root[data-theme='apple-dark'] .todo-quick-category {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .todo-quick-input:focus,
+:root[data-theme='apple-dark'] .todo-quick-project:focus,
+:root[data-theme='apple-dark'] .todo-quick-category:focus {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-blue);
+}
+
+:root[data-theme='apple-dark'] .todo-inline-item,
+:root[data-theme='apple-dark'] .todo-drawer-item {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .todo-side-drawer,
+:root[data-theme='apple-dark'] .todo-side-tab:not(.attention) {
+  background: var(--apple-card);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+/* Conversations & Multi-Day Workbench */
+:root[data-theme='apple-dark'] .conversations-panel .section-head {
+  background: linear-gradient(180deg, rgba(41, 151, 255, 0.08) 0%, transparent 100%);
+  border-bottom-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .source-summary-pill {
+  background: var(--apple-control-bg);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme='apple-dark'] .apple-segmented-group,
+:root[data-theme='apple-dark'] .multi-day-presets {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+  box-shadow: none;
+}
+
+:root[data-theme='apple-dark'] .apple-segmented-btn.active,
+:root[data-theme='apple-dark'] .preset-pill.active {
+  background: var(--apple-control-bg);
+  color: var(--apple-text-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+:root[data-theme='apple-dark'] .agent-card {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+  box-shadow: var(--shadow-xs);
+}
+
+:root[data-theme='apple-dark'] .agent-card::before {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0%, transparent 50%);
+}
+
+:root[data-theme='apple-dark'] .agent-card.active {
+  background: linear-gradient(135deg, rgba(41, 151, 255, 0.16) 0%, rgba(28, 31, 38, 0.9) 100%);
+  border-color: rgba(41, 151, 255, 0.42);
+}
+
+:root[data-theme='apple-dark'] .multi-day-workbench {
+  background: var(--apple-card-subtle);
+  border-color: rgba(41, 151, 255, 0.25);
+}
+
+:root[data-theme='apple-dark'] .multi-day-date-input,
+:root[data-theme='apple-dark'] .multi-day-hours-box {
+  background: var(--apple-control-bg) !important;
+  border-color: var(--apple-border-strong) !important;
+  color: var(--apple-text-primary) !important;
+}
+
+:root[data-theme='apple-dark'] .multi-day-hours-input {
+  color: var(--apple-text-primary) !important;
+}
+
+:root[data-theme='apple-dark'] .day-status-pill {
+  background: var(--apple-control-bg);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme='apple-dark'] .day-status-pill.ready {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+
+:root[data-theme='apple-dark'] .day-status-pill.empty {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fcd34d;
+}
+
+:root[data-theme='apple-dark'] .multi-day-collect-btn {
+  background: var(--apple-control-bg) !important;
+  color: var(--apple-blue) !important;
+  border-color: var(--apple-blue-border) !important;
+}
+
+/* AI Allocation Bar & Tables */
+:root[data-theme='apple-dark'] .allocation-bar,
+:root[data-theme='apple-dark'] .allocation-note,
+:root[data-theme='apple-dark'] .analysis-log {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .table-wrap {
+  border-color: var(--apple-border);
+  background: var(--apple-card);
+}
+
+:root[data-theme='apple-dark'] thead {
+  background: var(--apple-card-subtle);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme='apple-dark'] th,
+:root[data-theme='apple-dark'] td {
+  border-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme='apple-dark'] .task-title {
+  color: var(--apple-text-primary);
+  background: transparent;
+}
+
+:root[data-theme='apple-dark'] .quick-project-btn {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .quick-hours-primary strong {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .quick-dropdown-panel {
+  background: var(--apple-card);
+  border-color: var(--apple-border-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme='apple-dark'] .quick-dropdown-header {
+  background: var(--apple-card-subtle);
+  border-bottom-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .quick-dropdown-item {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .quick-dropdown-item:hover {
+  background: var(--apple-control-hover);
+}
+
+/* Modals, Inputs & Settings */
+:root[data-theme='apple-dark'] .modal {
+  background: var(--apple-material-thick);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] label > input:not([type="checkbox"]),
+:root[data-theme='apple-dark'] label > textarea,
+:root[data-theme='apple-dark'] label > select,
+:root[data-theme='apple-dark'] .timeline-toolbar input,
+:root[data-theme='apple-dark'] .timeline-toolbar select {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .settings-tabs {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .settings-tab[aria-selected="true"],
+:root[data-theme='apple-dark'] .settings-tab[aria-selected="true"]:hover {
+  background: var(--apple-control-bg);
+  color: var(--apple-text-primary);
+}

@@ -226,6 +226,7 @@ export type Settings = {
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;
   task_details_mode?: "standard" | "concise" | "none";
+  theme_id?: string;
   analysis_sources: string[];
   agent_prompts: Record<string, string>;
   title_examples: string[];
