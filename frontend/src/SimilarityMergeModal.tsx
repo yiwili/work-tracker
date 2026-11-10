@@ -9,12 +9,14 @@ export function SimilarityMergeModal({
   onClose,
   onApplied,
   onProceedToAllocation,
+  onProceedToGitee,
 }: {
   day: string;
   pairs: DuplicatePair[];
   onClose: () => void;
   onApplied: () => Promise<void>;
   onProceedToAllocation?: () => void;
+  onProceedToGitee?: () => void;
 }) {
   const [decisions, setDecisions] = useState<Record<string, SimilarityResolution>>(() => {
     const init: Record<string, SimilarityResolution> = {};
@@ -112,7 +114,9 @@ export function SimilarityMergeModal({
         resolutions,
       });
       await onApplied();
-      if (onProceedToAllocation) {
+      if (onProceedToGitee) {
+        onProceedToGitee();
+      } else if (onProceedToAllocation) {
         onProceedToAllocation();
       }
       onClose();
@@ -554,7 +558,13 @@ export function SimilarityMergeModal({
               disabled={busy}
               onClick={() => handleSubmit()}
             >
-              {busy ? "正在处理…" : `确认合并与处理（${pairs.length}组）`}
+              {busy
+                ? "正在处理…"
+                : onProceedToGitee
+                  ? "确认处理并继续提交 Gitee"
+                  : onProceedToAllocation
+                    ? "确认处理并继续分配工时"
+                    : "确认合并处理"}
             </button>
           </div>
         </div>

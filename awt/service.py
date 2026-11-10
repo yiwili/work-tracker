@@ -336,6 +336,11 @@ def save_task(conn, payload: TaskInput, task_id=None):
     locked = bool(minutes) if locked is None else locked
     for key in ('title', 'details', 'project', 'category'):
         values[key] = redact(values[key], settings.redact_patterns)
+    title_changed = (
+        not existing
+        or str(payload.title or "").strip() != str(existing.get("title") or "").strip()
+        or str(values.get("title") or "").strip() != str(existing.get("title") or "").strip()
+    )
     if existing:
         conn.execute(update(db.tasks).where(db.tasks.c.id == task_id).values(**values, edited=True))
         old_log=conn.execute(select(db.worklogs).where(db.worklogs.c.task_id==task_id)).mappings().one()
@@ -350,6 +355,9 @@ def save_task(conn, payload: TaskInput, task_id=None):
         conn.execute(insert(db.tasks).values(id=task_id, **values, origin='manual', edited=True, deleted=False,
                                             confidence='人工录入', evidence_level='人工说明'))
         conn.execute(insert(db.worklogs).values(task_id=task_id, confirmed_minutes=minutes, suggested_minutes=suggested, time_locked=locked, time_source="manual", is_confirmed=False))
+    if title_changed:
+        from . import similarity
+        similarity.mark_titles_modified(conn, values['date'])
     invalidate(conn, values['date'])
     return task_id
 
@@ -385,6 +393,8 @@ def tasks_from_events(conn, day, event_ids, start_day=None, end_day=None):
         conn.execute(insert(db.evidence).values(task_id=task_id, event_id=event_id))
         created.append(task_id)
     if created:
+        from . import similarity
+        similarity.mark_titles_modified(conn, day)
         invalidate(conn, day)
     return {'created': len(created), 'skipped': len(ids) - len(created), 'task_ids': created}
 
@@ -433,6 +443,8 @@ def split_task(conn, task_id, parts):
             conn.execute(insert(db.evidence).values(task_id=new_id, event_id=event_id))
         ids.append(new_id)
     delete_task(conn, task_id)
+    from . import similarity
+    similarity.mark_titles_modified(conn, original['date'])
     return ids
 
 

@@ -7,11 +7,13 @@ from awt.app import create_app
 from awt.models import Settings, TaskInput
 from awt.similarity import (
     calculate_task_pair_similarity,
+    compute_baseline_titles,
     compute_tasks_signature,
     detect_duplicates,
     synthesize_merge_recommendation,
     check_day_similarity,
     resolve_similarity,
+    get_similarity_state,
     get_similarity_status,
 )
 
@@ -39,7 +41,14 @@ def test_compute_tasks_signature():
     sig2 = compute_tasks_signature(list(reversed(tasks1)))
     assert sig1 == sig2
 
-    # Changing any field changes the signature
+    # Changing non-title fields (details, project, category, status, confirmed_minutes) does NOT change the signature
+    tasks_non_title_mod = [
+        {"id": "t1", "title": "任务1", "details": "修改后的详情1", "project": "P_NEW", "category": "运维", "status": "delivered", "origin": "manual", "confirmed_minutes": 180, "time_locked": True, "deleted": False},
+        {"id": "t2", "title": "任务2", "details": "修改后的详情2", "project": "P2", "category": "测试", "status": "verified", "origin": "auto", "confirmed_minutes": 90, "deleted": False},
+    ]
+    assert compute_tasks_signature(tasks_non_title_mod) == sig1
+
+    # Changing title changes the signature
     tasks_mod = [
         {"id": "t1", "title": "任务1(已修改)", "details": "详情1", "project": "P1", "category": "开发", "origin": "manual", "confirmed_minutes": 60, "deleted": False},
         {"id": "t2", "title": "任务2", "details": "详情2", "project": "P2", "category": "测试", "origin": "auto", "confirmed_minutes": 0, "deleted": False},
@@ -59,7 +68,25 @@ def test_similarity_calculation_and_duplicates():
     score_unrelated, _ = calculate_task_pair_similarity(manual, ai_unrelated)
     assert score_unrelated < 0.50
 
-    dups = detect_duplicates([manual, ai_duplicate, ai_unrelated], threshold=0.70)
+    # Dissimilar titles with identical details and project must NOT be flagged as duplicates
+    ai_same_details_diff_title = {
+        "id": "a3",
+        "title": "重构数据库连接池配置参数",
+        "details": "这是一段完全相同的很长很长的工作详情描述内容，用于测试仅对比标题",
+        "project": "AWT",
+        "origin": "auto",
+    }
+    manual_same_details = {
+        "id": "m2",
+        "title": "排查前端页面白屏渲染异常",
+        "details": "这是一段完全相同的很长很长的工作详情描述内容，用于测试仅对比标题",
+        "project": "AWT",
+        "origin": "manual",
+    }
+    score_diff_title, _ = calculate_task_pair_similarity(manual_same_details, ai_same_details_diff_title)
+    assert score_diff_title < 0.70
+
+    dups = detect_duplicates([manual, manual_same_details, ai_duplicate, ai_unrelated, ai_same_details_diff_title], threshold=0.70)
     assert len(dups) == 1
     assert dups[0]["pair_id"] == "m1_a1"
 
@@ -198,14 +225,95 @@ def test_task_modification_triggers_recheck(test_db):
         st1 = get_similarity_status(conn, day, service.list_tasks(conn, day))
         assert st1["handled"] is True
         assert st1["tasks_changed"] is False
+        assert st1["titles_modified"] is False
 
-        # Step 2: User modifies a task!
+        # Step 2a: User modifies ONLY details, confirmed_minutes, or status (not title) -> should NOT trigger recheck!
+        service.save_task(conn, TaskInput(date=day, title="编写单元测试", details="修改了详情和工时但没改标题", project="测试项目2", category="开发", confirmed_minutes=90, status="verified"), task_id=m_id)
+        conn.commit()
+        st_no_title_change = get_similarity_status(conn, day, service.list_tasks(conn, day))
+        assert st_no_title_change["tasks_changed"] is False
+        assert st_no_title_change["titles_modified"] is False
+
+        # Step 2b: User modifies the title!
         service.save_task(conn, TaskInput(date=day, title="编写单元测试（已更新）", details="新增更多测试", project="测试项目", category="测试", confirmed_minutes=45, status="delivered"), task_id=m_id)
         conn.commit()
 
-        # Step 3: Check status -> tasks_changed must be True!
+        # Step 3: Check status -> tasks_changed and titles_modified must be True!
         st2 = get_similarity_status(conn, day, service.list_tasks(conn, day))
         assert st2["tasks_changed"] is True
+        assert st2["titles_modified"] is True
+
+
+def test_ai_analysis_import_auto_checks_similarity(test_db):
+    from types import SimpleNamespace
+    from awt.daily_analysis import import_pending
+
+    day = "2026-11-10"
+    with test_db.connect() as conn:
+        service.save_settings(conn, Settings(llm_enabled=False))
+        # Create a manual task first
+        m_id = service.save_task(
+            conn,
+            TaskInput(
+                date=day,
+                title="优化报表导出接口性能",
+                details="人工记录",
+                project="AWT",
+                category="开发",
+                confirmed_minutes=60,
+                status="delivered",
+            ),
+        )
+        # Insert an event and pending analysis snapshot
+        conn.execute(
+            db.events.insert().values(
+                id="ev1",
+                source="codex",
+                session_id="s1",
+                occurred_at="2026-11-10T09:00:00+08:00",
+                kind="user_prompt",
+                summary="优化报表导出接口性能",
+                cwd="/tmp",
+                project="AWT",
+                raw_ref="r1",
+                metadata={},
+            )
+        )
+        service.upsert(
+            conn,
+            db.analyses,
+            {
+                "date": day,
+                "snapshot": {
+                    "pending_tasks": [
+                        {
+                            "fingerprint": "daily-v2:fp1",
+                            "title": "优化报表导出接口性能",
+                            "details": "AI分析记录",
+                            "project": "AWT",
+                            "category": "开发",
+                            "status": "changed",
+                            "evidence_level": "已有行为证据",
+                            "evidence_ids": ["ev1"],
+                        }
+                    ]
+                },
+            },
+            "date",
+        )
+        res = import_pending(conn, day, [SimpleNamespace(fingerprint="daily-v2:fp1", title=None, details=None, project=None, category=None, status=None)])
+        conn.commit()
+
+        assert "similarity_check" in res
+        sim_check = res["similarity_check"]
+        assert sim_check["has_duplicates"] is True
+        assert len(sim_check["pairs"]) == 1
+
+        state = get_similarity_state(conn, day)
+        assert state is not None
+        assert "baseline_titles" in state
+        assert state["titles_modified"] is False
+        assert state["baseline_titles"][m_id] == "优化报表导出接口性能"
 
 
 def test_keep_manual_and_keep_ai_actions(test_db):

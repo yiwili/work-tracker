@@ -7,7 +7,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { PendingTask } from "./types";
+import type { PendingTask, SimilarityCheckResponse } from "./types";
 import { api } from "./api";
 
 type Row = PendingTask & { selected: boolean };
@@ -25,7 +25,7 @@ export function AnalysisResultsModal({
   stale: boolean;
   warnings?: string[];
   onClose: () => void;
-  onImported: () => Promise<void> | void;
+  onImported: (similarityCheck?: SimilarityCheckResponse) => Promise<void> | void;
 }) {
   const [rows, setRows] = useState<Row[]>(() =>
     pending.map((item) => ({
@@ -57,6 +57,7 @@ export function AnalysisResultsModal({
         remaining: number;
         imported: string[];
         warnings: string[];
+        similarity_check?: SimilarityCheckResponse;
       }>("/analysis/import", "POST", {
         date: day,
         items: selected.map((row) => ({
@@ -69,7 +70,7 @@ export function AnalysisResultsModal({
       });
       const imported = new Set(result.imported || []);
       setRows(rows.filter((row) => !imported.has(row.fingerprint)));
-      await onImported();
+      await onImported(result.similarity_check);
       const pieces = [`已导入 ${result.created} 项工作`];
       if (result.remaining) pieces.push(`还剩 ${result.remaining} 条候选`);
       if (result.archived)

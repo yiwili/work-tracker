@@ -86,6 +86,7 @@ export type Report = {
 export type SimilarityStatus = {
   checked: boolean;
   tasks_changed: boolean;
+  titles_modified?: boolean;
   handled: boolean;
   has_duplicates: boolean;
   pairs_count: number;

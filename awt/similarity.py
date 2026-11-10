@@ -18,20 +18,12 @@ logger = logging.getLogger("awt.similarity")
 
 
 def compute_tasks_signature(tasks: list[dict[str, Any]]) -> str:
-    """Compute a deterministic hash of active work items for change detection."""
+    """Compute a deterministic title-only hash of active work items for change detection."""
     active = [t for t in tasks if not t.get("deleted")]
     items = sorted([
         (
             str(t.get("id") or ""),
             str(t.get("title") or "").strip(),
-            str(t.get("details") or "").strip(),
-            str(t.get("project") or "").strip(),
-            str(t.get("category") or "").strip(),
-            str(t.get("status") or "").strip(),
-            str(t.get("origin") or "").strip(),
-            int(t.get("confirmed_minutes") or 0),
-            bool(t.get("time_locked")),
-            sorted(str(e.get("id") or "") for e in t.get("evidence", []) if isinstance(e, dict)),
         )
         for t in active
     ])
@@ -39,8 +31,25 @@ def compute_tasks_signature(tasks: list[dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_baseline_titles(tasks: list[dict[str, Any]]) -> dict[str, str]:
+    """Return mapping of active task IDs to their stripped titles."""
+    return {
+        str(t.get("id") or ""): str(t.get("title") or "").strip()
+        for t in tasks
+        if not t.get("deleted") and t.get("id")
+    }
+
+
+def mark_titles_modified(conn: Any, day: date | str) -> None:
+    """Mark similarity state for day as having modified titles."""
+    state = get_similarity_state(conn, day)
+    if state:
+        state = {**state, "titles_modified": True}
+        save_similarity_state(conn, day, state)
+
+
 def calculate_task_pair_similarity(manual_task: dict[str, Any], ai_task: dict[str, Any]) -> tuple[float, str]:
-    """Calculate similarity score between a manual task and an AI task.
+    """Calculate title-only similarity score between a manual task and an AI task.
 
     Returns (similarity_score, reason).
     """
@@ -68,21 +77,7 @@ def calculate_task_pair_similarity(manual_task: dict[str, Any], ai_task: dict[st
     if len(shorter) >= 4 and shorter.lower() in longer.lower():
         score = max(score, 0.75)
 
-    # 5. Project alignment boost
-    m_proj = str(manual_task.get("project") or "").strip()
-    a_proj = str(ai_task.get("project") or "").strip()
-    if m_proj and a_proj and m_proj == a_proj and m_proj != "未归属项目":
-        score = min(1.0, score + 0.05)
-
-    # 6. Details similarity check if both provide substantive details
-    m_details = str(manual_task.get("details") or "").strip()
-    a_details = str(ai_task.get("details") or "").strip()
-    if len(m_details) >= 10 and len(a_details) >= 10:
-        det_sim, _, _, _ = calculate_content_similarity(m_details, a_details)
-        if det_sim >= 0.70:
-            score = max(score, det_sim)
-
-    reason = f"人工工作项与AI工作项高度重复（相似度 {int(round(score * 100))}%）"
+    reason = f"工作项标题高度重复（标题相似度 {int(round(score * 100))}%）"
     return round(score, 3), reason
 
 
@@ -187,7 +182,7 @@ def synthesize_merge_recommendation(
         "manual_task": manual_task,
         "ai_task": ai_task,
         "similarity_score": round(similarity_score, 3),
-        "reason": f"人工工作项与AI工作项高度重复（相似度 {int(round(similarity_score * 100))}%）",
+        "reason": f"工作项标题高度重复（标题相似度 {int(round(similarity_score * 100))}%）",
         "recommended_title": title,
         "recommended_details": details,
         "recommended_project": project,
@@ -221,13 +216,16 @@ def get_similarity_status(conn: Any, day: date | str, tasks: list[dict[str, Any]
         return {
             "checked": False,
             "tasks_changed": True,
+            "titles_modified": False,
             "handled": False,
             "has_duplicates": False,
             "pairs_count": 0,
             "tasks_signature": current_sig,
         }
 
-    tasks_changed = state.get("tasks_signature") != current_sig
+    sig_changed = state.get("tasks_signature") != current_sig
+    titles_modified = bool(state.get("titles_modified", False))
+    tasks_changed = sig_changed or titles_modified
     handled = state.get("handled", False)
     has_duplicates = state.get("has_duplicates", False)
     pairs_count = state.get("pairs_count", 0)
@@ -235,6 +233,7 @@ def get_similarity_status(conn: Any, day: date | str, tasks: list[dict[str, Any]
     return {
         "checked": True,
         "tasks_changed": tasks_changed,
+        "titles_modified": titles_modified,
         "handled": handled,
         "has_duplicates": has_duplicates,
         "pairs_count": pairs_count,
@@ -260,7 +259,13 @@ def check_day_similarity(
     state = get_similarity_state(conn, day_str)
 
     # If already checked, tasks unchanged, and user handled alerts, skip
-    if not force and state and state.get("tasks_signature") == current_sig and state.get("handled", False):
+    if (
+        not force
+        and state
+        and state.get("tasks_signature") == current_sig
+        and not state.get("titles_modified", False)
+        and state.get("handled", False)
+    ):
         return {
             "status": "clean",
             "tasks_changed": False,
@@ -276,6 +281,8 @@ def check_day_similarity(
         new_state = {
             "day": day_str,
             "tasks_signature": current_sig,
+            "baseline_titles": compute_baseline_titles(tasks),
+            "titles_modified": False,
             "checked_at": now(),
             "handled": True,
             "has_duplicates": False,
@@ -299,6 +306,8 @@ def check_day_similarity(
     new_state = {
         "day": day_str,
         "tasks_signature": current_sig,
+        "baseline_titles": compute_baseline_titles(tasks),
+        "titles_modified": False,
         "checked_at": now(),
         "handled": False,
         "has_duplicates": True,
@@ -472,6 +481,8 @@ def resolve_similarity(
     new_state = {
         "day": day_str,
         "tasks_signature": new_sig,
+        "baseline_titles": compute_baseline_titles(updated_tasks),
+        "titles_modified": False,
         "checked_at": now(),
         "handled": True,
         "has_duplicates": False,

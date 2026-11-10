@@ -412,9 +412,12 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         upsert(conn, db.reports, {'date': str(day), 'target_minutes': target_minutes, 'confirmed': False}, 'date')
     if settings.auto_import_analysis and (imported or archived):
         invalidate(conn, day)
+    from . import similarity
+    sim_check = similarity.check_day_similarity(conn, day, settings=settings, force=False)
     return {'created': len(imported), 'updated': 0, 'archived': archived,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=day), 'merge_suggestions': []}
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=day), 'merge_suggestions': [],
+            'similarity_check': sim_check}
 
 
 def import_pending(conn, day, selections):
@@ -483,5 +486,7 @@ def import_pending(conn, day, selections):
     upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
     if generated or archived:
         invalidate(conn, day)
+    from . import similarity
+    sim_check = similarity.check_day_similarity(conn, day, settings=settings, force=False)
     return {'created': len(generated), 'archived': archived, 'remaining': len(remaining),
-            'imported': sorted(imported), 'warnings': warnings}
+            'imported': sorted(imported), 'warnings': warnings, 'similarity_check': sim_check}

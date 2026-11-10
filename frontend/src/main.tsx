@@ -179,6 +179,7 @@ function App() {
     [similarityPairs, setSimilarityPairs] = useState<DuplicatePair[]>([]),
     [checkingSimilarity, setCheckingSimilarity] = useState(false),
     [proceedToAllocationAfterSimilarity, setProceedToAllocationAfterSimilarity] = useState(false),
+    [proceedToGiteeAfterSimilarity, setProceedToGiteeAfterSimilarity] = useState(false),
     [giteeOpen, setGiteeOpen] = useState(false),
     [giteeDedupOpen, setGiteeDedupOpen] = useState(false),
     [giteeSyncResult, setGiteeSyncResult] = useState<GiteeSyncResult | null>(null),
@@ -426,6 +427,7 @@ function App() {
         auto_imported: boolean;
         warnings: string[];
         analysis_required?: boolean;
+        similarity_check?: SimilarityCheckResponse;
         usage?: null | {
           total_tokens: number;
           prompt_tokens: number;
@@ -444,6 +446,12 @@ function App() {
       if (!a.created && !a.pending && !a.archived) {
         setNotice(`AI 分析已完成，未发现可归纳的工作项。${usage}`);
         return;
+      }
+      if (a.auto_imported && a.similarity_check?.has_duplicates && a.similarity_check.pairs.length > 0) {
+        setSimilarityPairs(a.similarity_check.pairs);
+        setProceedToAllocationAfterSimilarity(false);
+        setProceedToGiteeAfterSimilarity(false);
+        setSimilarityOpen(true);
       }
       const deletedPending = (a.pending_tasks || []).filter(
         (t) => t.previously_deleted,
@@ -561,6 +569,7 @@ function App() {
       if (res.has_duplicates && res.pairs.length > 0) {
         setSimilarityPairs(res.pairs);
         setProceedToAllocationAfterSimilarity(true);
+        setProceedToGiteeAfterSimilarity(false);
         setSimilarityOpen(true);
       } else {
         await refresh();
@@ -568,6 +577,32 @@ function App() {
       }
     } catch (e) {
       setAllocationError((e as Error).message);
+    } finally {
+      setCheckingSimilarity(false);
+    }
+  };
+  const handleOpenGiteePublish = async () => {
+    if (!report) return;
+    setError("");
+    const sim = report.similarity_status;
+    if (sim && sim.checked && !sim.tasks_changed && sim.handled) {
+      setGiteeOpen(true);
+      return;
+    }
+    setCheckingSimilarity(true);
+    try {
+      const res = await api<SimilarityCheckResponse>(`/reports/${day}/check-similarity`, "POST", { force: false });
+      if (res.has_duplicates && res.pairs.length > 0) {
+        setSimilarityPairs(res.pairs);
+        setProceedToGiteeAfterSimilarity(true);
+        setProceedToAllocationAfterSimilarity(false);
+        setSimilarityOpen(true);
+      } else {
+        await refresh();
+        setGiteeOpen(true);
+      }
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setCheckingSimilarity(false);
     }
@@ -582,6 +617,7 @@ function App() {
       if (res.has_duplicates && res.pairs.length > 0) {
         setSimilarityPairs(res.pairs);
         setProceedToAllocationAfterSimilarity(false);
+        setProceedToGiteeAfterSimilarity(false);
         setSimilarityOpen(true);
       } else {
         setToast({
@@ -1047,8 +1083,8 @@ function App() {
                     </button>
                     <button
                       className="outline"
-                      disabled={!!busy || !report.tasks.length}
-                      onClick={() => setGiteeOpen(true)}
+                      disabled={!!busy || !report.tasks.length || checkingSimilarity}
+                      onClick={() => void handleOpenGiteePublish()}
                     >
                       提交到 Gitee
                       {selected.length ? `（${selected.length}项）` : ""}
@@ -1401,8 +1437,8 @@ function App() {
                   </button>
                   <button
                     className="primary"
-                    disabled={!!busy || !report.tasks.length}
-                    onClick={() => setGiteeOpen(true)}
+                    disabled={!!busy || !report.tasks.length || checkingSimilarity}
+                    onClick={() => void handleOpenGiteePublish()}
                   >
                     <Send size={16} />
                     预览并推送工作项
@@ -1626,6 +1662,11 @@ function App() {
               ? () => setAllocationOpen(true)
               : undefined
           }
+          onProceedToGitee={
+            proceedToGiteeAfterSimilarity
+              ? () => setGiteeOpen(true)
+              : undefined
+          }
         />
       )}
       {allocationOpen && report && (
@@ -1765,8 +1806,15 @@ function App() {
           stale={analysisView.stale}
           warnings={report?.warnings || []}
           onClose={() => setAnalysisView(null)}
-          onImported={async () => {
+          onImported={async (simCheck) => {
             await refresh(analysisView.day);
+            if (simCheck?.has_duplicates && simCheck.pairs.length > 0) {
+              setAnalysisView(null);
+              setSimilarityPairs(simCheck.pairs);
+              setProceedToAllocationAfterSimilarity(false);
+              setProceedToGiteeAfterSimilarity(false);
+              setSimilarityOpen(true);
+            }
           }}
         />
       )}
