@@ -137,12 +137,13 @@ class GiteeExportTarget(BaseModel):
     program_id: int = Field(ge=1, strict=True)
     issue_type_id: int | None = Field(default=None, ge=1, strict=True)
     existing_issue_id: int | None = Field(default=None, ge=1, strict=True)
+    replace_existing: bool = False
 
 
 class GiteeDedupConfig(BaseModel):
     enabled: bool = True
     dedup_on_pull: bool = True
-    dedup_on_publish: bool = False
+    dedup_on_publish: bool = True
     threshold_high: float = Field(default=0.80, ge=0.1, le=1.0)
     threshold_low: float = Field(default=0.40, ge=0.0, le=0.9)
     date_weight: float = Field(default=0.20, ge=0.0, le=1.0)
@@ -278,6 +279,7 @@ class Settings(BaseModel):
     auto_import_analysis: bool = False
     # 默认沿用原有行为：估算完成后直接写入工作项；关闭后先生成待应用预览。
     auto_apply_allocation: bool = True
+    task_details_mode: Literal['standard', 'concise', 'none'] = 'standard'
     analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)

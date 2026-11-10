@@ -153,7 +153,7 @@ def overview(conn, day, settings, end_day=None, report_day=None):
 
 
 def input_hash(rows, settings):
-    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, settings.activity_gap_minutes, settings.redact_patterns, settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()}, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
+    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, getattr(settings, 'task_details_mode', 'standard'), settings.activity_gap_minutes, settings.redact_patterns, settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()}, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
 
 
 def transcript(rows, settings):
@@ -203,6 +203,17 @@ def transcript(rows, settings):
     return compact, refs, segments
 
 
+def _format_task_details(raw_details: str, settings) -> str:
+    mode = getattr(settings, 'task_details_mode', 'standard')
+    if mode == 'none':
+        return ''
+    text = raw_details.strip() if isinstance(raw_details, str) else ''
+    if mode == 'concise':
+        first = re.split(r'[。！？!?；;\n]|\.(?:\s|$)', text, maxsplit=1)[0].strip()
+        return first[:60]
+    return redact(text, settings.redact_patterns)
+
+
 def parse_result(text, valid_refs):
     try:
         cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip())
@@ -212,6 +223,8 @@ def parse_result(text, valid_refs):
         for task in value['tasks']:
             if not isinstance(task, dict) or not isinstance(task.get('title'), str) or not task['title'].strip() or len(task['title']) > 500:
                 raise ValueError()
+            if task.get('details') is None:
+                task['details'] = ''
             if not isinstance(task.get('details'), str) or len(task['details']) > 20000:
                 raise ValueError()
             if not isinstance(task.get('refs'), list) or not task['refs'] or any(not isinstance(r, str) or r not in valid_refs for r in task['refs']):
@@ -369,7 +382,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
             continue
         generated.append(({'id': previous['id'] if previous else uuid4().hex, 'date': str(day),
                            'title': redact(task['title'].strip(), settings.redact_patterns),
-                           'details': redact(task['details'], settings.redact_patterns), 'project': project,
+                           'details': _format_task_details(task['details'], settings), 'project': project,
                            'category': redact(task.get('category') or category(task['title']), settings.redact_patterns)[:100],
                            'status': state_for(list(supporting.values())), 'origin': 'auto',
                            'confidence': '全天 AI 分析 · 曾被删除' if is_previously_deleted else '全天 AI 分析 · 待审核',
@@ -458,7 +471,7 @@ def import_pending(conn, day, selections):
         # fingerprint 全局唯一：曾删除候选恢复时复用原行（同一工作的既有记录），其余候选新建。
         existing = conn.execute(select(db.tasks.c.id).where(db.tasks.c.fingerprint == candidate['fingerprint'])).scalar_one_or_none()
         generated.append(({'id': existing or uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
-                           'details': redact(details, settings.redact_patterns), 'project': project or '未归属项目',
+                           'details': _format_task_details(details, settings), 'project': project or '未归属项目',
                            'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
                            'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核',
                            'evidence_level': candidate.get('evidence_level', '已有行为证据'),
