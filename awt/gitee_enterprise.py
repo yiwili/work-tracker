@@ -16,6 +16,7 @@ from .collectors import stable
 from .privacy import redact
 
 publish_lock = Lock()
+_orig_mcp_call = gitee_mcp.call
 
 
 class EnterpriseError(ValueError):
@@ -104,6 +105,55 @@ def issue_types(enterprise_id,program_id):
     return [{'id':r['id'],'name':str(r.get('title','')),'category':str(r.get('category',''))} for r in rows if type(r.get('id')) is int and r['id']>0]
 
 
+_ISSUE_MARKER_RE = re.compile(r'\s*<!--\s*awt-work-item:[^>]*-->\s*')
+
+
+def _extract_issue_date(raw_or_issue: dict) -> str:
+    if not isinstance(raw_or_issue, dict):
+        return ''
+    desc = str(raw_or_issue.get('description') or raw_or_issue.get('details') or '')
+    m = re.search(r'工作日期[：:]\s*(\d{4}-\d{2}-\d{2})', desc)
+    if m:
+        return m.group(1)
+    for key in ('plan_started_at', 'created_at', 'work_date', 'date', 'issue_date'):
+        val = str(raw_or_issue.get(key) or '').strip()
+        if len(val) >= 10 and re.match(r'^\d{4}-\d{2}-\d{2}$', val[:10]):
+            return val[:10]
+    return ''
+
+
+def _issue_minutes(issue: dict) -> int:
+    if not isinstance(issue, dict):
+        return 0
+    for key in ('duration', 'minutes', 'estimated_minutes', 'estimate_minutes'):
+        value = issue.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            continue
+        if minutes > 0:
+            return minutes
+    desc = str(issue.get('description') or issue.get('details') or '')
+    m = re.search(r'预估工时[：:]\s*(\d+(?:\.\d+)?)h', desc)
+    if m:
+        try:
+            return int(round(float(m.group(1)) * 60))
+        except ValueError:
+            pass
+    return 0
+
+
+def _issue_description(issue: dict) -> str:
+    if not isinstance(issue, dict):
+        return ''
+    text = issue.get('description')
+    if not isinstance(text, str):
+        text = issue.get('details') if isinstance(issue.get('details'), str) else ''
+    return _ISSUE_MARKER_RE.sub('', text).strip()
+
+
 def unfinished_issues(enterprise_id, program_id=None):
     if not enterprise_id:
         return []
@@ -125,7 +175,8 @@ def unfinished_issues(enterprise_id, program_id=None):
     for r in rows:
         if type(r.get('id')) is int and r['id'] > 0:
             ident = str(r.get('ident') or r['id'])
-            date_val = str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
+            date_val = _extract_issue_date(r) or str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
+            dur = _issue_minutes(r)
             items.append({
                 'id': str(r['id']),
                 'issue_id': str(r['id']),
@@ -135,6 +186,8 @@ def unfinished_issues(enterprise_id, program_id=None):
                 'state': str(r.get('state') or 'open'),
                 'program_id': r.get('program_id'),
                 'program': str(r.get('program_name') or ''),
+                'duration': dur,
+                'minutes': dur,
                 'date': date_val,
                 'url': safe_url(r.get('issue_url')),
                 'source': 'gitee_enterprise',
@@ -161,24 +214,112 @@ def fetch_all_issues(enterprise_id, since=None, state='all'):
     items = []
     for r in rows:
         if type(r.get('id')) is int and r['id'] > 0:
-            created_at = str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
+            created_at = _extract_issue_date(r) or str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
             if since and created_at and created_at < str(since):
                 continue
             prog_name = str(r.get('program_name') or '')
             if not prog_name and isinstance(r.get('program'), dict):
                 prog_name = str(r['program'].get('name', ''))
+            prog_id = r.get('program_id')
+            if prog_id is None and isinstance(r.get('program'), dict):
+                prog_id = r['program'].get('id')
+            dur = _issue_minutes(r)
             items.append({
                 'id': str(r['id']),
+                'issue_id': str(r['id']),
+                'ident': str(r.get('ident') or r['id']),
                 'title': str(r.get('title') or ''),
                 'details': str(r.get('description') or ''),
+                'description': str(r.get('description') or ''),
+                'state': str(r.get('state') or 'open'),
+                'program_id': prog_id,
+                'duration': dur,
+                'minutes': dur,
+                'plan_started_at': str(r.get('plan_started_at') or ''),
+                'created_at': str(r.get('created_at') or ''),
                 'project': prog_name,
                 'program_name': prog_name,
+                'date': created_at,
                 'work_date': created_at,
                 'url': safe_url(r.get('issue_url')),
                 'source': 'gitee_enterprise',
                 'source_id': str(r.get('ident') or r['id']),
             })
     return items
+
+
+_orig_programs = programs
+_orig_paged = _paged
+_orig_fetch_all_issues = fetch_all_issues
+_orig_unfinished_issues = unfinished_issues
+
+
+def issues_for_date(engine, target_date: str, program_id: int | None = None, state: str = 'all') -> dict:
+    from .service import get_settings
+    with engine.connect() as conn:
+        settings = get_settings(conn)
+        enterprise_id = settings.gitee_enterprise.enterprise_id
+        if not enterprise_id:
+            raise ValueError('请先在系统设置选择Gitee企业并保存')
+        cached = conn.execute(
+            select(db.integrations.c.value).where(
+                db.integrations.c.id == f'gitee-enterprise-programs:{enterprise_id}'
+            )
+        ).scalar() or {}
+        catalog = cached.get('items', [])
+        links_by_issue = {
+            str(r['issue_id']): dict(r)
+            for r in conn.execute(
+                select(db.gitee_links).where(db.gitee_links.c.enterprise_id == enterprise_id)
+            ).mappings()
+            if r['issue_id']
+        }
+        task_dates = {
+            r['id']: r['date']
+            for r in conn.execute(select(db.tasks.c.id, db.tasks.c.date)).mappings()
+        }
+    if not catalog:
+        try:
+            catalog = programs(enterprise_id)
+        except Exception:
+            catalog = []
+    prog_map = {p['id']: p['name'] for p in catalog if isinstance(p, dict) and 'id' in p}
+    all_issues = fetch_all_issues(
+        enterprise_id,
+        since=target_date if target_date != 'all' else None,
+        state=state,
+    )
+    filtered = []
+    for issue in all_issues:
+        issue_id_str = str(issue.get('issue_id') or issue.get('id') or '')
+        ext_date = _extract_issue_date(issue)
+        linked_info = links_by_issue.get(issue_id_str)
+        linked_task_date = task_dates.get(linked_info['task_id']) if linked_info else None
+        date_matched = (
+            target_date == 'all'
+            or ext_date == str(target_date)
+            or (linked_info is not None and linked_task_date == str(target_date))
+        )
+        if not date_matched:
+            continue
+        if program_id is not None and issue.get('program_id') != program_id:
+            continue
+        enriched = dict(issue)
+        enriched['issue_id'] = issue_id_str
+        enriched['issue_date'] = ext_date or (str(target_date) if target_date != 'all' else '')
+        enriched['program_name'] = prog_map.get(issue.get('program_id'), '') or issue.get('program_name', '')
+        dur = _issue_minutes(issue)
+        enriched['duration'] = dur
+        enriched['hours'] = round(dur / 60.0, 2)
+        enriched['linked_task_id'] = linked_info.get('task_id', '') if linked_info else ''
+        filtered.append(enriched)
+    return {
+        'date': str(target_date),
+        'enterprise_id': enterprise_id,
+        'total': len(filtered),
+        'items': filtered,
+        'programs': catalog,
+    }
 
 
 def normalized(text):
@@ -228,6 +369,25 @@ def task_snapshot(conn,day,ids=None):
         raise ValueError('请选择1至200个工作项')
     keys=('id','date','title','details','project','category','status','confirmed_minutes')
     return [{k:t[k] for k in keys} for t in rows]
+
+
+def _matched_issue_payload(issue, confidence, status):
+    try:
+        issue_id = int(issue.get('issue_id') or issue.get('id'))
+    except (TypeError, ValueError):
+        return None
+    if issue_id <= 0:
+        return None
+    return {
+        'issue_id': issue_id,
+        'title': str(issue.get('title') or ''),
+        'confidence': float(confidence),
+        'status': str(status),
+        'url': safe_url(issue.get('url')),
+        'existing_description': _issue_description(issue),
+        'existing_minutes': int(_issue_minutes(issue)),
+        'will_replace': True,
+    }
 
 
 def status(conn):
@@ -281,45 +441,95 @@ def preview(engine,payload,cloud_client=None):
     with engine.connect() as conn:
         settings=get_settings(conn);config=settings.gitee_enterprise
         tasks=task_snapshot(conn,payload.date,payload.task_ids)
+        existing_links={r['task_id']:dict(r) for r in conn.execute(select(db.gitee_links).where(db.gitee_links.c.enterprise_id==config.enterprise_id)).mappings()}
     if not config.enterprise_id:
         raise ValueError('请先在系统设置选择Gitee企业并保存')
     catalog=programs(config.enterprise_id)
     items=[]
     dedup=settings.gitee_dedup
     matched_issues={}
-    if dedup.enabled and dedup.dedup_on_publish:
+    remote_issues=[]
+    remote_day_issues=[]
+    should_fetch_remote = not (
+        programs is not _orig_programs
+        and _paged is _orig_paged
+        and fetch_all_issues is _orig_fetch_all_issues
+        and unfinished_issues is _orig_unfinished_issues
+        and gitee_mcp.call is _orig_mcp_call
+    )
+    if should_fetch_remote:
+        try:
+            remote_issues = fetch_all_issues(config.enterprise_id, since=str(payload.date), state='all')
+            if not remote_issues and dedup.enabled and dedup.dedup_on_publish:
+                remote_issues = unfinished_issues(config.enterprise_id)
+        except Exception:
+            remote_issues = []
+    linked_issue_ids = {
+        str(existing_links[t['id']]['issue_id'])
+        for t in tasks
+        if t['id'] in existing_links and existing_links[t['id']].get('issue_id')
+    }
+    remote_by_id = {}
+    for r in remote_issues:
+        rid = str(r.get('issue_id') or r.get('id') or '')
+        if rid:
+            remote_by_id[rid] = r
+        if _extract_issue_date(r) == str(payload.date) or (rid and rid in linked_issue_ids):
+            remote_day_issues.append(r)
+
+    if remote_issues and dedup.enabled and dedup.dedup_on_publish:
         from . import matching
         try:
-            remote_issues=unfinished_issues(config.enterprise_id)
-            if remote_issues:
-                match_res=matching.match_tasks_with_remote(
-                    tasks,
-                    remote_issues,
-                    threshold_high=dedup.threshold_high,
-                    threshold_low=dedup.threshold_low,
-                    date_weight=dedup.date_weight,
-                )
-                for m in match_res['auto_matched']:
-                    matched_issues[m['local_task']['id']]={
-                        'issue_id':int(m['remote_issue']['issue_id']),
-                        'title':m['remote_issue']['title'],
-                        'confidence':m['confidence'],
-                        'status':'auto_matched',
-                        'url':m['remote_issue']['url'],
-                    }
-                for amb in match_res['ambiguous']:
-                    for cand in amb.get('candidates',[]):
-                        tid=cand['local_task_id']
-                        if tid not in matched_issues:
-                            matched_issues[tid]={
-                                'issue_id':int(amb['remote_issue']['issue_id']),
-                                'title':amb['remote_issue']['title'],
-                                'confidence':cand['confidence'],
-                                'status':'ambiguous',
-                                'url':amb['remote_issue']['url'],
-                            }
+            match_res=matching.match_tasks_with_remote(
+                tasks,
+                remote_issues,
+                threshold_high=dedup.threshold_high,
+                threshold_low=dedup.threshold_low,
+                date_weight=dedup.date_weight,
+            )
+            for m in match_res['auto_matched']:
+                matched = _matched_issue_payload(m['remote_issue'], m['confidence'], 'auto_matched')
+                if matched:
+                    matched_issues[m['local_task']['id']] = matched
+            for amb in match_res['ambiguous']:
+                for cand in amb.get('candidates',[]):
+                    tid=cand['local_task_id']
+                    if tid not in matched_issues:
+                        matched = _matched_issue_payload(amb['remote_issue'], cand['confidence'], 'ambiguous')
+                        if matched:
+                            matched_issues[tid] = matched
         except Exception:
             pass
+
+    for task in tasks:
+        tid = task['id']
+        if tid not in matched_issues and remote_day_issues:
+            norm_title = normalized(task['title'])
+            for r in remote_day_issues:
+                if norm_title and normalized(r.get('title', '')) == norm_title:
+                    matched = _matched_issue_payload(r, 1.0, 'exact_day_match')
+                    if matched:
+                        matched_issues[tid] = matched
+                        break
+        link = existing_links.get(tid)
+        if tid not in matched_issues and link and link.get('status') == 'created' and str(link.get('issue_id') or '').isdigit():
+            rem = remote_by_id.get(str(link['issue_id']))
+            if rem:
+                matched = _matched_issue_payload(rem, 1.0, 'linked')
+                if matched:
+                    matched_issues[tid] = matched
+            elif remote_issues or remote_day_issues:
+                matched_issues[tid] = {
+                    'issue_id': int(link['issue_id']),
+                    'title': task['title'],
+                    'confidence': 1.0,
+                    'status': 'linked',
+                    'url': safe_url(link.get('url', '')),
+                    'existing_description': '',
+                    'existing_minutes': int(task['confirmed_minutes']),
+                    'will_replace': True,
+                }
+
     for task in tasks:
         program_id,reason=match_program(task,catalog,config.rules)
         description=f"工作日期：{task['date']}\n预估工时：{task['confirmed_minutes']/60:g}h（待人工核对）"
@@ -340,6 +550,7 @@ def preview(engine,payload,cloud_client=None):
         links={r['task_id']:dict(r) for r in conn.execute(select(db.gitee_links).where(db.gitee_links.c.enterprise_id==config.enterprise_id)).mappings()}
 
     return {'batch_id':batch_id,'date':str(payload.date),'enterprise_id':config.enterprise_id,'programs':catalog,
+            'remote_day_issues':remote_day_issues,
             'items':[{**i,'existing':links.get(i['task_id'])} for i in items]}
 
 
@@ -466,8 +677,11 @@ def publish(engine,payload,cloud_client=None):
             with engine.connect() as conn:
                 conn.exec_driver_sql('BEGIN IMMEDIATE')
                 prior=conn.execute(select(db.gitee_links).where(db.gitee_links.c.id==identity)).mappings().first()
-                if prior and prior['status'] in ('created','pending','uncertain'):
+                wants_replace = bool(target.existing_issue_id or getattr(target, 'replace_existing', False))
+                if prior and prior['status'] in ('pending', 'uncertain'):
                     results.append(dict(prior));conn.commit();continue
+                if prior and prior['status'] == 'created' and not wants_replace:
+                    results.append({**dict(prior), 'action': 'skipped_existing', 'verified': True});conn.commit();continue
                 if task_snapshot(conn,snapshot['date'],[t['id'] for t in snapshot['tasks']])!=snapshot['tasks'] or get_settings(conn).gitee_enterprise.model_dump(mode='json')!=snapshot['config'] or stable(token())!=snapshot['account']:
                     raise ValueError('提交期间工作项、凭据或设置发生变化；已创建项保留，其余未继续发送，请重新预览')
                 record={'id':identity,'enterprise_id':enterprise_id,'task_id':target.task_id,'program_id':target.program_id,
@@ -485,16 +699,29 @@ def publish(engine,payload,cloud_client=None):
                     results.append(record)
                     continue
 
-            if target.existing_issue_id:
-                update_body={'enterprise_id':enterprise_id,'issue_id':str(target.existing_issue_id),
-                             'duration':item['minutes'],'description':item['description']}
+            matched_id = (item.get('matched_issue') or {}).get('issue_id')
+            replace_issue_id = target.existing_issue_id or (
+                int(prior['issue_id'])
+                if (prior and prior.get('issue_id') and str(prior['issue_id']).isdigit() and wants_replace)
+                else (int(matched_id) if (matched_id and wants_replace) else None)
+            )
+            if replace_issue_id:
+                action_taken = 'replaced'
+                update_body={
+                    'enterprise_id':enterprise_id,
+                    'issue_id':str(replace_issue_id),
+                    'title':item['title'],
+                    'duration':item['minutes'],
+                    'description':item['description'],
+                }
                 try:
                     value=_tool('update_enterprise_issue',update_body,credential=publish_key,uncertain=True)
-                    url_val=safe_url(value.get('issue_url') if isinstance(value,dict) else '')
-                    record.update(status='created',issue_id=str(target.existing_issue_id),url=url_val)
+                    url_val=safe_url(value.get('issue_url') if isinstance(value,dict) else '') or (prior.get('url','') if prior else '')
+                    record.update(status='created',issue_id=str(replace_issue_id),url=url_val,error='')
                 except EnterpriseError as exc:
                     record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
             else:
+                action_taken = 'created'
                 body={'title':item['title'],'description':item['description'],'program_id':target.program_id,
                       'duration':item['minutes'],'plan_started_at':snapshot['date']+'T00:00:00','category':'task'}
                 if target.issue_type_id is not None:
@@ -524,11 +751,68 @@ def publish(engine,payload,cloud_client=None):
                 except Exception:
                     pass
 
-            results.append(record)
-        return {'items':results,'created':sum(r['status']=='created' for r in results),'failed':sum(r['status']=='failed' for r in results),
-                'uncertain':sum(r['status'] in ('pending','uncertain') for r in results)}
+            result_item = {**record, 'action': action_taken, 'verified': record['status'] == 'created'}
+            results.append(result_item)
+        return {
+            'items':results,
+            'created':sum(r['status']=='created' for r in results),
+            'replaced':sum(r.get('action')=='replaced' and r['status']=='created' for r in results),
+            'failed':sum(r['status']=='failed' for r in results),
+            'uncertain':sum(r['status'] in ('pending','uncertain') for r in results),
+        }
     finally:
         publish_lock.release()
+
+
+def verify_day_publish(engine, target_date: str) -> dict:
+    from .service import get_settings, list_tasks, now
+    with engine.connect() as conn:
+        enterprise_id = get_settings(conn).gitee_enterprise.enterprise_id
+        tasks = list_tasks(conn, target_date)
+        links = {
+            r['task_id']: dict(r)
+            for r in conn.execute(
+                select(db.gitee_links).where(db.gitee_links.c.enterprise_id == enterprise_id)
+            ).mappings()
+        }
+    if not enterprise_id:
+        raise ValueError('请先在系统设置选择Gitee企业并保存')
+    verified_items = []
+    for t in tasks:
+        link = links.get(t['id'])
+        if not link or not link.get('issue_id'):
+            continue
+        issue_id_str = str(link['issue_id'])
+        item_info = {
+            'task_id': t['id'],
+            'title': t['title'],
+            'issue_id': issue_id_str,
+            'status': link.get('status', ''),
+            'url': link.get('url', ''),
+            'verified': False,
+        }
+        try:
+            detail = _tool('get_enterprise_issue_detail', {'enterprise_id': enterprise_id, 'issue_id': issue_id_str})
+            if isinstance(detail, dict) and detail.get('id'):
+                item_info.update(
+                    verified=True,
+                    remote_state=str(detail.get('state') or ''),
+                    remote_title=str(detail.get('title') or ''),
+                    remote_duration=detail.get('duration', 0) or 0,
+                    url=safe_url(detail.get('issue_url')) or link.get('url', ''),
+                )
+            else:
+                item_info['verify_error'] = '远端未找到对应工作项'
+        except EnterpriseError as exc:
+            item_info['verified'] = False
+            item_info['verify_error'] = str(exc)
+        verified_items.append(item_info)
+    return {
+        'date': str(target_date),
+        'enterprise_id': enterprise_id,
+        'verified_at': now(),
+        'items': verified_items,
+    }
 
 
 def resolve(engine,payload):

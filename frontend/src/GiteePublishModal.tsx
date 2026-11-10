@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload, X, ExternalLink } from "lucide-react";
-import type { GiteeProgram } from "./types";
+import type {
+  GiteeProgram,
+  GiteeRemoteIssue,
+  GiteeVerifyItem,
+} from "./types";
 import { enterpriseApi } from "./EnterpriseSettings";
 
 type Link = {
@@ -9,6 +13,10 @@ type Link = {
   url: string;
   error: string;
   issue_id: string;
+  action?: "created" | "replaced" | "skipped_existing";
+  verified?: boolean;
+  remote_title?: string;
+  remote_state?: string;
 };
 type Item = {
   task_id: string;
@@ -25,6 +33,9 @@ type Item = {
     confidence: number;
     status: string;
     url?: string;
+    existing_description?: string;
+    existing_minutes?: number;
+    will_replace?: boolean;
   } | null;
 };
 type Preview = {
@@ -32,6 +43,7 @@ type Preview = {
   enterprise_id: number;
   items: Item[];
   programs: GiteeProgram[];
+  remote_day_issues?: GiteeRemoteIssue[];
 };
 type IssueType = { id: number; name: string; category: string };
 
@@ -53,17 +65,24 @@ export function GiteePublishModal({
     [types, setTypes] = useState<Record<number, IssueType[]>>({}),
     [chosenTypes, setChosenTypes] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set()),
-    [results, setResults] = useState<Record<string, Link>>({});
+    [results, setResults] = useState<Record<string, Link>>({}),
+    [replaceMode, setReplaceMode] = useState<
+      Record<string, "replace" | "create">
+    >({});
   const [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
     [ack, setAck] = useState(false);
+  const [verifying, setVerifying] = useState(false),
+    [verifySummary, setVerifySummary] = useState("");
   const [remoteIds, setRemoteIds] = useState<Record<string, string>>({});
   const initialIds = useRef(taskIds),
     close = useRef<HTMLButtonElement>(null);
+
   const load = async () => {
     setBusy(true);
     setError("");
     setAck(false);
+    setVerifySummary("");
     try {
       const p: Preview = await enterpriseApi("preview", {
         date: day,
@@ -76,8 +95,24 @@ export function GiteePublishModal({
       setSelected(
         new Set(
           p.items
-            .filter((i) => !i.existing || i.existing.status === "failed")
+            .filter(
+              (i) =>
+                !i.existing ||
+                i.existing.status === "failed" ||
+                Boolean(i.matched_issue),
+            )
             .map((i) => i.task_id),
+        ),
+      );
+      setReplaceMode(
+        Object.fromEntries(
+          p.items.map((i) => [
+            i.task_id,
+            i.matched_issue?.issue_id ||
+            (i.existing?.status === "created" && i.existing?.issue_id)
+              ? ("replace" as const)
+              : ("create" as const),
+          ]),
         ),
       );
       setResults({});
@@ -107,14 +142,20 @@ export function GiteePublishModal({
       setBusy(false);
     }
   };
+
   useEffect(() => {
     load();
     close.current?.focus();
   }, [day]);
+
   const current = (item: Item) => results[item.task_id] || item.existing;
   const locked = (item: Item) =>
-    ["created", "pending", "uncertain"].includes(current(item)?.status || "");
+    ["pending", "uncertain"].includes(current(item)?.status || "");
   const targetsValid = !!preview && [...selected].every((id) => !!targets[id]);
+  const hasExistingOrResults =
+    Object.keys(results).length > 0 ||
+    Boolean(preview?.items.some((i) => Boolean(i.existing?.issue_id)));
+
   const changeProject = async (id: string, program: number) => {
     setTargets((v) => ({ ...v, [id]: program }));
     setChosenTypes((v) => ({ ...v, [id]: 0 }));
@@ -135,6 +176,53 @@ export function GiteePublishModal({
       }
     }
   };
+
+  const handleVerifyRemote = async () => {
+    setVerifying(true);
+    setError("");
+    try {
+      const res:
+        | { items?: GiteeVerifyItem[]; verified_count?: number }
+        | GiteeVerifyItem[] = await enterpriseApi(
+        "verify?date=" + day,
+        undefined,
+        "GET",
+      );
+      const list = Array.isArray(res) ? res : res.items || [];
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const v of list) {
+          const base =
+            next[v.task_id] ||
+            preview?.items.find((i) => i.task_id === v.task_id)?.existing;
+          next[v.task_id] = {
+            task_id: v.task_id,
+            status: base?.status || v.status || "created",
+            issue_id: String(v.issue_id || base?.issue_id || ""),
+            url: v.url || base?.url || "",
+            error: v.verify_error || base?.error || "",
+            action: base?.action,
+            verified: Boolean(v.verified),
+            remote_title: v.remote_title,
+            remote_state: v.remote_state,
+          };
+        }
+        return next;
+      });
+      const verifiedCount =
+        (!Array.isArray(res) && typeof res.verified_count === "number"
+          ? res.verified_count
+          : list.filter((i) => i.verified).length) || 0;
+      setVerifySummary(
+        `已与 Gitee 远端实时核对：${verifiedCount} 项工作项在远端真实生效`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   return (
     <div className="modal-overlay">
       <section
@@ -197,10 +285,66 @@ export function GiteePublishModal({
               目标企业 #{preview.enterprise_id} · 共 {preview.items.length} 项 ·
               选中 {selected.size} 项
             </p>
+            {preview.remote_day_issues &&
+              preview.remote_day_issues.length > 0 && (
+                <details className="gitee-remote-existing-panel" open>
+                  <summary>
+                    📌 Gitee 当日已有工作项（{preview.remote_day_issues.length}{" "}
+                    项）· 推送前可对比是否重复或替换
+                  </summary>
+                  <div className="gitee-remote-existing-list">
+                    {preview.remote_day_issues.map((remote, idx) => {
+                      const remoteHours =
+                        typeof remote.hours === "number"
+                          ? remote.hours
+                          : typeof remote.duration === "number"
+                            ? Number((remote.duration / 60).toFixed(2))
+                            : 0;
+                      return (
+                        <div
+                          className="gitee-remote-existing-row"
+                          key={`${remote.issue_id}-${idx}`}
+                        >
+                          <span className="gitee-remote-id">
+                            #{remote.issue_id}
+                          </span>
+                          <span className="gitee-remote-title">
+                            {remote.title}
+                          </span>
+                          <span className="gitee-remote-meta">
+                            {remoteHours}h · {remote.state || "open"}
+                          </span>
+                          {remote.url && (
+                            <a
+                              href={remote.url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              查看 <ExternalLink size={12} />
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
+            {preview.remote_day_issues &&
+              preview.remote_day_issues.length === 0 && (
+                <div className="gitee-remote-empty-pill">
+                  ✓ Gitee 当日暂无已登记工作项，本次将直接新建
+                </div>
+              )}
             <fieldset disabled={busy} className="publish-items">
               {preview.items.map((item, index) => {
                 const state = current(item),
                   disabled = locked(item);
+                const matchedId =
+                  item.matched_issue?.issue_id ||
+                  (item.existing?.status === "created" && item.existing.issue_id
+                    ? Number(item.existing.issue_id)
+                    : null);
+                const mode = replaceMode[item.task_id] || "replace";
                 return (
                   <article className="publish-item" key={item.task_id}>
                     <label className="check-label">
@@ -262,13 +406,60 @@ export function GiteePublishModal({
                         </select>
                       </label>
                     </div>
+                    {selected.has(item.task_id) && !targets[item.task_id] && (
+                      <span className="publish-missing-target">
+                        ⚠️ 请先选择目标企业项目
+                      </span>
+                    )}
                     <p className="muted">
                       前缀：{item.prefix || "未提供"} · {item.match_reason} ·
                       预估工时 {Number((item.minutes / 60).toFixed(2))}h
                     </p>
-                    {item.matched_issue && (
-                      <div style={{ fontSize: "12px", color: "#137333", background: "#e6f4ea", padding: "4px 8px", borderRadius: "4px", margin: "4px 0" }}>
-                        已匹配云端未完成工作项 #{item.matched_issue.issue_id}（置信度 {Math.round(item.matched_issue.confidence * 100)}%）：将补充工时与内容，避免重复创建
+                    {!!matchedId && (
+                      <div className="publish-replace-banner">
+                        <div className="publish-replace-header">
+                          <strong>
+                            {mode === "create"
+                              ? `➕ 将忽略已有项 #${matchedId}，作为新工作项创建`
+                              : `🔄 将替换更新 Gitee 已有工作项 #${matchedId}`}
+                          </strong>
+                          <select
+                            aria-label={`推送方式 ${index + 1}`}
+                            value={mode}
+                            disabled={disabled}
+                            onChange={(e) => {
+                              const nextMode = e.target.value as
+                                | "replace"
+                                | "create";
+                              setReplaceMode((v) => ({
+                                ...v,
+                                [item.task_id]: nextMode,
+                              }));
+                              setAck(false);
+                            }}
+                          >
+                            <option value="replace">
+                              替换更新已有项 (#{matchedId})
+                            </option>
+                            <option value="create">仍作为新工作项创建</option>
+                          </select>
+                        </div>
+                        <div className="publish-replace-diff">
+                          <span>
+                            远端原标题：{item.matched_issue?.title || item.title}
+                          </span>
+                          <span>
+                            工时对比：
+                            {item.matched_issue?.existing_minutes
+                              ? Number(
+                                  (
+                                    item.matched_issue.existing_minutes / 60
+                                  ).toFixed(2),
+                                ) + "h"
+                              : "已存在"}{" "}
+                            → {Number((item.minutes / 60).toFixed(2))}h
+                          </span>
+                        </div>
                       </div>
                     )}
                     <details>
@@ -288,7 +479,13 @@ export function GiteePublishModal({
                         }
                       >
                         {state.status === "created"
-                          ? `已创建 #${state.issue_id}`
+                          ? `${
+                              state.action === "replaced"
+                                ? "✅ 已替换更新 #" + state.issue_id
+                                : "✅ 已创建 #" + state.issue_id
+                            }${state.verified ? " · 远端已确认生效" : ""}${
+                              state.remote_state ? ` (${state.remote_state})` : ""
+                            }`
                           : state.status === "failed"
                             ? "创建失败，可重试"
                             : "创建结果待核实，为避免重复不会自动重发"}
@@ -355,6 +552,11 @@ export function GiteePublishModal({
                 );
               })}
             </fieldset>
+            {verifySummary && (
+              <p role="status" className="publish-verify-summary">
+                {verifySummary}
+              </p>
+            )}
             <label className="check-label">
               <input
                 type="checkbox"
@@ -388,6 +590,16 @@ export function GiteePublishModal({
           >
             重新预览
           </button>
+          {preview && hasExistingOrResults && (
+            <button
+              type="button"
+              className="outline"
+              disabled={busy || verifying}
+              onClick={handleVerifyRemote}
+            >
+              {verifying ? "正在核验远端…" : "🔄 立即核验 Gitee 远端状态"}
+            </button>
+          )}
           {preview && (
             <button
               type="button"
@@ -401,11 +613,21 @@ export function GiteePublishModal({
                     confirmed: true,
                     targets: [...selected].map((id) => {
                       const item = preview.items.find((i) => i.task_id === id);
+                      const matchedId =
+                        item?.matched_issue?.issue_id ||
+                        (item?.existing?.status === "created" &&
+                        item.existing.issue_id
+                          ? Number(item.existing.issue_id)
+                          : null);
+                      const shouldReplace =
+                        (replaceMode[id] || "replace") === "replace" &&
+                        !!matchedId;
                       return {
                         task_id: id,
                         program_id: targets[id],
                         issue_type_id: chosenTypes[id] || null,
-                        existing_issue_id: item?.matched_issue?.issue_id || null,
+                        existing_issue_id: shouldReplace ? matchedId : null,
+                        replace_existing: shouldReplace,
                       };
                     }),
                   });

@@ -29,7 +29,7 @@ def test_dedup_config_get_and_put(sync_client):
     cfg = r.json()
     assert cfg["enabled"] is True
     assert cfg["dedup_on_pull"] is True
-    assert cfg["dedup_on_publish"] is False
+    assert cfg["dedup_on_publish"] is True
     assert cfg["threshold_high"] == 0.80
     assert cfg["threshold_low"] == 0.40
     assert cfg["date_weight"] == 0.20
@@ -334,6 +334,7 @@ def test_publish_with_dedup_and_existing_issue_updates_cloud(sync_client, monkey
                 "program_id": 11,
                 "issue_type_id": 9,
                 "existing_issue_id": 5001,
+                "replace_existing": True,
             }
         ],
     }
