@@ -230,11 +230,11 @@ export function Conversations({
         <div className="section-head-title-wrap">
           <h2>对话与来源</h2>
           <span className="source-summary-pill">
-            {detectedAgents.length} 个 Agent 已连接 · {activeAgentCount} 个参与分析
+            {detectedAgents.length} 已连接 · {activeAgentCount} 参与分析
           </span>
           {showMultiDay && (
             <span className="source-summary-pill multiday-active-pill">
-              跨天视图：{startDate.slice(5)} ~ {endDate.slice(5)}（共 {diffDays} 天）
+              跨天 {startDate.slice(5)} ~ {endDate.slice(5)} · {diffDays} 天
             </span>
           )}
         </div>
@@ -257,7 +257,7 @@ export function Conversations({
             title="自选统计跨度，支持跨天一键采集并将多日工作合并统计到今天"
           >
             <CalendarRange size={15} style={{ marginRight: "4px" }} />
-            {showMultiDay ? "收起多天工作台" : "多天合并分析"}
+            {showMultiDay ? "收起多天" : "多天合并"}
           </button>
           {!showMultiDay && (
             <button
@@ -441,7 +441,7 @@ export function Conversations({
             </div>
             {emptyDaysCount > 0 && (
               <span className="multi-day-empty-hint">
-                区间内有 {emptyDaysCount} 天暂无记录，建议先点击「采集跨天数据」或保持勾选「分析前自动补采」
+                区间内有 {emptyDaysCount} 天暂无记录，建议先采集或自动补采
               </span>
             )}
           </div>
@@ -500,7 +500,7 @@ export function Conversations({
                 }
                 title={
                   !autoCollectBeforeAnalyze && messages === 0
-                    ? "当前跨天区间没有可分析的对话记录，请先点击「采集跨天数据」或勾选「分析前自动补采」"
+                    ? "跨天区间暂无可分析对话，请先采集或自动补采"
                     : undefined
                 }
               >
@@ -511,14 +511,14 @@ export function Conversations({
                 )}
                 {analyzing || overview.running
                   ? "AI 正在分析多天记录…"
-                  : `开始多天合并分析（${startDate.slice(5)} ~ ${endDate.slice(5)} · ${targetHours}h）`}
+                  : `开始多天分析（${startDate.slice(5)} ~ ${endDate.slice(5)} · ${targetHours}h）`}
               </button>
             </div>
 
             <div className="multi-day-footer-right">
               <label
                 className="multi-day-autocollect-toggle"
-                title="开启后，点击「开始多天合并分析」时会自动先执行一次跨天数据采集，确保不会遗漏任何一天的对话或 Git 提交"
+                title="开启后，点击「开始多天分析」时会先自动采集跨天数据"
               >
                 <input
                   type="checkbox"
@@ -526,7 +526,7 @@ export function Conversations({
                   disabled={busy || analyzing}
                   onChange={(e) => setAutoCollectBeforeAnalyze(e.target.checked)}
                 />
-                <span>分析前自动补采跨天数据</span>
+                <span>分析前自动补采</span>
               </label>
               <button
                 type="button"
@@ -543,17 +543,17 @@ export function Conversations({
       <AnalysisLog day={overview.date} active={overview.running || analyzing} />
       {!settings.auto_import_analysis && pendingCount > 0 && (
         <p className="muted">
-          本次分析生成了 {pendingCount} 条候选工作项，尚未写入今日清单；点击「分析结果」可查看、修改后导入。
+          {pendingCount} 条候选工作项待导入，可在「分析结果」中查看。
         </p>
       )}
       {noConversationSource && (
         <p className="muted">
-          未勾选任何对话来源：采集会跳过这些 Agent，也不会发起 AI 分析。
+          未选择对话来源：采集会跳过这些 Agent，也不会发起 AI 分析。
         </p>
       )}
       {onlyGit && (
         <p className="muted">
-          {`已采集到 ${gitEvents} 条 Git 提交，但 AI 归纳需要当天的对话记录。请到「系统设置」配置可读的对话日志目录，或在下方用「添加人工事项」手工记录今天的工作。`}
+          {`仅有 ${gitEvents} 条 Git 提交。AI 归纳还需要对话记录，请在设置中配置日志目录或手工添加事项。`}
         </p>
       )}
 
@@ -729,11 +729,11 @@ export function Conversations({
         <Activity size={17} />
         <span>
           {showMultiDay
-            ? `跨天范围 (${startDate.slice(5)} ~ ${endDate.slice(5)})：`
+            ? `跨天 ${startDate.slice(5)} ~ ${endDate.slice(5)}：`
             : "本次范围："}
-          <strong>{activeOverview.session_count} 个会话</strong>，
-          {activeOverview.user_messages} 条用户消息 +{" "}
-          {activeOverview.assistant_messages} 条 AI 回复
+          <strong>{activeOverview.session_count} 个会话</strong> ·
+          {activeOverview.user_messages} 问 · {activeOverview.assistant_messages}{" "}
+          答
         </span>
         <span className="conversation-timing">
           跨度 {activeOverview.timing.session_span_minutes}m
@@ -742,26 +742,25 @@ export function Conversations({
         </span>
         <button onClick={onSettings}>
           <Settings2 size={14} />
-          配置分析模型
+          模型设置
         </button>
       </div>
       {legacyCount > 0 && (
         <p className="conversation-hint warning">
-          这里仍有 {legacyCount} 项旧规则草稿，不代表实际任务。AI
-          分析成功后会替换未审核草稿，保留人工事项与已审核工时。
+          仍有 {legacyCount} 项旧规则草稿；AI 分析后会替换，人工事项与已审核工时保留。
         </p>
       )}
       {overview.analysis && (
         <div className="analysis-summary">
           <span className="tag">
-            {overview.stale ? "对话或分析设置已变化，待重新分析" : "全天 AI 分析结果"}
+            {overview.stale ? "设置已变化，待重分析" : "全天分析结果"}
           </span>
           <p>{overview.analysis.summary}</p>
           {overview.analysis.scope && (
             <p className="scope-counts">
-              工作相关提问 {overview.analysis.scope.work_user_messages} 条 ·
-              排除私人/无关 {overview.analysis.scope.excluded_user_messages} 条
-              · 待判断 {overview.analysis.scope.uncertain_user_messages} 条
+              工作相关 {overview.analysis.scope.work_user_messages} · 排除{" "}
+              {overview.analysis.scope.excluded_user_messages} · 待判断{" "}
+              {overview.analysis.scope.uncertain_user_messages}
             </p>
           )}
           <small>

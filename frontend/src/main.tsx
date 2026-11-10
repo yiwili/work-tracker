@@ -21,6 +21,7 @@ import {
   Link2,
   ListFilter,
   LoaderCircle,
+  Palette,
   PieChart,
   Plus,
   ScanLine,
@@ -35,7 +36,7 @@ import {
 } from "lucide-react";
 import type { DuplicatePair, GiteeSyncResult, PendingTask, Report, Settings, SimilarityCheckResponse, Task, WorkEvent } from "./types";
 import "./style.css";
-import { api } from "./api";
+import { api, apiUrl } from "./api";
 import { Conversations } from "./Conversations";
 import { AnalysisLog } from "./AnalysisLog";
 import { ModelSettings } from "./ModelSettings";
@@ -44,6 +45,7 @@ import { AllocationModal, type AllocationRequest } from "./AllocationModal";
 import { AllocationPreviewModal } from "./AllocationPreviewModal";
 import { SimilarityMergeModal } from "./SimilarityMergeModal";
 import { GiteePublishModal } from "./GiteePublishModal";
+import { GiteeIssueBrowserModal } from "./GiteeIssueBrowserModal";
 import { GiteeDedupModal } from "./GiteeDedupModal";
 import { EnterpriseSettings } from "./EnterpriseSettings";
 import { HistoryPanel } from "./HistoryPanel";
@@ -58,6 +60,7 @@ import { UsageStats } from "./UsageStats";
 import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister } from "./TaskQuickActions";
 import { useTodos, hasBracketPrefix, formatTitleWithPrefix } from "./useTodos";
 import { TodoReminderBar, TodoSideDock } from "./TodoWidgets";
+import { useTheme, THEMES } from "./themes";
 
 // 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
 const statuses: Record<string, string> = {
@@ -160,6 +163,7 @@ function payload(d: Draft) {
 }
 
 function App() {
+  const { theme, setTheme } = useTheme();
   const [page, setPage] = useState("daily"),
     [day, setDay] = useState(initialDay),
     [report, setReport] = useState<Report | null>(null),
@@ -181,6 +185,7 @@ function App() {
     [proceedToAllocationAfterSimilarity, setProceedToAllocationAfterSimilarity] = useState(false),
     [proceedToGiteeAfterSimilarity, setProceedToGiteeAfterSimilarity] = useState(false),
     [giteeOpen, setGiteeOpen] = useState(false),
+    [giteeBrowserOpen, setGiteeBrowserOpen] = useState(false),
     [giteeDedupOpen, setGiteeDedupOpen] = useState(false),
     [giteeSyncResult, setGiteeSyncResult] = useState<GiteeSyncResult | null>(null),
     [setupOpen, setSetupOpen] = useState(false),
@@ -672,7 +677,7 @@ function App() {
   );
   const exportReport = () =>
     run("正在导出日报", async () => {
-      const response = await fetch("/api/reports/" + day + "/export.md");
+      const response = await fetch(apiUrl("/reports/" + day + "/export.md"));
       if (!response.ok) throw new Error("导出失败");
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement("a");
@@ -717,6 +722,28 @@ function App() {
             </button>
           ))}
         </nav>
+        <div className="theme-switcher-bar" role="group" aria-label="界面主题">
+          {THEMES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={theme === item.id ? "active" : ""}
+              aria-pressed={theme === item.id}
+              title={`${item.name} — ${item.description}`}
+              onClick={() => setTheme(item.id)}
+            >
+              <span
+                className={`theme-swatch theme-swatch-${item.id}`}
+                aria-hidden="true"
+              />
+              {item.id === "apple-hig"
+                ? "浅色"
+                : item.id === "apple-dark"
+                  ? "暗色"
+                  : "经典"}
+            </button>
+          ))}
+        </div>
         <button
           className={
             "setup-launch" + (settings && !settings.llm_enabled ? " attention" : "")
@@ -891,6 +918,15 @@ function App() {
                     待审核提示
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="outline gitee-browser-trigger"
+                  onClick={() => setGiteeBrowserOpen(true)}
+                  title="浏览已配置 Gitee 服务中的未完成工作项"
+                >
+                  <ArrowUpRight size={14} />
+                  查看 Gitee 工作项
+                </button>
               </div>
             </div>
           )}
@@ -1050,6 +1086,14 @@ function App() {
                     <button
                       className="outline"
                       disabled={!!busy}
+                      onClick={() => setEditor({})}
+                    >
+                      <Plus size={16} />
+                      添加人工事项
+                    </button>
+                    <button
+                      className="outline"
+                      disabled={!!busy}
                       onClick={async () => {
                         setBusy("正在同步 Gitee 未完成工作项并去重…");
                         try {
@@ -1084,28 +1128,6 @@ function App() {
                     <button
                       className="outline"
                       disabled={!!busy || !report.tasks.length || checkingSimilarity}
-                      onClick={() => void handleOpenGiteePublish()}
-                    >
-                      提交到 Gitee
-                      {selected.length ? `（${selected.length}项）` : ""}
-                    </button>
-                    {selected.length >= 2 && (
-                      <button disabled={!!busy} onClick={merge}>
-                        <GitMerge size={15} />
-                        合并 {selected.length} 项
-                      </button>
-                    )}
-                    <button
-                      className="outline"
-                      disabled={!!busy}
-                      onClick={() => setEditor({})}
-                    >
-                      <Plus size={17} />
-                      添加人工事项
-                    </button>
-                    <button
-                      className="outline"
-                      disabled={!!busy || !report.tasks.length || checkingSimilarity}
                       onClick={runManualSimilarityCheck}
                       title="对比人工工作项与 AI 工作项的相似度并检查重复"
                     >
@@ -1115,6 +1137,21 @@ function App() {
                         <GitCompare size={15} />
                       )}
                       相似度检测
+                    </button>
+                    {selected.length >= 2 && (
+                      <button className="outline" disabled={!!busy} onClick={merge}>
+                        <GitMerge size={15} />
+                        合并 {selected.length} 项
+                      </button>
+                    )}
+                    <button
+                      className="primary"
+                      disabled={!!busy || !report.tasks.length || checkingSimilarity}
+                      onClick={() => void handleOpenGiteePublish()}
+                    >
+                      <Send size={15} />
+                      推送至 Gitee
+                      {selected.length ? `（${selected.length}项）` : ""}
                     </button>
                   </div>
                 </div>
@@ -1417,11 +1454,11 @@ function App() {
                   <div>
                     <h3>
                       {report.confirmed
-                        ? "这一天，已经记录妥当。"
+                        ? "日报已确认"
                         : report.remaining_minutes === 0
-                          ? "工时已分配完成，请核对并确认。"
+                          ? "工时已分配完成，请核对并确认"
                           : report.remaining_minutes > 0
-                            ? `距离完整日报，还差 ${hours(report.remaining_minutes)}h`
+                            ? `距离目标工时还差 ${hours(report.remaining_minutes)}h`
                             : `当前工时超出 ${hours(-report.remaining_minutes)}h`}
                     </h3>
                   </div>
@@ -1431,18 +1468,10 @@ function App() {
                     className="outline"
                     disabled={!!busy}
                     onClick={exportReport}
+                    title="导出 Markdown 日报"
                   >
                     <ArrowDownToLine size={16} />
                     导出 Markdown
-                  </button>
-                  <button
-                    className="primary"
-                    disabled={!!busy || !report.tasks.length || checkingSimilarity}
-                    onClick={() => void handleOpenGiteePublish()}
-                  >
-                    <Send size={16} />
-                    预览并推送工作项
-                    {selected.length ? `（${selected.length}项）` : ""}
                   </button>
                 </div>
               </section>
@@ -1564,6 +1593,8 @@ function App() {
               busy={!!busy}
               tab={settingsTab}
               onTab={setSettingsTab}
+              theme={theme}
+              onThemeChange={setTheme}
               onImported={() => {
                 void refresh();
               }}
@@ -1627,6 +1658,17 @@ function App() {
             setSettingsTab("enterprise");
           }}
           onApplied={refresh}
+        />
+      )}
+      {giteeBrowserOpen && (
+        <GiteeIssueBrowserModal
+          initialDate={day}
+          onClose={() => setGiteeBrowserOpen(false)}
+          onSettings={() => {
+            setGiteeBrowserOpen(false);
+            setPage("settings");
+            setSettingsTab("enterprise");
+          }}
         />
       )}
       {giteeDedupOpen && giteeSyncResult && (
@@ -2487,6 +2529,59 @@ function TaskEditor({
   );
 }
 
+function ThemeLibrarySection({
+  theme,
+  onChange,
+}: {
+  theme: string;
+  onChange: (theme: string) => void;
+}) {
+  return (
+    <section className="settings-section theme-library-section">
+      <h2>
+        <Palette size={19} /> 本地主题库
+      </h2>
+      <p className="muted">
+        自由切换界面视觉风格；每个主题独立封装在模块化样式文件中，后续可由 AI 一键清理未使用的主题代码。
+      </p>
+      <div className="theme-library-grid">
+        {THEMES.map((item) => {
+          const active = theme === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={"theme-library-card" + (active ? " active" : "")}
+              aria-pressed={active}
+              onClick={() => onChange(item.id)}
+            >
+              <span
+                className={`theme-library-preview preview-${item.id}`}
+                aria-hidden="true"
+              >
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="theme-library-copy">
+                <span className="theme-card-head">
+                  <strong>{item.name}</strong>
+                  <span className="theme-badge">{item.badge}</span>
+                </span>
+                <small>{item.description}</small>
+                <code className="theme-file-hint">
+                  {item.file} · {item.removable ? "可独立清理" : "默认内置"}
+                </code>
+              </span>
+              {active && <Check size={16} />}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function SettingsForm({
   initial,
   busy,
@@ -2494,12 +2589,16 @@ function SettingsForm({
   onTab,
   onSave,
   onImported,
+  theme,
+  onThemeChange,
 }: {
   onImported: () => void;
   initial: Settings;
   busy: boolean;
   tab: SettingsTab;
   onTab: (tab: SettingsTab) => void;
+  theme: string;
+  onThemeChange: (theme: string) => void;
   onSave: (
     s: Settings,
     apiKey: string,
@@ -2812,40 +2911,72 @@ function SettingsForm({
               </section>
             )}
             {tab === "operation" && (
-              <section className="settings-section">
-                <h2>
-                  <SlidersHorizontal size={19} /> 操作设置
-                </h2>
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={s.auto_import_analysis}
-                    onChange={(e) =>
-                      setS({
-                        ...s,
-                        auto_import_analysis: e.target.checked,
-                      })
-                    }
-                  />
-                  AI 分析完成后直接填入今日工作清单
-                </label>
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={s.auto_apply_allocation}
-                    onChange={(e) =>
-                      setS({
-                        ...s,
-                        auto_apply_allocation: e.target.checked,
-                      })
-                    }
-                  />
-                  AI 分配工时后直接应用到工作项
-                </label>
-                <p className="muted">
-                  关闭后先生成工时预览，在「今日工作清单」右侧确认后再应用。
-                </p>
-              </section>
+              <>
+                <section className="settings-section">
+                  <h2>
+                    <SlidersHorizontal size={19} /> 操作设置
+                  </h2>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={s.auto_import_analysis}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          auto_import_analysis: e.target.checked,
+                        })
+                      }
+                    />
+                    AI 分析完成后直接填入今日工作清单
+                  </label>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={s.auto_apply_allocation}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          auto_apply_allocation: e.target.checked,
+                        })
+                      }
+                    />
+                    AI 分配工时后直接应用到工作项
+                  </label>
+                  <p className="muted">
+                    关闭后先生成工时预览，在「今日工作清单」右侧确认后再应用。
+                  </p>
+                  <label>
+                    任务项详细描述（Details）
+                    <select
+                      value={s.task_details_mode ?? "standard"}
+                      onChange={(e) =>
+                        setS({
+                          ...s,
+                          task_details_mode: e.target.value as
+                            | "standard"
+                            | "concise"
+                            | "none",
+                        })
+                      }
+                    >
+                      <option value="standard">标准（完整描述）</option>
+                      <option value="concise">精简（一句话，40 字以内）</option>
+                      <option value="none">不生成（仅保留标题）</option>
+                    </select>
+                  </label>
+                  <p className="muted">
+                    {s.task_details_mode === "none"
+                      ? "AI 只生成任务标题，任务的详细描述保持为空。"
+                      : s.task_details_mode === "concise"
+                        ? "AI 生成的详细描述会精简为一句核心改动与结果，控制在 40 字以内。"
+                        : "AI 按完整格式生成任务的详细描述。"}
+                  </p>
+                </section>
+                <ThemeLibrarySection
+                  theme={theme}
+                  onChange={onThemeChange}
+                />
+              </>
             )}
             {tab === "workflow" && (
               <>

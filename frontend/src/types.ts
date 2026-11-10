@@ -225,6 +225,7 @@ export type Settings = {
   ccswitch_config_path: string;
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;
+  task_details_mode?: "standard" | "concise" | "none";
   analysis_sources: string[];
   agent_prompts: Record<string, string>;
   title_examples: string[];
@@ -336,4 +337,33 @@ export type ConversationOverview = {
       uncertain_user_messages: number;
     };
   };
+};
+
+export type GiteeRemoteIssue = {
+  issue_id: number | string;
+  title: string;
+  description?: string;
+  state: string;
+  program_id?: number | null;
+  program_name?: string;
+  duration?: number;
+  hours?: number;
+  issue_date?: string;
+  created_at?: string;
+  updated_at?: string;
+  url?: string;
+  linked_task_id?: string;
+};
+
+export type GiteeVerifyItem = {
+  task_id: string;
+  title?: string;
+  issue_id: string;
+  status: string;
+  verified: boolean;
+  remote_title?: string;
+  remote_state?: string;
+  remote_duration?: number;
+  url?: string;
+  verify_error?: string;
 };
