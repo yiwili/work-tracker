@@ -3,14 +3,16 @@ import json
 from pathlib import Path
 import re
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db, model_provider
 from .collectors import stable
-from .git_tools import excluded
+from .git_tools import _as_date, excluded
 from .models import CONVERSATION_SOURCES, SOURCE_FAMILIES
 from .privacy import redact
 
@@ -65,9 +67,14 @@ def is_source_detected(source, settings, conn=None, rows=None):
     return False
 
 
-def overview(conn, day, settings, end_day=None):
+def overview(conn, day, settings, end_day=None, report_day=None):
     from .service import visible_events
-    all_rows = [e for e in visible_events(conn, day, settings, end_day=end_day) if not excluded(e['cwd'], settings)]
+    s_date = _as_date(day)
+    e_date = _as_date(end_day) if end_day is not None else s_date
+    if e_date < s_date:
+        s_date, e_date = e_date, s_date
+    target_day = str(report_day or day)
+    all_rows = [e for e in visible_events(conn, s_date, settings, end_day=e_date) if not excluded(e['cwd'], settings)]
     sessions = {}
     for e in all_rows:
         if e['source'] == 'git':
@@ -93,14 +100,46 @@ def overview(conn, day, settings, end_day=None):
                              'user_messages': counts['user_prompt'], 'assistant_messages': counts['assistant_message'], 'events': len(items)})
     detected_sources = {s['source'] for s in source_stats if s['detected']}
     selected = [e for e in all_rows if e['source'] in selected_names and e['source'] in detected_sources]
-    result = {'date': str(day), 'sources': source_stats,
+
+    tz = ZoneInfo(settings.timezone)
+    by_day_selected = defaultdict(list)
+    by_day_all = defaultdict(list)
+    for e in all_rows:
+        try:
+            ev_day = str(datetime.fromisoformat(e['occurred_at'].replace('Z', '+00:00')).astimezone(tz).date())
+        except Exception:
+            ev_day = str(e['occurred_at'])[:10]
+        by_day_all[ev_day].append(e)
+        if e['source'] in selected_names and e['source'] in detected_sources:
+            by_day_selected[ev_day].append(e)
+
+    daily_counts = []
+    curr = s_date
+    step_count = 0
+    while curr <= e_date and step_count < 90:
+        d_str = str(curr)
+        d_sel = by_day_selected.get(d_str, [])
+        d_all = by_day_all.get(d_str, [])
+        daily_counts.append({
+            'date': d_str,
+            'sessions': len({(e['source'], e['session_id']) for e in d_sel if e['source'] != 'git'}),
+            'user_messages': sum(e['kind'] == 'user_prompt' for e in d_sel if e['source'] != 'git'),
+            'assistant_messages': sum(e['kind'] == 'assistant_message' for e in d_sel if e['source'] != 'git'),
+            'git_events': sum(e['source'] == 'git' for e in d_all),
+            'events': len(d_sel),
+        })
+        curr += timedelta(days=1)
+        step_count += 1
+
+    result = {'date': target_day, 'start_date': str(s_date), 'end_date': str(e_date),
+              'daily_counts': daily_counts, 'sources': source_stats,
               'sessions': [{**value, 'projects': sorted(value['projects'])} for value in sessions.values()],
               'session_count': len({(e['source'], e['session_id']) for e in selected if e['source'] != 'git'}),
               'user_messages': sum(e['kind'] == 'user_prompt' for e in selected),
               'assistant_messages': sum(e['kind'] == 'assistant_message' for e in selected),
               'event_count': len(selected),
               'selected_sources': [s for s in settings.analysis_sources if s in detected_sources]}
-    snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == str(day))).scalar_one_or_none()
+    snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == target_day)).scalar_one_or_none()
     result['analysis'] = snapshot
     for session in result['sessions']:
         session_events=[e for e in all_rows if e['source']==session['source'] and e['session_id']==session['id']]
@@ -248,7 +287,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     s_day = start_day or day
     e_day = end_day or day
     rows = day_rows(conn, s_day, settings, end_day=e_day)
-    summary = overview(conn, s_day, settings, end_day=e_day)
+    summary = overview(conn, s_day, settings, end_day=e_day, report_day=day)
     if not settings.llm_enabled:
         return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
     if not any(e['kind'] in ('user_prompt', 'assistant_message') for e in rows):
@@ -375,7 +414,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         invalidate(conn, day)
     return {'created': len(imported), 'updated': 0, 'archived': archived,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day), 'merge_suggestions': []}
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=day), 'merge_suggestions': []}
 
 
 def import_pending(conn, day, selections):

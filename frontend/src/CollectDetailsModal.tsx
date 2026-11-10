@@ -22,11 +22,15 @@ const sourceNames: Record<string, string> = {
 
 export function CollectDetailsModal({
   day,
+  startDate,
+  endDate,
   timezone,
   onClose,
   onAdded,
 }: {
   day: string;
+  startDate?: string;
+  endDate?: string;
   timezone: string;
   onClose: () => void;
   onAdded: (created: number) => Promise<void> | void;
@@ -40,10 +44,17 @@ export function CollectDetailsModal({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  const sDate = startDate || day;
+  const eDate = endDate || day;
+  const isRange = sDate !== eDate || sDate !== day;
+
   const load = async () => {
+    const q = new URLSearchParams({ date: day });
+    if (startDate) q.set("start_date", startDate);
+    if (endDate) q.set("end_date", endDate);
     const [e, o, t] = await Promise.all([
-      api<WorkEvent[]>("/events?date=" + day),
-      api<ConversationOverview>("/conversations?date=" + day),
+      api<WorkEvent[]>("/events?" + q.toString()),
+      api<ConversationOverview>("/conversations?" + q.toString()),
       api<Task[]>("/tasks?date=" + day),
     ]);
     setEvents(e);
@@ -58,9 +69,9 @@ export function CollectDetailsModal({
     load()
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
-    // The modal is tied to one date for its lifetime.
+    // The modal is tied to its date range for its lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [day]);
+  }, [day, startDate, endDate]);
 
   const gitEvents = events.filter((e) => e.source === "git").reverse();
   const gitAdded = new Set(
@@ -77,7 +88,12 @@ export function CollectDetailsModal({
         created: number;
         skipped: number;
         task_ids: string[];
-      }>("/tasks/from-events", "POST", { date: day, event_ids: selected });
+      }>("/tasks/from-events", "POST", {
+        date: day,
+        event_ids: selected,
+        start_date: sDate,
+        end_date: eDate,
+      });
       await load();
       await onAdded(result.created);
       const pieces = [];
@@ -102,7 +118,11 @@ export function CollectDetailsModal({
       >
         <div className="modal-head">
           <div>
-            <h2>{day} 采集详情</h2>
+            <h2>
+              {isRange
+                ? `${sDate} ~ ${eDate} 跨天采集详情（归属至 ${day}）`
+                : `${day} 采集详情`}
+            </h2>
           </div>
           <button aria-label="关闭采集详情" onClick={onClose}>
             <X size={20} />
@@ -176,7 +196,9 @@ export function CollectDetailsModal({
               </div>
               {gitEvents.length === 0 ? (
                 <p className="muted">
-                  当天没有采集到 Git 提交。可在系统设置中配置 Git 仓库后重新采集。
+                  {isRange
+                    ? "所选跨天区间没有采集到 Git 提交。可点击「采集跨天数据」或在系统设置中配置 Git 仓库。"
+                    : "当天没有采集到 Git 提交。可在系统设置中配置 Git 仓库后重新采集。"}
                 </p>
               ) : (
                 <div className="collect-git-list">
@@ -206,14 +228,25 @@ export function CollectDetailsModal({
                           <strong>{event.summary}</strong>
                           {changes && <p>{changes}</p>}
                           <small>
-                            {new Date(event.occurred_at).toLocaleTimeString(
-                              "zh-CN",
-                              {
-                                timeZone: timezone,
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              },
-                            )}{" "}
+                            {isRange
+                              ? new Date(event.occurred_at).toLocaleString(
+                                  "zh-CN",
+                                  {
+                                    timeZone: timezone,
+                                    month: "2-digit",
+                                    day: "2-digit",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )
+                              : new Date(event.occurred_at).toLocaleTimeString(
+                                  "zh-CN",
+                                  {
+                                    timeZone: timezone,
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )}{" "}
                             · {event.project}
                             {sha && ` · ${sha.slice(0, 8)}`}
                           </small>

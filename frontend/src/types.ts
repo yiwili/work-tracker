@@ -260,11 +260,23 @@ export type PendingTask = {
   previously_deleted?: boolean;
 };
 
+export type DailyCollectionCount = {
+  date: string;
+  sessions: number;
+  user_messages: number;
+  assistant_messages: number;
+  git_events: number;
+  events: number;
+};
+
 export type ConversationOverview = {
   running?: boolean;
   timing: Timing;
   work_timing: Timing | null;
   date: string;
+  start_date?: string;
+  end_date?: string;
+  daily_counts?: DailyCollectionCount[];
   session_count: number;
   user_messages: number;
   assistant_messages: number;

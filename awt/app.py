@@ -190,9 +190,9 @@ def create_app(engine=None):
                     'llm_enabled': config.llm_enabled, 'timezone': config.timezone}
 
     @app.get('/api/conversations')
-    def conversations(date: date):
+    def conversations(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:
-            value = daily_analysis.overview(conn, date, service.get_settings(conn))
+            value = daily_analysis.overview(conn, start_date or date, service.get_settings(conn), end_day=end_date or date, report_day=date)
             value['running'] = bool(analysis_locks.get(date) and analysis_locks[date].locked())
             return value
 
@@ -506,11 +506,11 @@ def create_app(engine=None):
             lock.release()
 
     @app.post('/api/collect')
-    def collect(date: date):
+    def collect(date: date, start_date: date | None = None, end_date: date | None = None):
         state = collect_states[str(date)] = {"running": True, "source": "", "files_done": 0, "files_total": 0, "new_events": 0}
         try:
             with transaction() as conn:
-                return service.collect(conn, date, state.update)
+                return service.collect(conn, date, state.update, start_day=start_date, end_day=end_date)
         finally:
             state["running"] = False
 
@@ -571,7 +571,7 @@ def create_app(engine=None):
     @app.post('/api/tasks/from-events')
     def tasks_from_events(payload: TaskFromEventsInput):
         with transaction() as conn:
-            return service.tasks_from_events(conn, payload.date, payload.event_ids)
+            return service.tasks_from_events(conn, payload.date, payload.event_ids, start_day=payload.start_date, end_day=payload.end_date)
 
     @app.get('/api/events')
     def events(date: date, start_date: date | None = None, end_date: date | None = None):

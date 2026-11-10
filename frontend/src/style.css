@@ -7403,3 +7403,286 @@ code {
   cursor: pointer;
 }
 
+/* =========================================================
+   Multi-Day Collection & Consolidation Workbench
+   ========================================================= */
+.source-summary-pill.multiday-active-pill {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  font-weight: 600;
+}
+
+.multi-day-workbench {
+  margin: 12px 0 18px 0;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.65) 0%, rgba(255, 255, 255, 0.92) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.multi-day-workbench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.multi-day-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--apple-text, #111827);
+}
+
+.multi-day-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+.multi-day-target-badge {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.multi-day-meta {
+  font-size: 12px;
+  color: var(--apple-text-secondary, #6b7280);
+}
+
+.multi-day-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 9px;
+}
+
+.multi-day-date-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.multi-day-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+  font-weight: 500;
+}
+
+.multi-day-field input[type="date"],
+.multi-day-hours-input {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  font-size: 13px;
+  color: #111827;
+}
+
+.multi-day-hours-input {
+  width: 68px;
+}
+
+.multi-day-date-sep {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.multi-day-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-pill:hover:not(:disabled) {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.preset-pill.active {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.3);
+}
+
+.multi-day-hours-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.multi-day-reset-hours {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: transparent;
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  cursor: pointer;
+}
+
+.multi-day-status-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.multi-day-status-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4b5563;
+}
+
+.multi-day-day-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-height: 88px;
+  overflow-y: auto;
+}
+
+.day-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid transparent;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.day-status-pill .day-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #9ca3af;
+}
+
+.day-status-pill.ready {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #065f46;
+}
+
+.day-status-pill.ready .day-pill-dot {
+  background: #10b981;
+}
+
+.day-status-pill.git-only {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #1e40af;
+}
+
+.day-status-pill.git-only .day-pill-dot {
+  background: #3b82f6;
+}
+
+.day-status-pill.empty {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #92400e;
+}
+
+.day-status-pill.empty .day-pill-dot {
+  background: #f59e0b;
+}
+
+.multi-day-empty-hint {
+  font-size: 12px;
+  color: #b45309;
+}
+
+.multi-day-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(59, 130, 246, 0.14);
+}
+
+.multi-day-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.multi-day-collect-btn {
+  border-color: rgba(37, 99, 235, 0.35) !important;
+  color: #1d4ed8 !important;
+  background: #ffffff !important;
+}
+
+.multi-day-collect-btn:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.06) !important;
+}
+
+.multi-day-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.multi-day-autocollect-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+
+

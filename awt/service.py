@@ -61,11 +61,7 @@ def invalidate(conn, day):
 
 
 def event_query(day, settings, end_day=None):
-    start, _ = day_bounds(day, settings.timezone)
-    if end_day and str(end_day) != str(day):
-        _, end = day_bounds(end_day, settings.timezone)
-    else:
-        _, end = day_bounds(day, settings.timezone)
+    start, end = day_bounds(day, settings.timezone, end_day=end_day)
     return select(db.events).where(and_(db.events.c.occurred_at >= start, db.events.c.occurred_at < end)).order_by(db.events.c.occurred_at, db.events.c.id)
 
 
@@ -121,8 +117,10 @@ def attribute_events(item, settings, cache=None, prefixes=None):
     return list(attributed.values())
 
 
-def collect(conn, day, progress=None):
+def collect(conn, day, progress=None, start_day=None, end_day=None):
     settings = get_settings(conn)
+    s_day = start_day or day
+    e_day = end_day or day
     prefixes = exclusion_prefixes(settings)
     excluded_cache = {}
 
@@ -206,7 +204,7 @@ def collect(conn, day, progress=None):
         health.append({"source": adapter.name, **state})
         added += count
     # Include repositories found in past scans, not just newly appended sessions.
-    for row in conn.execute(event_query(day, settings)).mappings():
+    for row in conn.execute(event_query(s_day, settings, end_day=e_day)).mappings():
         if row['cwd'] and row['cwd'] not in project_cache and not is_excluded(row['cwd']):
             project_cache[row['cwd']] = resolve_project(row['cwd'], settings, resolution_cache)
     for _, repo in project_cache.values():
@@ -225,7 +223,7 @@ def collect(conn, day, progress=None):
         if is_excluded(repo['root']):
             continue
         upsert(conn, db.repositories, repo, "id")
-        for commit in collect_commits(repo, day, settings,warnings):
+        for commit in collect_commits(repo, s_day, settings, warnings, end_day=e_day):
             upsert(conn, db.commits, {k:v for k,v in commit.items() if k not in ('author_name','author_email')}, "id")
             values = {"id": stable("git", commit['id']), "source": "git", "session_id": repo['id'],
                       "occurred_at": commit['committed_at'], "kind": "git_commit", "summary": commit['subject'],
@@ -235,7 +233,15 @@ def collect(conn, day, progress=None):
                                    'author_name':commit['author_name'],'author_email':commit['author_email']}}
             git_added += conn.execute(sqlite_insert(db.events).values(**values).on_conflict_do_nothing()).rowcount
             conn.execute(update(db.events).where(db.events.c.id==values['id']).values(metadata=values['metadata']))
-    return {"new_events": added + git_added, "git_events": git_added, "sources": health, "warnings": warnings[:60], "date": str(day)}
+    return {
+        "new_events": added + git_added,
+        "git_events": git_added,
+        "sources": health,
+        "warnings": warnings[:60],
+        "date": str(day),
+        "start_date": str(s_day),
+        "end_date": str(e_day),
+    }
 
 
 def category(title):
@@ -348,12 +354,15 @@ def save_task(conn, payload: TaskInput, task_id=None):
     return task_id
 
 
-def tasks_from_events(conn, day, event_ids):
+def tasks_from_events(conn, day, event_ids, start_day=None, end_day=None):
     settings = get_settings(conn)
     ids = list(dict.fromkeys(event_ids))
+    s_day = start_day or day
+    e_day = end_day or day
+    bounds_start, bounds_end = day_bounds(s_day, settings.timezone, end_day=e_day)
     rows = {row['id']: dict(row) for row in conn.execute(
-        select(db.events).where(and_(db.events.c.id.in_(ids), db.events.c.occurred_at >= day_bounds(day, settings.timezone)[0],
-                                     db.events.c.occurred_at < day_bounds(day, settings.timezone)[1]))).mappings()}
+        select(db.events).where(and_(db.events.c.id.in_(ids), db.events.c.occurred_at >= bounds_start,
+                                     db.events.c.occurred_at < bounds_end))).mappings()}
     if set(rows) != set(ids):
         raise ValueError('部分采集记录不属于当天或已不存在，请刷新采集详情')
     linked = set(conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.event_id.in_(ids))).scalars())
@@ -450,7 +459,10 @@ def report(conn, day):
         warnings.append(suggestion['reason'])
     from .daily_analysis import overview
     conversations = overview(conn, day, settings)
-    timeline=visible_events(conn,day,settings)
+    analysis_snap = conversations.get('analysis') or {}
+    s_day = analysis_snap.get('start_date') or day
+    e_day = analysis_snap.get('end_date') or day
+    timeline = visible_events(conn, s_day, settings, end_day=e_day)
     from .activity_time import profile
     for task in tasks:
         task['timing']=profile(task['evidence'],timeline,settings.activity_gap_minutes)

@@ -191,6 +191,15 @@ function App() {
   const [collecting, setCollecting] = useState(false),
     [analyzing, setAnalyzing] = useState(false),
     [collectDay, setCollectDay] = useState<string | null>(null),
+    [collectRange, setCollectRange] = useState<{
+      startDate?: string;
+      endDate?: string;
+    } | null>(null),
+    [multiDayState, setMultiDayState] = useState<{
+      enabled: boolean;
+      startDate: string;
+      endDate: string;
+    }>({ enabled: false, startDate: "", endDate: "" }),
     [analysisView, setAnalysisView] = useState<{
       day: string;
       pending: PendingTask[];
@@ -289,13 +298,24 @@ function App() {
       setBusy("");
     }
   };
-  const collect = async () => {
-    if (collecting || analyzing) return;
+  const collect = async (options?: {
+    startDate?: string;
+    endDate?: string;
+    silentToast?: boolean;
+  }): Promise<boolean> => {
+    if (collecting || analyzing) return false;
     const jobDay = day;
+    const sDate = options?.startDate || jobDay;
+    const eDate = options?.endDate || jobDay;
+    const isRange = sDate !== eDate || sDate !== jobDay;
     setCollecting(true);
     setError("");
     setNotice("");
-    setCollectProgress("正在读取本地日志，首次采集会扫描全部历史，请稍候");
+    setCollectProgress(
+      isRange
+        ? `正在读取 ${sDate} 至 ${eDate} 的本地日志与 Git 提交，请稍候…`
+        : "正在读取本地日志，首次采集会扫描全部历史，请稍候",
+    );
     const timer = window.setInterval(() => {
       api<{
         running: boolean;
@@ -316,6 +336,9 @@ function App() {
         .catch(() => {});
     }, 800);
     try {
+      const q = new URLSearchParams({ date: jobDay });
+      if (options?.startDate) q.set("start_date", options.startDate);
+      if (options?.endDate) q.set("end_date", options.endDate);
       const c = await api<{
         new_events: number;
         git_events?: number;
@@ -326,35 +349,42 @@ function App() {
           new_events: number;
         }[];
         warnings: string[];
-      }>("/collect?date=" + jobDay, "POST", {});
+      }>("/collect?" + q.toString(), "POST", {});
       await refresh(jobDay);
-      const git = c.git_events ?? 0;
-      const chat = Math.max(0, c.new_events - git);
-      const pieces = [
-        c.new_events === 0
-          ? "这一天已经采集过了，没有新的活动记录"
-          : `新增 ${c.new_events} 条活动记录`,
-        `Git 提交 ${git} 条 / 对话 ${chat} 条`,
-      ];
-      // 采集路径不存在时对话永远是 0，直接说清楚，别让人以为点漏了。
-      const unreadable = (c.sources || []).filter((s) => !s.files).length;
-      if (unreadable && chat === 0)
-        pieces.push(
-          `${unreadable} 个对话目录没读到文件，请到系统设置检查采集路径`,
-        );
-      pieces.push(...c.warnings);
-      if (c.new_events > 0) pieces.push("可继续 AI 分析归纳实际工作任务");
-      setToast({
-        title: "采集完成",
-        message: pieces.join("；") + "。",
-        actionLabel: "查看采集详情",
-        onAction: () => {
-          setToast(null);
-          setCollectDay(jobDay);
-        },
-      });
+      if (!options?.silentToast) {
+        const git = c.git_events ?? 0;
+        const chat = Math.max(0, c.new_events - git);
+        const pieces = [
+          c.new_events === 0
+            ? isRange
+              ? `${sDate} ~ ${eDate} 区间已采集过，没有新增活动记录`
+              : "这一天已经采集过了，没有新的活动记录"
+            : `新增 ${c.new_events} 条活动记录`,
+          `Git 提交 ${git} 条 / 对话 ${chat} 条`,
+        ];
+        // 采集路径不存在时对话永远是 0，直接说清楚，别让人以为点漏了。
+        const unreadable = (c.sources || []).filter((s) => !s.files).length;
+        if (unreadable && chat === 0)
+          pieces.push(
+            `${unreadable} 个对话目录没读到文件，请到系统设置检查采集路径`,
+          );
+        pieces.push(...c.warnings);
+        if (c.new_events > 0) pieces.push("可继续 AI 分析归纳实际工作任务");
+        setToast({
+          title: isRange ? `跨天采集完成（${sDate.slice(5)} ~ ${eDate.slice(5)}）` : "采集完成",
+          message: pieces.join("；") + "。",
+          actionLabel: isRange ? "查看跨天详情" : "查看采集详情",
+          onAction: () => {
+            setToast(null);
+            setCollectRange(isRange ? { startDate: sDate, endDate: eDate } : null);
+            setCollectDay(jobDay);
+          },
+        });
+      }
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       window.clearInterval(timer);
       setCollectProgress("");
@@ -365,9 +395,18 @@ function App() {
     startDate?: string;
     endDate?: string;
     targetMinutes?: number;
+    autoCollect?: boolean;
   }) => {
     if (analyzing || collecting) return;
     const jobDay = day;
+    if (options?.autoCollect) {
+      const ok = await collect({
+        startDate: options.startDate,
+        endDate: options.endDate,
+        silentToast: true,
+      });
+      if (!ok) return;
+    }
     setAnalyzing(true);
     setError("");
     setNotice("");
@@ -670,24 +709,55 @@ function App() {
                 <button
                   className="outline"
                   disabled={!report}
-                  onClick={() => setCollectDay(day)}
-                  title="查看当天已采集的对话会话与 Git 提交；可勾选 Git 提交直接添加为工作项"
+                  onClick={() => {
+                    if (page === "daily" && multiDayState.enabled) {
+                      setCollectRange({
+                        startDate: multiDayState.startDate,
+                        endDate: multiDayState.endDate,
+                      });
+                    } else {
+                      setCollectRange(null);
+                    }
+                    setCollectDay(day);
+                  }}
+                  title={
+                    page === "daily" && multiDayState.enabled
+                      ? `查看 ${multiDayState.startDate} ~ ${multiDayState.endDate} 跨天已采集的对话会话与 Git 提交`
+                      : "查看当天已采集的对话会话与 Git 提交；可勾选 Git 提交直接添加为工作项"
+                  }
                 >
                   <FolderGit2 size={16} />
-                  查看采集详情
+                  {page === "daily" && multiDayState.enabled
+                    ? "查看跨天详情"
+                    : "查看采集详情"}
                 </button>
                 <button
                   className="primary"
                   disabled={collecting || analyzing}
-                  onClick={collect}
-                  title="读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
+                  onClick={() =>
+                    page === "daily" && multiDayState.enabled
+                      ? void collect({
+                          startDate: multiDayState.startDate,
+                          endDate: multiDayState.endDate,
+                        })
+                      : void collect()
+                  }
+                  title={
+                    page === "daily" && multiDayState.enabled
+                      ? `读取本地对话日志，并读取 ${multiDayState.startDate} 至 ${multiDayState.endDate} 期间仓库里的本人 Git 提交`
+                      : "读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
+                  }
                 >
                   {collecting ? (
                     <LoaderCircle className="spin" size={17} />
                   ) : (
                     <ScanLine size={17} />
                   )}
-                  {collecting ? "正在采集…" : "采集当天数据"}
+                  {collecting
+                    ? "正在采集…"
+                    : page === "daily" && multiDayState.enabled
+                      ? `采集跨天数据 (${multiDayState.startDate.slice(5)}~${multiDayState.endDate.slice(5)})`
+                      : "采集当天数据"}
                 </button>
               </div>
             )}
@@ -886,12 +956,19 @@ function App() {
                   settings={settings}
                   currentDay={day}
                   busy={collecting || analyzing}
+                  collecting={collecting}
                   analyzing={analyzing}
                   pendingCount={
                     report.conversations.analysis?.pending_tasks?.length || 0
                   }
                   legacyCount={report.legacy_count}
                   onAnalyze={analyzeDay}
+                  onCollect={collect}
+                  onOpenCollectDetails={(range) => {
+                    setCollectRange(range || null);
+                    setCollectDay(day);
+                  }}
+                  onMultiDayChange={setMultiDayState}
                   onSettings={() => setPage("settings")}
                   onViewPending={openAnalysisResults}
                   onSources={async (values) => {
@@ -1668,8 +1745,13 @@ function App() {
       {collectDay && (
         <CollectDetailsModal
           day={collectDay}
+          startDate={collectRange?.startDate}
+          endDate={collectRange?.endDate}
           timezone={settings?.timezone || "Asia/Shanghai"}
-          onClose={() => setCollectDay(null)}
+          onClose={() => {
+            setCollectDay(null);
+            setCollectRange(null);
+          }}
           onAdded={async (created) => {
             await refresh(collectDay);
             if (created) setNotice(`已从 Git 提交添加 ${created} 个工作项。`);

@@ -133,3 +133,111 @@ def test_unified_gitee_token_and_history_sync(test_client, monkeypatch):
     sync_data = sync_res.json()
     assert sync_data['records'] == 2
     assert '#88' in sync_data['file']
+
+
+def test_multiday_collect_and_conversations_overview_and_from_events(test_client, monkeypatch, tmp_path):
+    client, engine = test_client
+
+    repo_dir = tmp_path / 'sample_repo'
+    repo_dir.mkdir()
+    s = client.get('/api/settings').json()
+    s['git_roots'] = [str(repo_dir)]
+    s['git_author'] = {'name': 'Dev User', 'email': 'dev@example.com'}
+    client.put('/api/settings', json=s).raise_for_status()
+
+    monkeypatch.setattr(
+        service,
+        'resolve_project',
+        lambda cwd, settings, cache=None: (
+            'sample_repo',
+            {
+                'id': 'repo-sample',
+                'root': str(repo_dir),
+                'project': 'sample_repo',
+                'remote': '',
+                'branch': 'main',
+                'current_changes': '',
+                'observed_at': '2026-11-05T10:00:00+00:00',
+            },
+        ),
+    )
+
+    collected_ranges = []
+
+    def fake_collect_commits(repo, day, settings, warnings=None, end_day=None):
+        collected_ranges.append((str(day), str(end_day)))
+        return [
+            {
+                'id': 'commit-day3',
+                'repo_id': repo['id'],
+                'sha': 'a' * 40,
+                'authored_at': '2026-11-03T06:00:00+00:00',
+                'committed_at': '2026-11-03T06:00:00+00:00',
+                'subject': 'feat: 11月3日提交的功能',
+                'author_name': 'Dev User',
+                'author_email': 'dev@example.com',
+                'changes': '1\t0\ta.py',
+            },
+            {
+                'id': 'commit-day5',
+                'repo_id': repo['id'],
+                'sha': 'b' * 40,
+                'authored_at': '2026-11-05T07:00:00+00:00',
+                'committed_at': '2026-11-05T07:00:00+00:00',
+                'subject': 'fix: 11月5日修复的问题',
+                'author_name': 'Dev User',
+                'author_email': 'dev@example.com',
+                'changes': '2\t1\tb.py',
+            },
+        ]
+
+    monkeypatch.setattr(service, 'collect_commits', fake_collect_commits)
+
+    # Also insert a conversation event on 2026-11-03
+    with engine.begin() as conn:
+        conn.execute(insert(db.events).values(
+            id='chat-day3', source='codex', session_id='s-3',
+            occurred_at='2026-11-03T03:00:00+00:00',
+            kind='user_prompt', summary='排查11月3日的问题',
+            cwd=str(repo_dir), project='sample_repo', raw_ref='ref3', metadata={}
+        ))
+
+    # 1. Multi-day collect across 2026-11-03 ~ 2026-11-05
+    col_res = client.post('/api/collect?date=2026-11-05&start_date=2026-11-03&end_date=2026-11-05', json={})
+    col_res.raise_for_status()
+    col_data = col_res.json()
+    assert col_data['start_date'] == '2026-11-03'
+    assert col_data['end_date'] == '2026-11-05'
+    assert col_data['git_events'] == 2
+    assert collected_ranges == [('2026-11-03', '2026-11-05')]
+
+    # 2. Multi-day conversations overview returns daily_counts for each day in the range
+    conv_res = client.get('/api/conversations?date=2026-11-05&start_date=2026-11-03&end_date=2026-11-05')
+    conv_res.raise_for_status()
+    conv = conv_res.json()
+    assert conv['date'] == '2026-11-05'
+    assert conv['start_date'] == '2026-11-03'
+    assert conv['end_date'] == '2026-11-05'
+    assert conv['user_messages'] == 1
+    daily_map = {d['date']: d for d in conv['daily_counts']}
+    assert set(daily_map) == {'2026-11-03', '2026-11-04', '2026-11-05'}
+    assert daily_map['2026-11-03']['user_messages'] == 1
+    assert daily_map['2026-11-03']['git_events'] == 1
+    assert daily_map['2026-11-04']['user_messages'] == 0
+    assert daily_map['2026-11-04']['git_events'] == 0
+    assert daily_map['2026-11-05']['git_events'] == 1
+
+    # 3. Adopting a multi-day Git commit from 2026-11-03 into 2026-11-05 tasks
+    ev_res = client.get('/api/events?date=2026-11-05&start_date=2026-11-03&end_date=2026-11-05').json()
+    git_evs = [e for e in ev_res if e['source'] == 'git']
+    assert len(git_evs) == 2
+
+    adopt_res = client.post('/api/tasks/from-events', json={
+        'date': '2026-11-05',
+        'start_date': '2026-11-03',
+        'end_date': '2026-11-05',
+        'event_ids': [git_evs[0]['id'], git_evs[1]['id']],
+    })
+    adopt_res.raise_for_status()
+    assert adopt_res.json()['created'] == 2
+

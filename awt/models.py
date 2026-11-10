@@ -434,6 +434,8 @@ class TaskPatch(BaseModel):
 class TaskFromEventsInput(BaseModel):
     date: Date
     event_ids: list[str] = Field(min_length=1, max_length=200)
+    start_date: Date | None = None
+    end_date: Date | None = None
 
 
 class AnalysisImportItem(BaseModel):

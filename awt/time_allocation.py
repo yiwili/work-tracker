@@ -120,7 +120,10 @@ def estimate(conn, day, request=None):
     if remaining and not selected:
         raise ValueError('已选工作项均带固定工时，请改选需要AI估算的工作项')
     analysis_progress.emit('开始估算工时，正在整理参与分配的工作项')
-    timeline=day_rows(conn,day,settings)
+    analysis_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==str(day))).scalar_one_or_none() or {}
+    s_day=analysis_snap.get('start_date') or day
+    e_day=analysis_snap.get('end_date') or day
+    timeline=day_rows(conn,s_day,settings,end_day=e_day)
     initial_hash=state_hash(tasks,settings,target_minutes)
     scope_hash=input_hash(timeline,settings)
     prepared=[]
@@ -157,7 +160,10 @@ def estimate(conn, day, request=None):
     analysis_progress.emit(f'工时估算完成：{len(eligible)} 个工作项参与分配，正在核对工作项是否变化')
     conn.commit();conn.exec_driver_sql('BEGIN IMMEDIATE')
     current_settings=get_settings(conn);current_tasks=list_tasks(conn,day)
-    if state_hash(current_tasks,current_settings,target_minutes)!=initial_hash or input_hash(day_rows(conn,day,current_settings),current_settings)!=scope_hash:
+    current_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==str(day))).scalar_one_or_none() or {}
+    c_s_day=current_snap.get('start_date') or day
+    c_e_day=current_snap.get('end_date') or day
+    if state_hash(current_tasks,current_settings,target_minutes)!=initial_hash or input_hash(day_rows(conn,c_s_day,current_settings,end_day=c_e_day),current_settings)!=scope_hash:
         raise ValueError('估算期间工作项、工时或对话范围发生变化，未覆盖人工修改；请重新估算')
     apply_now=settings.auto_apply_allocation
     added=[]

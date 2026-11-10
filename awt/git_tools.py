@@ -78,9 +78,19 @@ def resolve_project(cwd, settings, cache=None):
     return result
 
 
-def day_bounds(day, tz):
-    start = datetime.combine(day, time.min, ZoneInfo(tz))
-    end = datetime.combine(day + timedelta(days=1), time.min, ZoneInfo(tz))
+def _as_date(d):
+    if isinstance(d, str):
+        return datetime.strptime(d[:10], "%Y-%m-%d").date()
+    return d
+
+
+def day_bounds(day, tz, end_day=None):
+    s_day = _as_date(day)
+    e_day = _as_date(end_day) if end_day is not None else s_day
+    if e_day < s_day:
+        s_day, e_day = e_day, s_day
+    start = datetime.combine(s_day, time.min, ZoneInfo(tz))
+    end = datetime.combine(e_day + timedelta(days=1), time.min, ZoneInfo(tz))
     return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
 
 
@@ -254,8 +264,8 @@ def verify_author(roots, settings, limit=1000):
     return result
 
 
-def collect_commits(repo, day, settings, warnings=None):
-    start, end = day_bounds(day, settings.timezone)
+def collect_commits(repo, day, settings, warnings=None, end_day=None):
+    start, end = day_bounds(day, settings.timezone, end_day=end_day)
     author=selected_author(repo['root'],settings)
     if not(author.get('name') or author.get('email')):
         if warnings is not None:warnings.append(f"{repo['project']}：无法获取Git用户，已跳过提交采集；请在设置中选择或自定义用户")
@@ -279,5 +289,6 @@ def collect_commits(repo, day, settings, warnings=None):
                      "subject": redact(subject, settings.redact_patterns),'author_name':name,'author_email':email,
                      "changes": redact(git(repo["root"], "show", "--format=", "--numstat", sha), settings.redact_patterns)})
     if total and not rows and warnings is not None:
-        warnings.append(f"{repo['project']}：当天提交未匹配所选Git用户，请检查本地配置或自定义用户；未纳入其他人的提交")
+        scope_label = "所选日期范围" if end_day and str(end_day) != str(day) else "当天"
+        warnings.append(f"{repo['project']}：{scope_label}提交未匹配所选Git用户，请检查本地配置或自定义用户；未纳入其他人的提交")
     return rows

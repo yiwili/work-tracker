@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -8,8 +8,12 @@ import {
   Settings2,
   Sparkles,
   CalendarRange,
+  ScanLine,
+  FolderGit2,
+  RotateCcw,
 } from "lucide-react";
 import type { ConversationOverview, Settings } from "./types";
+import { api } from "./api";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
 import { AnalysisLog } from "./AnalysisLog";
@@ -18,6 +22,13 @@ export type AnalyzeOptions = {
   startDate?: string;
   endDate?: string;
   targetMinutes?: number;
+  autoCollect?: boolean;
+};
+
+export type CollectOptions = {
+  startDate?: string;
+  endDate?: string;
+  silentToast?: boolean;
 };
 
 const formatTokens = (value: number) => value.toLocaleString("zh-CN");
@@ -37,10 +48,14 @@ export function Conversations({
   settings,
   currentDay,
   busy,
+  collecting,
   analyzing,
   pendingCount,
   legacyCount,
   onAnalyze,
+  onCollect,
+  onOpenCollectDetails,
+  onMultiDayChange,
   onSettings,
   onSources,
   onView,
@@ -50,10 +65,14 @@ export function Conversations({
   settings: Settings;
   currentDay?: string;
   busy: boolean;
+  collecting?: boolean;
   analyzing: boolean;
   pendingCount: number;
   legacyCount: number;
   onAnalyze: (options?: AnalyzeOptions) => void;
+  onCollect?: (options?: CollectOptions) => Promise<boolean | void> | void;
+  onOpenCollectDetails?: (options?: { startDate?: string; endDate?: string }) => void;
+  onMultiDayChange?: (state: { enabled: boolean; startDate: string; endDate: string }) => void;
   onSettings: () => void;
   onSources: (sources: string[]) => void;
   onView: (source: string, session: string) => void;
@@ -69,6 +88,9 @@ export function Conversations({
   });
   const [endDate, setEndDate] = useState(effectiveDay);
   const [customHours, setCustomHours] = useState<number | null>(null);
+  const [autoCollectBeforeAnalyze, setAutoCollectBeforeAnalyze] = useState(true);
+  const [multiOverview, setMultiOverview] = useState<ConversationOverview | null>(null);
+  const [loadingRange, setLoadingRange] = useState(false);
 
   useEffect(() => {
     setEndDate(effectiveDay);
@@ -77,6 +99,60 @@ export function Conversations({
     setStartDate(d.toISOString().slice(0, 10));
     setCustomHours(null);
   }, [effectiveDay]);
+
+  useEffect(() => {
+    onMultiDayChange?.({
+      enabled: showMultiDay,
+      startDate,
+      endDate,
+    });
+  }, [showMultiDay, startDate, endDate, onMultiDayChange]);
+
+  const fetchRangeOverview = useCallback(async () => {
+    if (!showMultiDay) {
+      setMultiOverview(null);
+      return;
+    }
+    setLoadingRange(true);
+    try {
+      const q = new URLSearchParams({
+        date: effectiveDay,
+        start_date: startDate,
+        end_date: endDate,
+      });
+      const res = await api<ConversationOverview>("/conversations?" + q.toString());
+      setMultiOverview(res);
+    } catch {
+      // Fall back to single-day overview if range query fails
+    } finally {
+      setLoadingRange(false);
+    }
+  }, [showMultiDay, effectiveDay, startDate, endDate]);
+
+  useEffect(() => {
+    void fetchRangeOverview();
+  }, [fetchRangeOverview, overview, settings.analysis_sources]);
+
+  const applyPreset = (preset: "2d" | "3d" | "5d" | "week") => {
+    const base = new Date(effectiveDay + "T12:00:00");
+    setEndDate(effectiveDay);
+    setCustomHours(null);
+    if (preset === "2d") {
+      base.setDate(base.getDate() - 1);
+      setStartDate(base.toISOString().slice(0, 10));
+    } else if (preset === "3d") {
+      base.setDate(base.getDate() - 2);
+      setStartDate(base.toISOString().slice(0, 10));
+    } else if (preset === "5d") {
+      base.setDate(base.getDate() - 4);
+      setStartDate(base.toISOString().slice(0, 10));
+    } else if (preset === "week") {
+      const dayOfWeek = base.getDay(); // 0 is Sun, 1 is Mon
+      const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      base.setDate(base.getDate() - diffToMonday);
+      setStartDate(base.toISOString().slice(0, 10));
+    }
+  };
 
   const diffDays = Math.max(
     1,
@@ -89,13 +165,15 @@ export function Conversations({
   const defaultHours = diffDays * 8;
   const targetHours = customHours !== null ? customHours : defaultHours;
 
-  const messages = overview.user_messages + overview.assistant_messages;
-  const gitSource = overview.sources.find((s) => s.source === "git");
+  const activeOverview = showMultiDay && multiOverview ? multiOverview : overview;
+
+  const messages = activeOverview.user_messages + activeOverview.assistant_messages;
+  const gitSource = activeOverview.sources.find((s) => s.source === "git");
   const gitEvents = gitSource?.events ?? 0;
   const isGitChecked = settings.analysis_sources.includes("git");
 
   // 分离 AI Agent 对话来源与 Git 辅助证据来源
-  const agentSources = overview.sources.filter((s) => s.source !== "git");
+  const agentSources = activeOverview.sources.filter((s) => s.source !== "git");
   const detectedAgents = agentSources.filter((s) => s.detected ?? false);
   const undetectedAgents = agentSources.filter((s) => !(s.detected ?? false));
   const activeAgentCount = detectedAgents.filter((s) =>
@@ -110,6 +188,11 @@ export function Conversations({
   const noConversationSource = !settings.analysis_sources.some(
     (source) => source !== "git",
   );
+
+  const dailyCounts = activeOverview.daily_counts || [];
+  const emptyDaysCount = dailyCounts.filter(
+    (d) => d.user_messages + d.assistant_messages === 0 && d.git_events === 0,
+  ).length;
 
   const handleSelectAll = () => {
     const detectedKeys = detectedAgents.map((s) => s.source);
@@ -149,6 +232,11 @@ export function Conversations({
           <span className="source-summary-pill">
             {detectedAgents.length} 个 Agent 已连接 · {activeAgentCount} 个参与分析
           </span>
+          {showMultiDay && (
+            <span className="source-summary-pill multiday-active-pill">
+              跨天视图：{startDate.slice(5)} ~ {endDate.slice(5)}（共 {diffDays} 天）
+            </span>
+          )}
         </div>
         <div className="conversation-actions">
           {!settings.auto_import_analysis && (
@@ -166,10 +254,10 @@ export function Conversations({
             className={showMultiDay ? "primary" : "outline"}
             disabled={busy || overview.running || analyzing}
             onClick={() => setShowMultiDay(!showMultiDay)}
-            title="自选统计跨度，例如将4号5号两天（共16小时）合并统计到今天"
+            title="自选统计跨度，支持跨天一键采集并将多日工作合并统计到今天"
           >
             <CalendarRange size={15} style={{ marginRight: "4px" }} />
-            {showMultiDay ? "收起多天设置" : "多天合并分析"}
+            {showMultiDay ? "收起多天工作台" : "多天合并分析"}
           </button>
           {!showMultiDay && (
             <button
@@ -200,107 +288,255 @@ export function Conversations({
         </div>
       </div>
       {showMultiDay && (
-        <div
-          className="multi-day-banner"
-          style={{
-            margin: "12px 0 16px 0",
-            padding: "14px 16px",
-            background: "var(--card-bg, rgba(255, 255, 255, 0.05))",
-            border: "1px solid var(--accent, #3b82f6)",
-            borderRadius: "8px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
-              <Sparkles size={16} style={{ color: "var(--accent, #3b82f6)" }} />
-              多天合并统计与一次性提交
+        <div className="multi-day-workbench">
+          <div className="multi-day-workbench-head">
+            <div className="multi-day-title-group">
+              <span className="multi-day-icon-badge">
+                <CalendarRange size={15} />
+              </span>
+              <strong>多天合并采集与分析</strong>
+              <span className="multi-day-target-badge">
+                汇总归入 {effectiveDay} 清单
+              </span>
             </div>
-            <span style={{ fontSize: "12px", color: "var(--muted)" }}>
-              跨天范围：共 {diffDays} 天 · 建议总工时 {defaultHours} 小时
+            <span className="multi-day-meta">
+              跨度 {diffDays} 天 · 建议总工时 {defaultHours} 小时（{defaultHours * 60} 分钟）
             </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
-              起始日期：
-              <input
-                type="date"
-                value={startDate}
-                max={endDate}
+          <div className="multi-day-controls-row">
+            <div className="multi-day-date-group">
+              <label className="multi-day-field">
+                <span>起始日期</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  max={endDate}
+                  disabled={busy || analyzing}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setStartDate(e.target.value);
+                      setCustomHours(null);
+                    }
+                  }}
+                />
+              </label>
+              <span className="multi-day-date-sep">至</span>
+              <label className="multi-day-field">
+                <span>结束日期</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  min={startDate}
+                  disabled={busy || analyzing}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setEndDate(e.target.value);
+                      setCustomHours(null);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <div className="multi-day-presets" role="group" aria-label="快捷日期范围">
+              <button
+                type="button"
+                className={`preset-pill ${diffDays === 2 && endDate === effectiveDay ? "active" : ""}`}
                 disabled={busy || analyzing}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setCustomHours(null);
-                }}
-                style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
-              />
-            </label>
-            <span style={{ color: "var(--muted)" }}>至</span>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
-              结束日期：
-              <input
-                type="date"
-                value={endDate}
-                min={startDate}
+                onClick={() => applyPreset("2d")}
+              >
+                近 2 天
+              </button>
+              <button
+                type="button"
+                className={`preset-pill ${diffDays === 3 && endDate === effectiveDay ? "active" : ""}`}
                 disabled={busy || analyzing}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setCustomHours(null);
-                }}
-                style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
-              />
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px" }}>
-              目标工时（小时）：
-              <input
-                type="number"
-                min={1}
-                max={300}
-                value={targetHours}
+                onClick={() => applyPreset("3d")}
+              >
+                近 3 天
+              </button>
+              <button
+                type="button"
+                className={`preset-pill ${diffDays === 5 && endDate === effectiveDay ? "active" : ""}`}
                 disabled={busy || analyzing}
-                onChange={(e) => setCustomHours(Number(e.target.value))}
-                style={{ width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)" }}
-              />
-            </label>
+                onClick={() => applyPreset("5d")}
+              >
+                近 5 天
+              </button>
+              <button
+                type="button"
+                className="preset-pill"
+                disabled={busy || analyzing}
+                onClick={() => applyPreset("week")}
+              >
+                本周以来
+              </button>
+            </div>
+
+            <div className="multi-day-hours-group">
+              <label className="multi-day-field">
+                <span>合并目标工时 (h)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={300}
+                  value={targetHours}
+                  disabled={busy || analyzing}
+                  onChange={(e) => setCustomHours(Number(e.target.value))}
+                  className="multi-day-hours-input"
+                />
+              </label>
+              {customHours !== null && customHours !== defaultHours && (
+                <button
+                  type="button"
+                  className="multi-day-reset-hours"
+                  title={`恢复默认建议工时 (${defaultHours}h)`}
+                  onClick={() => setCustomHours(null)}
+                >
+                  <RotateCcw size={12} />
+                  重置 {defaultHours}h
+                </button>
+              )}
+            </div>
           </div>
 
-          <p style={{ margin: 0, fontSize: "13px", color: "var(--muted)", lineHeight: 1.5 }}>
-            💡 AI 将统计 <strong>{startDate}</strong> 至 <strong>{endDate}</strong>（共 {diffDays} 天）的所有 AI 对话与 Git 提交，归纳出的工作项将<strong>统一写入 {effectiveDay} 今日清单</strong>，并将本日目标工时设为 <strong>{targetHours} 小时（{targetHours * 60} 分钟）</strong>。
-          </p>
+          <div className="multi-day-status-strip">
+            <div className="multi-day-status-label">
+              <span>每日数据就绪状态：</span>
+              {loadingRange && <LoaderCircle className="spin" size={13} />}
+            </div>
+            <div className="multi-day-day-pills">
+              {dailyCounts.map((item) => {
+                const msgCount = item.user_messages + item.assistant_messages;
+                const hasChat = msgCount > 0;
+                const hasGit = item.git_events > 0;
+                const statusClass = hasChat
+                  ? "ready"
+                  : hasGit
+                    ? "git-only"
+                    : "empty";
+                return (
+                  <div
+                    key={item.date}
+                    className={`day-status-pill ${statusClass}`}
+                    title={
+                      hasChat || hasGit
+                        ? `${item.date}：${item.sessions} 个会话（${msgCount} 条对话），${item.git_events} 条 Git 提交`
+                        : `${item.date}：尚未采集到对话或 Git 提交`
+                    }
+                  >
+                    <span className="day-pill-dot" />
+                    <strong className="day-pill-date">{item.date.slice(5)}</strong>
+                    <span className="day-pill-info">
+                      {hasChat
+                        ? `${item.sessions}会话 (${msgCount}条)${hasGit ? ` · ${item.git_events}提交` : ""}`
+                        : hasGit
+                          ? `仅 ${item.git_events}条Git提交`
+                          : "待采集 / 0记录"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {emptyDaysCount > 0 && (
+              <span className="multi-day-empty-hint">
+                区间内有 {emptyDaysCount} 天暂无记录，建议先点击「采集跨天数据」或保持勾选「分析前自动补采」
+              </span>
+            )}
+          </div>
 
-          <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
-            <button
-              type="button"
-              className="primary"
-              disabled={busy || overview.running || analyzing || !settings.llm_enabled || targetHours <= 0}
-              onClick={() =>
-                onAnalyze({
-                  startDate,
-                  endDate,
-                  targetMinutes: targetHours * 60,
-                })
-              }
-            >
-              {analyzing || overview.running ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Sparkles size={16} />
+          <div className="multi-day-actions-bar">
+            <div className="multi-day-btn-group">
+              {onCollect && (
+                <button
+                  type="button"
+                  className="outline multi-day-collect-btn"
+                  disabled={busy || collecting || analyzing || overview.running}
+                  onClick={() => void onCollect({ startDate, endDate })}
+                  title={`一次性扫描本地 Agent 日志并拉取 ${startDate} 至 ${endDate} 期间所有仓库的本人 Git 提交`}
+                >
+                  {collecting ? (
+                    <LoaderCircle className="spin" size={15} />
+                  ) : (
+                    <ScanLine size={15} />
+                  )}
+                  {collecting
+                    ? "正在采集跨天数据…"
+                    : `采集跨天数据 (${startDate.slice(5)} ~ ${endDate.slice(5)})`}
+                </button>
               )}
-              {analyzing || overview.running
-                ? "AI 正在分析多天记录…"
-                : `开始多天合并分析（${startDate} ~ ${endDate} · ${targetHours}h）`}
-            </button>
-            <button
-              type="button"
-              className="outline"
-              disabled={busy || analyzing}
-              onClick={() => setShowMultiDay(false)}
-            >
-              取消
-            </button>
+              {onOpenCollectDetails && (
+                <button
+                  type="button"
+                  className="outline"
+                  disabled={busy || collecting || analyzing}
+                  onClick={() => onOpenCollectDetails({ startDate, endDate })}
+                  title="查看所选跨天区间内已采集的对话会话与 Git 提交，并可勾选 Git 提交加入今日清单"
+                >
+                  <FolderGit2 size={15} />
+                  查看跨天采集详情
+                </button>
+              )}
+              <button
+                type="button"
+                className="primary"
+                disabled={
+                  busy ||
+                  collecting ||
+                  overview.running ||
+                  analyzing ||
+                  !settings.llm_enabled ||
+                  targetHours <= 0 ||
+                  (!autoCollectBeforeAnalyze && messages === 0)
+                }
+                onClick={() =>
+                  onAnalyze({
+                    startDate,
+                    endDate,
+                    targetMinutes: targetHours * 60,
+                    autoCollect: autoCollectBeforeAnalyze,
+                  })
+                }
+                title={
+                  !autoCollectBeforeAnalyze && messages === 0
+                    ? "当前跨天区间没有可分析的对话记录，请先点击「采集跨天数据」或勾选「分析前自动补采」"
+                    : undefined
+                }
+              >
+                {analyzing || overview.running ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <Sparkles size={16} />
+                )}
+                {analyzing || overview.running
+                  ? "AI 正在分析多天记录…"
+                  : `开始多天合并分析（${startDate.slice(5)} ~ ${endDate.slice(5)} · ${targetHours}h）`}
+              </button>
+            </div>
+
+            <div className="multi-day-footer-right">
+              <label
+                className="multi-day-autocollect-toggle"
+                title="开启后，点击「开始多天合并分析」时会自动先执行一次跨天数据采集，确保不会遗漏任何一天的对话或 Git 提交"
+              >
+                <input
+                  type="checkbox"
+                  checked={autoCollectBeforeAnalyze}
+                  disabled={busy || analyzing}
+                  onChange={(e) => setAutoCollectBeforeAnalyze(e.target.checked)}
+                />
+                <span>分析前自动补采跨天数据</span>
+              </label>
+              <button
+                type="button"
+                className="outline multi-day-close-btn"
+                disabled={busy || analyzing}
+                onClick={() => setShowMultiDay(false)}
+              >
+                收起
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -479,6 +715,8 @@ export function Conversations({
                   <span className="live-dot" />
                   {gitEvents} 提交
                 </>
+              ) : showMultiDay ? (
+                "区间无提交"
               ) : (
                 "今日无提交"
               )}
@@ -490,14 +728,17 @@ export function Conversations({
       <div className="conversation-total apple-metrics-bar">
         <Activity size={17} />
         <span>
-          本次范围：<strong>{overview.session_count} 个会话</strong>，
-          {overview.user_messages} 条用户消息 + {overview.assistant_messages} 条
-          AI 回复
+          {showMultiDay
+            ? `跨天范围 (${startDate.slice(5)} ~ ${endDate.slice(5)})：`
+            : "本次范围："}
+          <strong>{activeOverview.session_count} 个会话</strong>，
+          {activeOverview.user_messages} 条用户消息 +{" "}
+          {activeOverview.assistant_messages} 条 AI 回复
         </span>
         <span className="conversation-timing">
-          跨度 {overview.timing.session_span_minutes}m
-          {overview.work_timing &&
-            ` · 活跃 ${overview.work_timing.observable_active_minutes}m`}
+          跨度 {activeOverview.timing.session_span_minutes}m
+          {activeOverview.work_timing &&
+            ` · 活跃 ${activeOverview.work_timing.observable_active_minutes}m`}
         </span>
         <button onClick={onSettings}>
           <Settings2 size={14} />
@@ -549,8 +790,8 @@ export function Conversations({
         </div>
       )}
       <details className="session-list">
-        <summary>查看本次 {overview.session_count} 个会话</summary>
-        {overview.sessions
+        <summary>查看本次 {activeOverview.session_count} 个会话</summary>
+        {activeOverview.sessions
           .filter((s) => settings.analysis_sources.includes(s.source))
           .map((s) => (
             <article key={s.source + s.id}>
@@ -560,11 +801,19 @@ export function Conversations({
                   {names[s.source]}
                 </strong>
                 <span>
-                  {new Date(s.first_at).toLocaleTimeString("zh-CN", {
-                    timeZone: settings.timezone,
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}{" "}
+                  {showMultiDay
+                    ? new Date(s.first_at).toLocaleString("zh-CN", {
+                        timeZone: settings.timezone,
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : new Date(s.first_at).toLocaleTimeString("zh-CN", {
+                        timeZone: settings.timezone,
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
                   –{" "}
                   {new Date(s.last_at).toLocaleTimeString("zh-CN", {
                     timeZone: settings.timezone,
