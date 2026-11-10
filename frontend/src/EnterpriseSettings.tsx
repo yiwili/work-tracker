@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Building2, Plus, Trash2 } from "lucide-react";
 import type { Settings, GiteeProgram, GiteeProjectRule } from "./types";
+import { apiUrl } from "./api";
 import "./workflows.css";
 
 export async function enterpriseApi(
@@ -8,7 +9,7 @@ export async function enterpriseApi(
   body?: unknown,
   method = "POST",
 ) {
-  const r = await fetch("/api/gitee/enterprise/" + path, {
+  const r = await fetch(apiUrl("/gitee/enterprise/" + path), {
     method,
     headers: { "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -138,7 +139,7 @@ export function EnterpriseSettings({
             onClick={() =>
               run(async () => {
                 await saveKey();
-                const r = await fetch("/api/gitee/sync", {
+                const r = await fetch(apiUrl("/gitee/sync"), {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: "{}",
@@ -436,7 +437,7 @@ export function EnterpriseSettings({
             await saveKey();
             await enterpriseApi("config", config, "PUT");
             if (settings.gitee_dedup) {
-              await fetch("/api/gitee/dedup/config", {
+              await fetch(apiUrl("/gitee/dedup/config"), {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings.gitee_dedup),

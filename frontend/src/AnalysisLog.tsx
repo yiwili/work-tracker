@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Brain, ChevronDown, LoaderCircle } from "lucide-react";
+import { apiUrl } from "./api";
 
 type Tokens = {
   prompt_tokens: number;
@@ -51,7 +52,7 @@ export function AnalysisLog({
     async function poll() {
       let running = false;
       try {
-        const response = await fetch(`${endpoint}?date=${day}`, {
+        const response = await fetch(apiUrl(`${endpoint}?date=${day}`), {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("progress unavailable");

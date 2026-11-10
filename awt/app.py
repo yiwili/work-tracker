@@ -15,6 +15,7 @@ from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity
 from . import usage, cloud_sync, history_upload
+from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput
@@ -55,6 +56,7 @@ def create_app(engine=None):
                 await worker
 
     app = FastAPI(title="AI Work Tracker", version="0.1.0", lifespan=lifespan)
+    desktop_config.configure_desktop_cors(app)
     app.state.engine = engine
     analysis_locks = {}
     collect_states = {}
@@ -79,10 +81,10 @@ def create_app(engine=None):
             return JSONResponse({'detail': '仅允许本机访问'}, status_code=403)
         origin = request.headers.get('origin')
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-            allowed_origins = ('http://localhost:5173', 'http://127.0.0.1:5173', str(request.base_url).rstrip('/'))
+            allowed_origins = ('http://localhost:5173', 'http://127.0.0.1:5173', str(request.base_url).rstrip('/'), *desktop_config.get_allowed_origins())
             if origin and origin not in allowed_origins:
                 return JSONResponse({'detail': '拒绝跨站写入请求'}, status_code=403)
-            if request.headers.get('sec-fetch-site') == 'cross-site':
+            if request.headers.get('sec-fetch-site') == 'cross-site' and origin not in desktop_config.get_allowed_origins():
                 return JSONResponse({'detail': '拒绝跨站请求'}, status_code=403)
             if request.method in ('POST', 'PUT', 'PATCH') and request.headers.get('content-type', '').split(';')[0] != 'application/json':
                 return JSONResponse({'detail': '请使用 application/json'}, status_code=415)
@@ -404,6 +406,14 @@ def create_app(engine=None):
     @app.post('/api/gitee/enterprise/resolve')
     def resolve_enterprise(payload:GiteeResolveInput):
         return gitee_enterprise.resolve(engine,payload)
+
+    @app.get('/api/gitee/enterprise/issues')
+    def enterprise_issues_by_date(date: str = Query(default='all'), program_id: int | None = Query(default=None), state: str = Query(default='all')):
+        return gitee_enterprise.issues_for_date(engine, date, program_id=program_id, state=state)
+
+    @app.get('/api/gitee/enterprise/verify')
+    def verify_enterprise_day(date: date):
+        return gitee_enterprise.verify_day_publish(engine, str(date))
 
     @app.get('/api/gitee/unfinished')
     def gitee_unfinished():
