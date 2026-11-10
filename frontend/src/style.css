@@ -6597,7 +6597,6 @@ code {
 /* 首页醒目待办提醒卡片 + 右侧常驻待办悬浮标签与抽屉（UI 层，可独立替换设计） */
 .todo-reminder-card {
   margin: 14px 0 18px;
-.todo-reminder-card {
   padding: 12px 16px;
   border-radius: 14px;
   background: #ffffff;
