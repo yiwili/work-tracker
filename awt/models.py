@@ -280,6 +280,7 @@ class Settings(BaseModel):
     # 默认沿用原有行为：估算完成后直接写入工作项；关闭后先生成待应用预览。
     auto_apply_allocation: bool = True
     task_details_mode: Literal['standard', 'concise', 'none'] = 'standard'
+    theme_id: str = Field(default='apple-hig', max_length=64)
     analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)

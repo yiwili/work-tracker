@@ -191,6 +191,40 @@ def create_app(engine=None):
                     'paths': [{'source': name, 'path': path, 'exists': Path(path).expanduser().exists()} for name, source in sources.items() for path in source.paths],
                     'llm_enabled': config.llm_enabled, 'timezone': config.timezone}
 
+    @app.get('/api/themes')
+    def get_themes():
+        from . import themes as theme_svc
+        with engine.connect() as conn:
+            config = service.get_settings(conn)
+            return theme_svc.list_themes(getattr(config, 'theme_id', 'apple-hig'))
+
+    @app.put('/api/themes/active')
+    def set_active_theme(payload: dict):
+        from . import themes as theme_svc
+        next_id = str(payload.get('theme_id') or 'apple-hig').strip()[:64]
+        with transaction() as conn:
+            config = service.get_settings(conn)
+            catalog = theme_svc.list_themes(next_id)
+            config.theme_id = catalog['active_theme']
+            service.save_settings(conn, config)
+            return catalog
+
+    @app.put('/api/themes/{theme_id}')
+    def put_theme(theme_id: str, payload: dict):
+        from . import themes as theme_svc
+        return theme_svc.update_theme(theme_id.strip()[:64], payload)
+
+    @app.delete('/api/themes/{theme_id}')
+    def remove_theme(theme_id: str):
+        from . import themes as theme_svc
+        with transaction() as conn:
+            config = service.get_settings(conn)
+            res = theme_svc.delete_theme(theme_id.strip()[:64])
+            if config.theme_id == theme_id:
+                config.theme_id = res['active_theme']
+                service.save_settings(conn, config)
+            return res
+
     @app.get('/api/conversations')
     def conversations(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:
@@ -408,8 +442,21 @@ def create_app(engine=None):
         return gitee_enterprise.resolve(engine,payload)
 
     @app.get('/api/gitee/enterprise/issues')
-    def enterprise_issues_by_date(date: str = Query(default='all'), program_id: int | None = Query(default=None), state: str = Query(default='all')):
-        return gitee_enterprise.issues_for_date(engine, date, program_id=program_id, state=state)
+    def enterprise_issues_by_date(
+        date: str = Query(default='all'),
+        program_id: int | None = Query(default=None),
+        state: str = Query(default='all'),
+        source: str = Query(default='auto'),
+    ):
+        return gitee_enterprise.issues_for_date(engine, date, program_id=program_id, state=state, source=source)
+
+    @app.post('/api/gitee/enterprise/issues/retain')
+    def retain_enterprise_issues(payload: dict):
+        target_date = str(payload.get('date') or 'all')
+        issue_ids = payload.get('issue_ids')
+        if issue_ids is not None and not isinstance(issue_ids, list):
+            raise HTTPException(422, 'issue_ids 必须为列表')
+        return gitee_enterprise.retain_issues_locally(engine, target_date, issue_ids=issue_ids)
 
     @app.get('/api/gitee/enterprise/verify')
     def verify_enterprise_day(date: date):

@@ -312,9 +312,36 @@ def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
 def merge_suggestions(tasks):
     suggestions = []
     for i, a in enumerate(tasks):
-        for b in tasks[i+1:]:
-            if a['project'] == b['project'] and SequenceMatcher(None, a['title'], b['title']).ratio() >= .72:
-                suggestions.append({"ids": [a['id'], b['id']], "reason": "项目和工作目标相似，请核对是否重复；建议工时不可直接叠加。"})
+        for j, b in enumerate(tasks[i+1:], start=i+1):
+            ratio = SequenceMatcher(None, a['title'], b['title']).ratio()
+            if a['project'] == b['project'] and ratio >= .72:
+                ev_dates = sorted({
+                    str(e.get('occurred_at') or '')[:10]
+                    for t in (a, b)
+                    for e in t.get('evidence', [])
+                    if e.get('occurred_at')
+                })
+                task_date = str(a.get('date') or '')
+                proj = a.get('project') or '未归属项目'
+                pct = int(round(ratio * 100))
+                date_label = f"{task_date}（证据日期 {'/'.join(ev_dates)}）" if ev_dates and ev_dates != [task_date] else task_date
+                reason = (
+                    f"【{date_label} · 今日工作清单 · {proj}】"
+                    f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
+                    f"项目和工作目标高度相似（{pct}%），请核对是否重复；建议工时不可直接叠加。"
+                )
+                suggestions.append({
+                    "ids": [a['id'], b['id']],
+                    "indices": [i + 1, j + 1],
+                    "titles": [a['title'], b['title']],
+                    "project": proj,
+                    "date": task_date,
+                    "evidence_dates": ev_dates,
+                    "location": "今日工作清单",
+                    "kind": "similarity",
+                    "similarity": round(ratio, 2),
+                    "reason": reason,
+                })
     return suggestions[:50]
 
 
@@ -454,26 +481,106 @@ def report(conn, day):
     total = sum(t['confirmed_minutes'] for t in tasks)
     stored = conn.execute(select(db.reports).where(db.reports.c.date == str(day))).mappings().first()
     warnings = []
+    review_items = []
     observed = {}
     for task in tasks:
         times = sorted({datetime.fromisoformat(e['occurred_at']) for e in task['evidence']
                         if e['kind'] in ('tool_call', 'shell_command', 'tool_result')})
         observed[task['id']] = [(a, b) for a, b in zip(times, times[1:]) if 0 < (b-a).total_seconds() <= 300]
     for i, a in enumerate(tasks):
-        for b in tasks[i+1:]:
-            if any(max(x, z) < min(y, w) for x, y in observed[a['id']] for z, w in observed[b['id']]):
-                warnings.append(f"工具活动区间重叠：{a['title']} / {b['title']}。建议工时不可直接叠加，请核对实际人工投入。")
+        for j, b in enumerate(tasks[i+1:], start=i+1):
+            overlaps = [
+                (max(x, z), min(y, w))
+                for x, y in observed[a['id']]
+                for z, w in observed[b['id']]
+                if max(x, z) < min(y, w)
+            ]
+            if overlaps:
+                ov_start, ov_end = overlaps[0]
+                ov_date = ov_start.strftime("%Y-%m-%d")
+                ov_window = f"{ov_start.strftime('%H:%M')}~{ov_end.strftime('%H:%M')}"
+                proj = a.get('project') if a.get('project') == b.get('project') else f"{a.get('project') or '未归属'} / {b.get('project') or '未归属'}"
+                msg = (
+                    f"【{ov_date} · 今日工作清单 · {proj}】"
+                    f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
+                    f"工具活动区间重叠（{ov_window}）：{a['title']} / {b['title']}。建议工时不可直接叠加，请核对实际人工投入。"
+                )
+                warnings.append(msg)
+                review_items.append({
+                    "kind": "tool_overlap",
+                    "location": "今日工作清单",
+                    "date": str(a.get('date') or day),
+                    "evidence_dates": [ov_date],
+                    "project": proj,
+                    "indices": [i + 1, j + 1],
+                    "ids": [a['id'], b['id']],
+                    "titles": [a['title'], b['title']],
+                    "detail": f"工具活动重叠时段 {ov_date} {ov_window}",
+                    "reason": msg,
+                })
         if a['started_at'] and a['ended_at']:
-            for b in tasks[i+1:]:
-                if b['started_at'] and b['ended_at'] and max(datetime.fromisoformat(a['started_at']), datetime.fromisoformat(b['started_at'])) < min(datetime.fromisoformat(a['ended_at']), datetime.fromisoformat(b['ended_at'])):
-                    warnings.append(f"时间重叠：{a['title']} / {b['title']}")
-    for suggestion in merge_suggestions(tasks):
+            for j, b in enumerate(tasks[i+1:], start=i+1):
+                if b['started_at'] and b['ended_at']:
+                    ov_s = max(datetime.fromisoformat(a['started_at']), datetime.fromisoformat(b['started_at']))
+                    ov_e = min(datetime.fromisoformat(a['ended_at']), datetime.fromisoformat(b['ended_at']))
+                    if ov_s < ov_e:
+                        ov_date = str(a.get('date') or day)
+                        ov_window = f"{ov_s.strftime('%H:%M')}~{ov_e.strftime('%H:%M')}"
+                        proj = a.get('project') or '未归属项目'
+                        msg = (
+                            f"【{ov_date} · 今日工作清单 · {proj}】"
+                            f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
+                            f"时间重叠（{ov_window}）：{a['title']} / {b['title']}"
+                        )
+                        warnings.append(msg)
+                        review_items.append({
+                            "kind": "time_overlap",
+                            "location": "今日工作清单",
+                            "date": ov_date,
+                            "evidence_dates": [ov_s.strftime("%Y-%m-%d")],
+                            "project": proj,
+                            "indices": [i + 1, j + 1],
+                            "ids": [a['id'], b['id']],
+                            "titles": [a['title'], b['title']],
+                            "detail": f"起止时间重叠 {ov_window}",
+                            "reason": msg,
+                        })
+    suggestions = merge_suggestions(tasks)
+    for suggestion in suggestions:
         warnings.append(suggestion['reason'])
+        review_items.append({
+            "kind": "similarity",
+            "location": suggestion.get("location", "今日工作清单"),
+            "date": suggestion.get("date", str(day)),
+            "evidence_dates": suggestion.get("evidence_dates", []),
+            "project": suggestion.get("project", ""),
+            "indices": suggestion.get("indices", []),
+            "ids": suggestion.get("ids", []),
+            "titles": suggestion.get("titles", []),
+            "similarity": suggestion.get("similarity"),
+            "detail": f"同项目标题相似度 {int(round((suggestion.get('similarity') or 0) * 100))}%",
+            "reason": suggestion["reason"],
+        })
     from .daily_analysis import overview
     conversations = overview(conn, day, settings)
     analysis_snap = conversations.get('analysis') or {}
     s_day = analysis_snap.get('start_date') or day
     e_day = analysis_snap.get('end_date') or day
+    for aw in (analysis_snap.get('warnings') or []):
+        if aw not in warnings:
+            warnings.append(aw)
+        review_items.append({
+            "kind": "analysis_warning",
+            "location": "AI 分析候选",
+            "date": f"{s_day} ~ {e_day}" if str(s_day) != str(e_day) else str(day),
+            "evidence_dates": [str(s_day), str(e_day)] if str(s_day) != str(e_day) else [str(day)],
+            "project": "",
+            "indices": [],
+            "ids": [],
+            "titles": [],
+            "detail": "AI 分析过滤提示",
+            "reason": aw,
+        })
     timeline = visible_events(conn, s_day, settings, end_day=e_day)
     from .activity_time import profile
     for task in tasks:
@@ -491,7 +598,8 @@ def report(conn, day):
     return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
             "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,
-            "merge_suggestions": merge_suggestions(tasks), "projects": len({t['project'] for t in tasks}),
+            "review_items": review_items,
+            "merge_suggestions": suggestions, "projects": len({t['project'] for t in tasks}),
             "sources": len({e['source'] for t in tasks for e in t['evidence'] if e['source'] != 'git'}),
             "similarity_status": similarity_status}
 

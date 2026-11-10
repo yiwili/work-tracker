@@ -65,6 +65,20 @@ export type AllocationSnapshot = {
     category?: string;
   }[];
 };
+export type ReviewAlertItem = {
+  kind: "similarity" | "tool_overlap" | "time_overlap" | "analysis_warning";
+  location: string;
+  date: string;
+  evidence_dates?: string[];
+  project?: string;
+  indices: number[];
+  ids: string[];
+  titles: string[];
+  similarity?: number;
+  detail?: string;
+  reason: string;
+};
+
 export type Report = {
   date: string;
   tasks: Task[];
@@ -73,13 +87,25 @@ export type Report = {
   remaining_minutes: number;
   confirmed: boolean;
   warnings: string[];
+  review_items?: ReviewAlertItem[];
   projects: number;
   sources: number;
   allocation_running?: boolean;
   time_allocation: null | AllocationSnapshot;
   conversations: ConversationOverview;
   legacy_count: number;
-  merge_suggestions: { ids: string[]; reason: string }[];
+  merge_suggestions: {
+    ids: string[];
+    indices?: number[];
+    titles?: string[];
+    project?: string;
+    date?: string;
+    evidence_dates?: string[];
+    location?: string;
+    kind?: string;
+    similarity?: number;
+    reason: string;
+  }[];
   similarity_status?: SimilarityStatus;
 };
 
@@ -226,6 +252,7 @@ export type Settings = {
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;
   task_details_mode?: "standard" | "concise" | "none";
+  theme_id?: string;
   analysis_sources: string[];
   agent_prompts: Record<string, string>;
   title_examples: string[];

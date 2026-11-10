@@ -232,11 +232,6 @@ export function Conversations({
           <span className="source-summary-pill">
             {detectedAgents.length} 已连接 · {activeAgentCount} 参与分析
           </span>
-          {showMultiDay && (
-            <span className="source-summary-pill multiday-active-pill">
-              跨天 {startDate.slice(5)} ~ {endDate.slice(5)} · {diffDays} 天
-            </span>
-          )}
         </div>
         <div className="conversation-actions">
           {!settings.auto_import_analysis && (
@@ -251,13 +246,13 @@ export function Conversations({
           )}
           <button
             type="button"
-            className={showMultiDay ? "primary" : "outline"}
+            className={`outline multiday-toggle-btn ${showMultiDay ? "active" : ""}`}
             disabled={busy || overview.running || analyzing}
             onClick={() => setShowMultiDay(!showMultiDay)}
             title="自选统计跨度，支持跨天一键采集并将多日工作合并统计到今天"
           >
-            <CalendarRange size={15} style={{ marginRight: "4px" }} />
-            {showMultiDay ? "收起多天" : "多天合并"}
+            <CalendarRange size={15} />
+            {showMultiDay ? `跨天合并 (${diffDays}天)` : "多天合并"}
           </button>
           {!showMultiDay && (
             <button
@@ -281,7 +276,7 @@ export function Conversations({
                 <Sparkles size={16} />
               )}
               {analyzing || overview.running
-                ? "AI 正在分析，请稍候"
+                ? "AI 正在分析…"
                 : "AI 分析全天对话"}
             </button>
           )}
@@ -289,95 +284,79 @@ export function Conversations({
       </div>
       {showMultiDay && (
         <div className="multi-day-workbench">
-          <div className="multi-day-workbench-head">
-            <div className="multi-day-title-group">
-              <span className="multi-day-icon-badge">
-                <CalendarRange size={15} />
-              </span>
-              <strong>多天合并采集与分析</strong>
-              <span className="multi-day-target-badge">
-                汇总归入 {effectiveDay} 清单
-              </span>
-            </div>
-            <span className="multi-day-meta">
-              跨度 {diffDays} 天 · 建议总工时 {defaultHours} 小时（{defaultHours * 60} 分钟）
-            </span>
-          </div>
-
           <div className="multi-day-controls-row">
             <div className="multi-day-date-group">
-              <label className="multi-day-field">
-                <span>起始日期</span>
-                <input
-                  type="date"
-                  value={startDate}
-                  max={endDate}
-                  disabled={busy || analyzing}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      setStartDate(e.target.value);
-                      setCustomHours(null);
-                    }
-                  }}
-                />
-              </label>
+              <span className="multi-day-inline-label">统计区间</span>
+              <input
+                aria-label="起始日期"
+                className="multi-day-date-input"
+                type="date"
+                value={startDate}
+                max={endDate}
+                disabled={busy || analyzing}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setStartDate(e.target.value);
+                    setCustomHours(null);
+                  }
+                }}
+              />
               <span className="multi-day-date-sep">至</span>
-              <label className="multi-day-field">
-                <span>结束日期</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  min={startDate}
+              <input
+                aria-label="结束日期"
+                className="multi-day-date-input"
+                type="date"
+                value={endDate}
+                min={startDate}
+                disabled={busy || analyzing}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setEndDate(e.target.value);
+                    setCustomHours(null);
+                  }
+                }}
+              />
+              <div className="multi-day-presets" role="group" aria-label="快捷日期范围">
+                <button
+                  type="button"
+                  className={`preset-pill ${diffDays === 2 && endDate === effectiveDay ? "active" : ""}`}
                   disabled={busy || analyzing}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      setEndDate(e.target.value);
-                      setCustomHours(null);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-
-            <div className="multi-day-presets" role="group" aria-label="快捷日期范围">
-              <button
-                type="button"
-                className={`preset-pill ${diffDays === 2 && endDate === effectiveDay ? "active" : ""}`}
-                disabled={busy || analyzing}
-                onClick={() => applyPreset("2d")}
-              >
-                近 2 天
-              </button>
-              <button
-                type="button"
-                className={`preset-pill ${diffDays === 3 && endDate === effectiveDay ? "active" : ""}`}
-                disabled={busy || analyzing}
-                onClick={() => applyPreset("3d")}
-              >
-                近 3 天
-              </button>
-              <button
-                type="button"
-                className={`preset-pill ${diffDays === 5 && endDate === effectiveDay ? "active" : ""}`}
-                disabled={busy || analyzing}
-                onClick={() => applyPreset("5d")}
-              >
-                近 5 天
-              </button>
-              <button
-                type="button"
-                className="preset-pill"
-                disabled={busy || analyzing}
-                onClick={() => applyPreset("week")}
-              >
-                本周以来
-              </button>
+                  onClick={() => applyPreset("2d")}
+                >
+                  近 2 天
+                </button>
+                <button
+                  type="button"
+                  className={`preset-pill ${diffDays === 3 && endDate === effectiveDay ? "active" : ""}`}
+                  disabled={busy || analyzing}
+                  onClick={() => applyPreset("3d")}
+                >
+                  近 3 天
+                </button>
+                <button
+                  type="button"
+                  className={`preset-pill ${diffDays === 5 && endDate === effectiveDay ? "active" : ""}`}
+                  disabled={busy || analyzing}
+                  onClick={() => applyPreset("5d")}
+                >
+                  近 5 天
+                </button>
+                <button
+                  type="button"
+                  className="preset-pill"
+                  disabled={busy || analyzing}
+                  onClick={() => applyPreset("week")}
+                >
+                  本周
+                </button>
+              </div>
             </div>
 
             <div className="multi-day-hours-group">
-              <label className="multi-day-field">
-                <span>合并目标工时 (h)</span>
+              <span className="multi-day-inline-label">目标工时</span>
+              <div className="multi-day-hours-box">
                 <input
+                  aria-label="合并目标工时"
                   type="number"
                   min={1}
                   max={300}
@@ -386,7 +365,8 @@ export function Conversations({
                   onChange={(e) => setCustomHours(Number(e.target.value))}
                   className="multi-day-hours-input"
                 />
-              </label>
+                <span className="multi-day-hours-unit">h</span>
+              </div>
               {customHours !== null && customHours !== defaultHours && (
                 <button
                   type="button"
@@ -395,18 +375,18 @@ export function Conversations({
                   onClick={() => setCustomHours(null)}
                 >
                   <RotateCcw size={12} />
-                  重置 {defaultHours}h
+                  {defaultHours}h
                 </button>
               )}
+              <span className="multi-day-target-badge">
+                归入 {effectiveDay.slice(5)} 日报
+              </span>
             </div>
           </div>
 
-          <div className="multi-day-status-strip">
-            <div className="multi-day-status-label">
-              <span>每日数据就绪状态：</span>
-              {loadingRange && <LoaderCircle className="spin" size={13} />}
-            </div>
+          <div className="multi-day-bottom-row">
             <div className="multi-day-day-pills">
+              {loadingRange && <LoaderCircle className="spin" size={13} />}
               {dailyCounts.map((item) => {
                 const msgCount = item.user_messages + item.assistant_messages;
                 const hasChat = msgCount > 0;
@@ -430,52 +410,60 @@ export function Conversations({
                     <strong className="day-pill-date">{item.date.slice(5)}</strong>
                     <span className="day-pill-info">
                       {hasChat
-                        ? `${item.sessions}会话 (${msgCount}条)${hasGit ? ` · ${item.git_events}提交` : ""}`
+                        ? `${item.sessions}会话${hasGit ? ` · ${item.git_events}提交` : ""}`
                         : hasGit
-                          ? `仅 ${item.git_events}条Git提交`
-                          : "待采集 / 0记录"}
+                          ? `${item.git_events}提交`
+                          : "待采集"}
                     </span>
                   </div>
                 );
               })}
-            </div>
-            {emptyDaysCount > 0 && (
-              <span className="multi-day-empty-hint">
-                区间内有 {emptyDaysCount} 天暂无记录，建议先采集或自动补采
-              </span>
-            )}
-          </div>
-
-          <div className="multi-day-actions-bar">
-            <div className="multi-day-btn-group">
-              {onCollect && (
-                <button
-                  type="button"
-                  className="outline multi-day-collect-btn"
-                  disabled={busy || collecting || analyzing || overview.running}
-                  onClick={() => void onCollect({ startDate, endDate })}
-                  title={`一次性扫描本地 Agent 日志并拉取 ${startDate} 至 ${endDate} 期间所有仓库的本人 Git 提交`}
-                >
-                  {collecting ? (
-                    <LoaderCircle className="spin" size={15} />
-                  ) : (
-                    <ScanLine size={15} />
-                  )}
-                  {collecting
-                    ? "正在采集跨天数据…"
-                    : `采集跨天数据 (${startDate.slice(5)} ~ ${endDate.slice(5)})`}
-                </button>
+              {emptyDaysCount > 0 && (
+                <span className="multi-day-empty-hint">
+                  {emptyDaysCount} 天无记录
+                </span>
               )}
+            </div>
+
+            <div className="multi-day-actions-bar">
+              <label
+                className="multi-day-autocollect-toggle"
+                title="开启后，点击「AI 合并分析」时会先自动采集所选跨天区间数据"
+              >
+                <input
+                  type="checkbox"
+                  checked={autoCollectBeforeAnalyze}
+                  disabled={busy || analyzing}
+                  onChange={(e) => setAutoCollectBeforeAnalyze(e.target.checked)}
+                />
+                <span>分析前自动补采</span>
+              </label>
               {onOpenCollectDetails && (
                 <button
                   type="button"
                   className="outline"
                   disabled={busy || collecting || analyzing}
                   onClick={() => onOpenCollectDetails({ startDate, endDate })}
-                  title="查看所选跨天区间内已采集的对话会话与 Git 提交，并可勾选 Git 提交加入今日清单"
+                  title="查看所选跨天区间内已采集的对话会话与 Git 提交"
                 >
-                  <FolderGit2 size={15} />
-                  查看跨天采集详情
+                  <FolderGit2 size={14} />
+                  跨天详情
+                </button>
+              )}
+              {onCollect && (
+                <button
+                  type="button"
+                  className="outline multi-day-collect-btn"
+                  disabled={busy || collecting || analyzing || overview.running}
+                  onClick={() => void onCollect({ startDate, endDate })}
+                  title={`扫描本地日志并拉取 ${startDate} 至 ${endDate} 期间仓库的本人 Git 提交`}
+                >
+                  {collecting ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <ScanLine size={14} />
+                  )}
+                  {collecting ? "采集中…" : "采集区间"}
                 </button>
               )}
               <button
@@ -500,52 +488,24 @@ export function Conversations({
                 }
                 title={
                   !autoCollectBeforeAnalyze && messages === 0
-                    ? "跨天区间暂无可分析对话，请先采集或自动补采"
+                    ? "跨天区间暂无可分析对话，请先采集或勾选自动补采"
                     : undefined
                 }
               >
                 {analyzing || overview.running ? (
-                  <LoaderCircle className="spin" size={16} />
+                  <LoaderCircle className="spin" size={15} />
                 ) : (
-                  <Sparkles size={16} />
+                  <Sparkles size={15} />
                 )}
                 {analyzing || overview.running
-                  ? "AI 正在分析多天记录…"
-                  : `开始多天分析（${startDate.slice(5)} ~ ${endDate.slice(5)} · ${targetHours}h）`}
-              </button>
-            </div>
-
-            <div className="multi-day-footer-right">
-              <label
-                className="multi-day-autocollect-toggle"
-                title="开启后，点击「开始多天分析」时会先自动采集跨天数据"
-              >
-                <input
-                  type="checkbox"
-                  checked={autoCollectBeforeAnalyze}
-                  disabled={busy || analyzing}
-                  onChange={(e) => setAutoCollectBeforeAnalyze(e.target.checked)}
-                />
-                <span>分析前自动补采</span>
-              </label>
-              <button
-                type="button"
-                className="outline multi-day-close-btn"
-                disabled={busy || analyzing}
-                onClick={() => setShowMultiDay(false)}
-              >
-                收起
+                  ? "正在合并分析…"
+                  : `AI 合并分析 (${targetHours}h)`}
               </button>
             </div>
           </div>
         </div>
       )}
       <AnalysisLog day={overview.date} active={overview.running || analyzing} />
-      {!settings.auto_import_analysis && pendingCount > 0 && (
-        <p className="muted">
-          {pendingCount} 条候选工作项待导入，可在「分析结果」中查看。
-        </p>
-      )}
       {noConversationSource && (
         <p className="muted">
           未选择对话来源：采集会跳过这些 Agent，也不会发起 AI 分析。
