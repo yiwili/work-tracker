@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Building2, Plus, Trash2 } from "lucide-react";
-import type { Settings, GiteeProgram, GiteeProjectRule } from "./types";
+import type { Settings, GiteeProgram, GiteeProjectRule, GiteeMember } from "./types";
 import { apiUrl } from "./api";
 import "./workflows.css";
 
@@ -36,6 +36,7 @@ export function EnterpriseSettings({
     [token, setToken] = useState(""),
     [companies, setCompanies] = useState<{ id: number; name: string }[]>([]),
     [programs, setPrograms] = useState<GiteeProgram[]>([]),
+    [members, setMembers] = useState<GiteeMember[]>([]),
     [prefixes, setPrefixes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
@@ -44,6 +45,7 @@ export function EnterpriseSettings({
       .then((s) => {
         setConfigured(s.configured);
         setPrograms(s.programs);
+        setMembers(Array.isArray(s.members) ? s.members : []);
         setPrefixes(s.common_prefixes);
       })
       .catch((e) => setMessage(e.message));
@@ -162,7 +164,15 @@ export function EnterpriseSettings({
           onChange={(e) => {
             const entId = Number(e.target.value);
             setPrograms([]);
-            change({ enterprise_id: entId, rules: [] });
+            setMembers([]);
+            change({
+              enterprise_id: entId,
+              rules: [],
+              assignee_id: null,
+              assignee_name: "",
+              assignee_username: "",
+              assignee_email: "",
+            });
             if (entId > 0 && (configured || token)) {
               run(async () => {
                 await saveKey();
@@ -172,7 +182,17 @@ export function EnterpriseSettings({
                   "GET",
                 );
                 setPrograms(list);
-                setMessage("已读取企业项目列表。");
+                try {
+                  const mList = await enterpriseApi(
+                    `members?enterprise_id=${entId}`,
+                    undefined,
+                    "GET",
+                  );
+                  setMembers(Array.isArray(mList) ? mList : []);
+                } catch {
+                  /* 成员列表读取失败不阻断项目配置 */
+                }
+                setMessage("已读取企业项目与成员列表。");
               });
             }
           }}
@@ -191,28 +211,89 @@ export function EnterpriseSettings({
           ))}
         </select>
       </label>
-      <button
-        type="button"
-        className="outline"
-        disabled={busy || !config.enterprise_id || (!configured && !token)}
-        onClick={() =>
-          run(async () => {
-            await saveKey();
-            setPrograms(
-              await enterpriseApi(
-                `programs?enterprise_id=${config.enterprise_id}`,
+      <div className="actions">
+        <button
+          type="button"
+          className="outline"
+          disabled={busy || !config.enterprise_id || (!configured && !token)}
+          onClick={() =>
+            run(async () => {
+              await saveKey();
+              setPrograms(
+                await enterpriseApi(
+                  `programs?enterprise_id=${config.enterprise_id}`,
+                  undefined,
+                  "GET",
+                ),
+              );
+              setMessage(
+                "项目列表已更新。可以按项目前缀、标题关键词或完整标题设置映射。",
+              );
+            })
+          }
+        >
+          读取企业项目
+        </button>
+        <button
+          type="button"
+          className="outline"
+          disabled={busy || !config.enterprise_id || (!configured && !token)}
+          onClick={() =>
+            run(async () => {
+              await saveKey();
+              const mList = await enterpriseApi(
+                `members?enterprise_id=${config.enterprise_id}`,
                 undefined,
                 "GET",
-              ),
-            );
-            setMessage(
-              "项目列表已更新。可以按项目前缀、标题关键词或完整标题设置映射。",
-            );
-          })
-        }
-      >
-        读取企业项目
-      </button>
+              );
+              setMembers(Array.isArray(mList) ? mList : []);
+              setMessage(`已读取 ${(mList || []).length} 位企业成员，可在此选择默认负责人。`);
+            })
+          }
+        >
+          读取企业成员
+        </button>
+      </div>
+      <label>
+        工作项负责人（全局默认，推送 Gitee 时统一设置）
+        <select
+          aria-label="工作项负责人"
+          value={config.assignee_id || ""}
+          onChange={(e) => {
+            const raw = Number(e.target.value);
+            if (!raw) {
+              change({
+                assignee_id: null,
+                assignee_name: "",
+                assignee_username: "",
+                assignee_email: "",
+              });
+              return;
+            }
+            const chosen = members.find((m) => m.id === raw);
+            change({
+              assignee_id: raw,
+              assignee_name: chosen?.name || config.assignee_name || `#${raw}`,
+              assignee_username: chosen?.username || "",
+              assignee_email: chosen?.email || "",
+            });
+          }}
+        >
+          <option value="">不指定负责人（使用令牌默认）</option>
+          {!!config.assignee_id &&
+            !members.some((m) => m.id === config.assignee_id) && (
+              <option value={config.assignee_id}>
+                已保存负责人：{config.assignee_name || `#${config.assignee_id}`}
+              </option>
+            )}
+          {members.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+              {m.email ? ` <${m.email}>` : m.username ? ` (@${m.username})` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
       <h3>标题与项目映射</h3>
       <div className="actions">
         <button

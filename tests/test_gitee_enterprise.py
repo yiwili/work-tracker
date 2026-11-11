@@ -338,3 +338,127 @@ def test_match_program_other_blank_and_shanghai_prefers_non_2026_and_default_tas
     assert posted[0][0] == 'create_enterprise_issue'
     assert posted[0][1]['issue_type_id'] == 9
     assert 'category' not in posted[0][1]
+
+
+def test_configurable_assignee_and_completed_state_on_publish_and_markdown(client, monkeypatch):
+    c, engine = client
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda tool, args: (
+            CATALOG
+            if tool == 'list_programs'
+            else [{'id': 9, 'title': '任务', 'category': 'task'}]
+            if tool == 'list_issue_types'
+            else [
+                {'id': 87, 'title': '进行中', 'types': 'progressing'},
+                {'id': 88, 'title': '已完成', 'types': 'closed'},
+                {'id': 89, 'title': '已拒绝', 'types': 'rejected'},
+            ]
+            if tool == 'list_issue_type_states'
+            else [
+                {
+                    'user_id': 501,
+                    'name': '张三',
+                    'username': 'zhangsan',
+                    'email': 'zhangsan@example.com',
+                    'role_name': '开发',
+                },
+                {
+                    'id': 502,
+                    'remark': '李四（备注）',
+                    'user': {'id': 502, 'name': '李四', 'username': 'lisi', 'email': 'lisi@example.com'},
+                },
+            ]
+            if tool == 'list_enterprise_members'
+            else []
+        ),
+    )
+
+    m_res = c.get('/api/gitee/enterprise/members?enterprise_id=7')
+    m_res.raise_for_status()
+    members = m_res.json()
+    assert [m['id'] for m in members] == [501, 502]
+    assert members[0]['email'] == 'zhangsan@example.com'
+
+    cfg_res = c.put(
+        '/api/gitee/enterprise/config',
+        json={
+            'enterprise_id': 7,
+            'rules': [],
+            'include_details': True,
+            'assignee_id': 501,
+            'assignee_name': '张三',
+            'assignee_username': 'zhangsan',
+            'assignee_email': 'zhangsan@example.com',
+        },
+    )
+    cfg_res.raise_for_status()
+    status_data = cfg_res.json()
+    assert status_data['config']['assignee_id'] == 501
+    assert len(status_data['members']) == 2
+
+    t_create = task(c, '【上海工程】新建已完成与负责人测试', 90)
+    t_replace = task(c, '【上海工程】替换更新已完成与负责人测试', 90)
+    p = preview(c, [t_create, t_replace])
+    assert p['assignee'] == {
+        'id': 501,
+        'name': '张三',
+        'username': 'zhangsan',
+        'email': 'zhangsan@example.com',
+    }
+
+    calls = []
+    def mock_tool(tool, arguments, credential=None, uncertain=False):
+        calls.append((tool, arguments))
+        if tool == 'create_enterprise_issue':
+            return {'id': 701, 'ident': 'I701', 'issue_url': 'https://gitee.com/ent/issue/701'}
+        if tool == 'update_enterprise_issue':
+            return {'id': int(arguments['issue_id']), 'issue_url': f"https://gitee.com/ent/issue/{arguments['issue_id']}"}
+        raise AssertionError(f'Unexpected tool {tool}')
+
+    monkeypatch.setattr(ge, '_tool', mock_tool)
+    pub_res = c.post(
+        '/api/gitee/enterprise/publish',
+        json={
+            'batch_id': p['batch_id'],
+            'confirmed': True,
+            'targets': [
+                {'task_id': t_create, 'program_id': 11, 'issue_type_id': 9},
+                {'task_id': t_replace, 'program_id': 11, 'issue_type_id': 9, 'existing_issue_id': 900, 'replace_existing': True},
+            ],
+        },
+    )
+    pub_res.raise_for_status()
+    pub = pub_res.json()
+    assert pub['created'] == 2
+    assert pub['replaced'] == 1
+    assert all(item['remote_state'] == '已完成' for item in pub['items'])
+
+    # New create + follow-up update to Done state, and direct update for replaced issue
+    assert [c_name for c_name, _ in calls] == [
+        'create_enterprise_issue',
+        'update_enterprise_issue',
+        'update_enterprise_issue',
+    ]
+    create_args = calls[0][1]
+    assert create_args['assignee_id'] == 501
+    state_update_args = calls[1][1]
+    assert state_update_args == {'enterprise_id': 7, 'issue_id': '701', 'issue_state_id': 88}
+    replace_args = calls[2][1]
+    assert replace_args['assignee_id'] == 501
+    assert replace_args['issue_state_id'] == 88
+    assert replace_args['duration'] == 90
+    assert replace_args['estimated_duration'] == 1.5
+
+    # Local tasks updated to delivered, confirmation untouched
+    rep = c.get('/api/reports/2026-10-24').json()
+    assert not rep['confirmed']
+    assert {t['status'] for t in rep['tasks']} == {'delivered'}
+
+    # Verified legacy status maps to 已完成 (never 已验收) in markdown export
+    c.patch(f'/api/tasks/{t_replace}', json={'status': 'verified'}).raise_for_status()
+    with engine.connect() as conn:
+        md = service.export_markdown(conn, '2026-10-24')
+    assert '已完成' in md
+    assert '已验收' not in md

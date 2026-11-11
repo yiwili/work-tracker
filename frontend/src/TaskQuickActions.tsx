@@ -116,7 +116,8 @@ export const STATUS_MAP: Record<string, { label: string; dotClass: string }> = {
   requested: { label: "待办的", dotClass: "dot-requested" },
   attempted: { label: "进行中", dotClass: "dot-attempted" },
   delivered: { label: "已完成", dotClass: "dot-delivered" },
-  verified: { label: "已验收", dotClass: "dot-verified" },
+  verified: { label: "已完成", dotClass: "dot-delivered" },
+  changed: { label: "已修改", dotClass: "dot-changed" },
   rejected: { label: "已拒绝", dotClass: "dot-rejected" },
 };
 
@@ -124,7 +125,6 @@ export const STATUS_LIST = [
   "requested",
   "attempted",
   "delivered",
-  "verified",
   "rejected",
 ];
 

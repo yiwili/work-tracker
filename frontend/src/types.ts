@@ -219,10 +219,23 @@ export type GiteeMatchDecision = {
   action: "match" | "create" | "ignore";
   target_task_id?: string | null;
 };
+export type GiteeMember = {
+  id: number;
+  user_id?: number;
+  name: string;
+  remark?: string;
+  username?: string;
+  email?: string;
+  role?: string;
+};
 export type GiteeEnterpriseConfig = {
   enterprise_id: number;
   rules: GiteeProjectRule[];
   include_details: boolean;
+  assignee_id?: number | null;
+  assignee_name?: string;
+  assignee_username?: string;
+  assignee_email?: string;
 };
 export type GiteeProgram = { id: number; name: string; ident: string };
 export type GitAuthor = { name: string; email: string };

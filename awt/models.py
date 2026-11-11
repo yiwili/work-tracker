@@ -125,6 +125,10 @@ class GiteeEnterpriseConfig(BaseModel):
     enterprise_id: int = Field(default=0, ge=0, strict=True)
     rules: list[GiteeProjectRule] = Field(default_factory=list, max_length=100)
     include_details: bool = True
+    assignee_id: int | None = Field(default=None, ge=1, strict=True)
+    assignee_name: str = Field(default='', max_length=200)
+    assignee_username: str = Field(default='', max_length=200)
+    assignee_email: str = Field(default='', max_length=320)
 
 
 class GiteePreviewInput(BaseModel):

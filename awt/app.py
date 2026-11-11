@@ -459,13 +459,19 @@ def create_app(engine=None):
     def enterprise_issue_types(enterprise_id:int=Query(...,ge=1),program_id:int=Query(...,ge=1)):
         return gitee_enterprise.issue_types(enterprise_id,program_id)
 
+    @app.get('/api/gitee/enterprise/members')
+    def enterprise_members(enterprise_id:int=Query(...,ge=1)):
+        return gitee_enterprise.cache_members(engine,enterprise_id)
+
     @app.post('/api/gitee/enterprise/preview')
     def preview_enterprise(payload:GiteePreviewInput):
         return gitee_enterprise.preview(engine,payload)
 
     @app.post('/api/gitee/enterprise/publish')
     def publish_enterprise(payload:GiteePublishInput):
-        return gitee_enterprise.publish(engine,payload)
+        res = gitee_enterprise.publish(engine,payload)
+        trigger_cloud_sync()
+        return res
 
     @app.post('/api/gitee/enterprise/resolve')
     def resolve_enterprise(payload:GiteeResolveInput):

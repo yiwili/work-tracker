@@ -41,6 +41,12 @@ type Item = {
 type Preview = {
   batch_id: string;
   enterprise_id: number;
+  assignee?: {
+    id?: number | null;
+    name?: string;
+    username?: string;
+    email?: string;
+  } | null;
   items: Item[];
   programs: GiteeProgram[];
   remote_day_issues?: GiteeRemoteIssue[];
@@ -304,7 +310,9 @@ export function GiteePublishModal({
           <>
             <p>
               目标企业 #{preview.enterprise_id} · 共 {preview.items.length} 项 ·
-              选中 {selected.size} 项
+              选中 {selected.size} 项 · 负责人：
+              {preview.assignee?.name || "未配置（可在企业设置中指定）"} ·
+              推送状态：已完成
             </p>
             {preview.remote_day_issues &&
               preview.remote_day_issues.length > 0 && (

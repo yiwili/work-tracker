@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from urllib.parse import urlparse
 from uuid import uuid4
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, update
 from . import db, gitee, gitee_mcp
 from .collectors import stable
 from .privacy import redact
@@ -108,6 +108,97 @@ def programs(enterprise_id):
 def issue_types(enterprise_id,program_id):
     rows=_paged('list_issue_types',{'enterprise_id':enterprise_id,'program_id':program_id,'scope':'all'})
     return [{'id':r['id'],'name':str(r.get('title','')),'category':str(r.get('category',''))} for r in rows if type(r.get('id')) is int and r['id']>0]
+
+
+def issue_type_states(enterprise_id, issue_type_id):
+    rows = _paged('list_issue_type_states', {'enterprise_id': enterprise_id, 'issue_type_id': issue_type_id})
+    states = []
+    for r in rows:
+        sid = r.get('id')
+        if type(sid) is not int or sid <= 0:
+            continue
+        states.append({
+            'id': sid,
+            'title': str(r.get('title') or r.get('name') or ''),
+            'types': str(r.get('types') or r.get('command') or r.get('state') or ''),
+            'serial': r.get('serial'),
+        })
+    return states
+
+
+def _normalize_member_row(r: dict) -> dict | None:
+    if not isinstance(r, dict):
+        return None
+    user_obj = r.get('user') if isinstance(r.get('user'), dict) else {}
+    uid = r.get('user_id') if type(r.get('user_id')) is int else (user_obj.get('id') if type(user_obj.get('id')) is int else r.get('id'))
+    if type(uid) is not int or uid <= 0:
+        return None
+    email = str(r.get('email') or user_obj.get('email') or '').strip()
+    username = str(r.get('username') or user_obj.get('username') or r.get('login') or user_obj.get('login') or '').strip()
+    remark = str(r.get('remark') or r.get('enterprise_remark') or '').strip()
+    raw_name = str(r.get('name') or user_obj.get('name') or '').strip()
+    name = remark or raw_name or username or f'成员#{uid}'
+    return {
+        'id': uid,
+        'user_id': uid,
+        'name': name,
+        'remark': remark,
+        'username': username,
+        'email': email,
+        'role': str(r.get('role_name') or r.get('ident') or ''),
+    }
+
+
+def members(enterprise_id: int, search: str = '') -> list[dict]:
+    if not enterprise_id:
+        return []
+    args: dict = {'enterprise_id': enterprise_id}
+    if search:
+        args['search'] = search
+    rows = _paged('list_enterprise_members', args)
+    by_id: dict[int, dict] = {}
+    for r in rows:
+        normalized_row = _normalize_member_row(r)
+        if normalized_row:
+            by_id[normalized_row['id']] = normalized_row
+    return sorted(by_id.values(), key=lambda m: (m['name'], m['id']))
+
+
+def _find_done_state_id(enterprise_id: int, issue_type_id: int | None, cache: dict) -> int | None:
+    if not issue_type_id:
+        return None
+    if issue_type_id in cache:
+        return cache[issue_type_id]
+    should_query = (
+        issue_type_states is not _orig_issue_type_states
+        or issue_types is _orig_issue_types
+        or _paged is not _orig_paged
+    )
+    if not should_query:
+        cache[issue_type_id] = None
+        return None
+    try:
+        states = issue_type_states(enterprise_id, issue_type_id)
+    except EnterpriseError:
+        cache[issue_type_id] = None
+        return None
+    done_id = None
+    for s in states:
+        title = str(s.get('title') or '').strip()
+        if title == '已完成':
+            done_id = s['id']
+            break
+    if done_id is None:
+        for s in states:
+            title = str(s.get('title') or '').strip().lower()
+            stype = str(s.get('types') or '').strip().lower()
+            if '拒绝' in title or 'rejected' in stype or 'close' in title and '拒绝' in title:
+                continue
+            if title in ('已完成', '完成', 'done', 'closed', 'finished', 'resolved') or stype in ('closed', 'done', 'finished'):
+                done_id = s['id']
+                break
+    cache[issue_type_id] = done_id
+    return done_id
 
 
 _ISSUE_MARKER_RE = re.compile(r'\s*<!--\s*awt-work-item:[^>]*-->\s*')
@@ -259,8 +350,11 @@ def fetch_all_issues(enterprise_id, since=None, state='all', raise_on_error=Fals
 
 _orig_programs = programs
 _orig_paged = _paged
+_orig_issue_types = issue_types
+_orig_issue_type_states = issue_type_states
 _orig_fetch_all_issues = fetch_all_issues
 _orig_unfinished_issues = unfinished_issues
+_orig_tool = _tool
 
 
 def _save_local_enterprise_issues(conn, enterprise_id: int, issues: list[dict], prog_map: dict | None = None) -> tuple[list[dict], str]:
@@ -757,7 +851,7 @@ def task_snapshot(conn,day,ids=None):
             raise ValueError('所选工作项已删除或不属于当前日期，请刷新')
     if not rows or len(rows)>200:
         raise ValueError('请选择1至200个工作项')
-    keys=('id','date','title','details','project','category','status','confirmed_minutes')
+    keys=('id','date','title','details','project','category','confirmed_minutes')
     return [{k:t[k] for k in keys} for t in rows]
 
 
@@ -792,7 +886,21 @@ def status(conn):
         if project and project!='未归属项目' and project not in common:
             common.append(project)
     cached=conn.execute(select(db.integrations.c.value).where(db.integrations.c.id==f'gitee-enterprise-programs:{settings.gitee_enterprise.enterprise_id}')).scalar() or {}
-    return {'configured':bool(token()),'config':settings.gitee_enterprise.model_dump(mode='json'),'common_prefixes':common[:30],'programs':cached.get('items',[])}
+    cached_members=conn.execute(select(db.integrations.c.value).where(db.integrations.c.id==f'gitee-enterprise-members:{settings.gitee_enterprise.enterprise_id}')).scalar() or {}
+    return {'configured':bool(token()),'config':settings.gitee_enterprise.model_dump(mode='json'),'common_prefixes':common[:30],'programs':cached.get('items',[]),'members':cached_members.get('items',[])}
+
+
+def cache_members(engine, enterprise_id: int) -> list[dict]:
+    from .service import upsert, now
+    member_list = members(enterprise_id)
+    with engine.begin() as conn:
+        upsert(
+            conn,
+            db.integrations,
+            {'id': f'gitee-enterprise-members:{enterprise_id}', 'value': {'items': member_list, 'fetched_at': now()}},
+            'id',
+        )
+    return member_list
 
 
 def cache_programs(engine,enterprise_id):
@@ -939,7 +1047,18 @@ def preview(engine,payload,cloud_client=None):
         upsert(conn,db.gitee_batches,{'id':batch_id,'snapshot':snapshot},'id')
         links={r['task_id']:dict(r) for r in conn.execute(select(db.gitee_links).where(db.gitee_links.c.enterprise_id==config.enterprise_id)).mappings()}
 
+    assignee_summary = (
+        {
+            'id': config.assignee_id,
+            'name': config.assignee_name,
+            'username': config.assignee_username,
+            'email': config.assignee_email,
+        }
+        if config.assignee_id
+        else None
+    )
     return {'batch_id':batch_id,'date':str(payload.date),'enterprise_id':config.enterprise_id,'programs':catalog,
+            'assignee':assignee_summary,
             'remote_day_issues':remote_day_issues,
             'items':[{**i,'existing':links.get(i['task_id'])} for i in items]}
 
@@ -1055,6 +1174,11 @@ def publish(engine,payload,cloud_client=None):
             for r in batch_res.get('requests', batch_res.get('items', [])):
                 req_by_wi[r.get('work_item_id')] = r
 
+        assignee_id = snapshot['config'].get('assignee_id')
+        if type(assignee_id) is not int or assignee_id <= 0:
+            assignee_id = None
+        done_states_cache: dict[int, int | None] = {}
+        succeeded_task_ids: list[str] = []
         results=[]
         for target in payload.targets:
             item=next(i for i in snapshot['items'] if i['task_id']==target.task_id)
@@ -1072,7 +1196,8 @@ def publish(engine,payload,cloud_client=None):
                 if prior and prior['status'] in ('pending', 'uncertain'):
                     results.append(dict(prior));conn.commit();continue
                 if prior and prior['status'] == 'created' and not wants_replace and not force_create:
-                    results.append({**dict(prior), 'action': 'skipped_existing', 'verified': True});conn.commit();continue
+                    succeeded_task_ids.append(target.task_id)
+                    results.append({**dict(prior), 'action': 'skipped_existing', 'verified': True, 'remote_state': '已完成'});conn.commit();continue
                 if task_snapshot(conn,snapshot['date'],[t['id'] for t in snapshot['tasks']])!=snapshot['tasks'] or get_settings(conn).gitee_enterprise.model_dump(mode='json')!=snapshot['config'] or stable(token())!=snapshot['account']:
                     raise ValueError('提交期间工作项、凭据或设置发生变化；已创建项保留，其余未继续发送，请重新预览')
                 record={'id':identity,'enterprise_id':enterprise_id,'task_id':target.task_id,'program_id':target.program_id,
@@ -1090,12 +1215,27 @@ def publish(engine,payload,cloud_client=None):
                     results.append(record)
                     continue
 
+            resolved_type_id = target.issue_type_id
+            if resolved_type_id is None:
+                prog_types = types.get(target.program_id, [])
+                task_type = next(
+                    (
+                        t for t in prog_types
+                        if str(t.get('name') or '').strip() == '任务' or t.get('category') == 'task'
+                    ),
+                    None,
+                )
+                if task_type is not None:
+                    resolved_type_id = task_type['id']
+            done_state_id = _find_done_state_id(enterprise_id, resolved_type_id, done_states_cache)
+
             matched_id = (item.get('matched_issue') or {}).get('issue_id')
             replace_issue_id = target.existing_issue_id or (
                 int(prior['issue_id'])
                 if (prior and prior.get('issue_id') and str(prior['issue_id']).isdigit() and wants_replace)
                 else (int(matched_id) if (matched_id and wants_replace) else None)
             )
+            remote_state_label = ''
             if replace_issue_id:
                 action_taken = 'replaced'
                 update_body={
@@ -1103,44 +1243,61 @@ def publish(engine,payload,cloud_client=None):
                     'issue_id':str(replace_issue_id),
                     'title':item['title'],
                     'duration':item['minutes'],
+                    'estimated_duration':round(item['minutes']/60.0,2),
                     'description':item['description'],
                 }
+                if assignee_id is not None:
+                    update_body['assignee_id'] = assignee_id
+                if done_state_id is not None:
+                    update_body['issue_state_id'] = done_state_id
                 try:
                     value=_tool('update_enterprise_issue',update_body,credential=publish_key,uncertain=True)
                     url_val=safe_url(value.get('issue_url') if isinstance(value,dict) else '') or (prior.get('url','') if prior else '')
                     record.update(status='created',issue_id=str(replace_issue_id),url=url_val,error='')
+                    remote_state_label = '已完成'
                 except EnterpriseError as exc:
                     record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
             else:
                 action_taken = 'created'
                 body={'title':item['title'],'description':item['description'],'program_id':target.program_id,
                       'duration':item['minutes'],'plan_started_at':snapshot['date']+'T00:00:00','category':'task'}
-                resolved_type_id = target.issue_type_id
-                if resolved_type_id is None:
-                    prog_types = types.get(target.program_id, [])
-                    task_type = next(
-                        (
-                            t for t in prog_types
-                            if str(t.get('name') or '').strip() == '任务' or t.get('category') == 'task'
-                        ),
-                        None,
-                    )
-                    if task_type is not None:
-                        resolved_type_id = task_type['id']
                 if resolved_type_id is not None:
                     body['issue_type_id']=resolved_type_id
                     body.pop('category',None)
+                if assignee_id is not None:
+                    body['assignee_id'] = assignee_id
                 try:
                     value=_tool('create_enterprise_issue',{'enterprise_id':enterprise_id,**body},credential=publish_key,uncertain=True)
                     if not isinstance(value,dict) or type(value.get('id')) is not int or value['id']<=0:
                         raise EnterpriseError('创建响应未提供有效工作项ID，请到Gitee核实，系统不会自动重发',uncertain=True)
                     record.update(status='created',issue_id=str(value['id']),url=safe_url(value.get('issue_url')))
+                    eff_type_id = resolved_type_id
+                    if not eff_type_id and isinstance(value, dict):
+                        issue_type_obj = value.get('issue_type') if isinstance(value.get('issue_type'), dict) else {}
+                        raw_tid = value.get('issue_type_id') or issue_type_obj.get('id')
+                        if type(raw_tid) is int and raw_tid > 0:
+                            eff_type_id = raw_tid
+                    eff_done_id = _find_done_state_id(enterprise_id, eff_type_id, done_states_cache) if eff_type_id else None
+                    if eff_done_id is not None:
+                        try:
+                            _tool(
+                                'update_enterprise_issue',
+                                {'enterprise_id': enterprise_id, 'issue_id': str(value['id']), 'issue_state_id': eff_done_id},
+                                credential=publish_key,
+                                uncertain=False,
+                            )
+                            remote_state_label = '已完成'
+                        except EnterpriseError:
+                            remote_state_label = '已创建（待确认已完成状态）'
+                    else:
+                        remote_state_label = '已完成'
                 except EnterpriseError as exc:
                     record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
             record['updated_at']=now()
             with engine.begin() as conn:
                 upsert(conn,db.gitee_links,record,'id')
                 if record.get('status') == 'created' and record.get('issue_id'):
+                    succeeded_task_ids.append(target.task_id)
                     _save_local_enterprise_issues(
                         conn,
                         enterprise_id,
@@ -1149,7 +1306,7 @@ def publish(engine,payload,cloud_client=None):
                                 'issue_id': str(record['issue_id']),
                                 'title': item['title'],
                                 'description': item['description'],
-                                'state': 'open',
+                                'state': 'closed',
                                 'program_id': target.program_id,
                                 'duration': item['minutes'],
                                 'issue_date': str(snapshot['date']),
@@ -1172,8 +1329,27 @@ def publish(engine,payload,cloud_client=None):
                 except Exception:
                     pass
 
-            result_item = {**record, 'action': action_taken, 'verified': record['status'] == 'created'}
+            result_item = {
+                **record,
+                'action': action_taken,
+                'verified': record['status'] == 'created',
+                'remote_state': remote_state_label if record['status'] == 'created' else '',
+            }
             results.append(result_item)
+        if succeeded_task_ids:
+            from .service import invalidate
+            with engine.begin() as conn:
+                conn.execute(
+                    update(db.tasks)
+                    .where(db.tasks.c.id.in_(list(dict.fromkeys(succeeded_task_ids))))
+                    .values(status='delivered')
+                )
+                affected_dates = set(
+                    conn.execute(select(db.tasks.c.date).where(db.tasks.c.id.in_(succeeded_task_ids))).scalars()
+                )
+                affected_dates.add(str(snapshot['date']))
+                for d in affected_dates:
+                    invalidate(conn, d)
         return {
             'items':results,
             'created':sum(r['status']=='created' for r in results),

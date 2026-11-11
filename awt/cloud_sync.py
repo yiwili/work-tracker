@@ -124,6 +124,10 @@ def local_settings_entities(conn) -> dict[str, dict]:
             'value': {
                 'enterprise_id': s.gitee_enterprise.enterprise_id,
                 'include_details': s.gitee_enterprise.include_details,
+                'assignee_id': s.gitee_enterprise.assignee_id,
+                'assignee_name': s.gitee_enterprise.assignee_name,
+                'assignee_username': s.gitee_enterprise.assignee_username,
+                'assignee_email': s.gitee_enterprise.assignee_email,
                 'dedup': s.gitee_dedup.model_dump(mode='json'),
             },
             'deleted': False,
@@ -236,6 +240,19 @@ def apply_remote_setting(conn, category: str, fields: dict) -> None:
             changed = True
         if 'include_details' in val:
             s.gitee_enterprise.include_details = bool(val['include_details'])
+            changed = True
+        if 'assignee_id' in val:
+            aid = val['assignee_id']
+            s.gitee_enterprise.assignee_id = int(aid) if isinstance(aid, int) and aid > 0 else None
+            changed = True
+        if 'assignee_name' in val:
+            s.gitee_enterprise.assignee_name = str(val['assignee_name'] or '')
+            changed = True
+        if 'assignee_username' in val:
+            s.gitee_enterprise.assignee_username = str(val['assignee_username'] or '')
+            changed = True
+        if 'assignee_email' in val:
+            s.gitee_enterprise.assignee_email = str(val['assignee_email'] or '')
             changed = True
         if 'dedup' in val and isinstance(val['dedup'], dict):
             from .models import GiteeDedupConfig

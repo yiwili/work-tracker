@@ -68,11 +68,11 @@ const statuses: Record<string, string> = {
   requested: "待办的",
   attempted: "进行中",
   delivered: "已完成",
-  verified: "已验收",
+  verified: "已完成",
   rejected: "已拒绝",
   changed: "已修改",
 };
-const selectableStatuses = ["requested", "attempted", "delivered", "verified", "rejected"];
+const selectableStatuses = ["requested", "attempted", "delivered", "rejected"];
 const sources: Record<string, string> = {
   ...sourceLabels,
   workbuddy: "WorkBuddy（旧版合并记录）",

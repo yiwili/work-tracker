@@ -7131,7 +7131,8 @@ code {
 .dot-requested { background-color: #9ca3af; }
 .dot-attempted { background-color: #f59e0b; }
 .dot-delivered { background-color: #10b981; }
-.dot-verified  { background-color: #3b82f6; }
+.dot-verified  { background-color: #10b981; }
+.dot-changed   { background-color: #6366f1; }
 .dot-rejected  { background-color: #ef4444; }
 .dot-default   { background-color: #6b7280; }
 
