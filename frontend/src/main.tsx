@@ -60,7 +60,7 @@ import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
 import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister } from "./TaskQuickActions";
 import { useTodos, hasBracketPrefix, formatTitleWithPrefix } from "./useTodos";
-import { TodoReminderBar, TodoSideDock } from "./TodoWidgets";
+import { TodoSideDock } from "./TodoWidgets";
 import { useTheme, ThemeLibrarySection } from "./themes";
 
 // 与 Gitee 企业版工作项状态对齐；changed 仅为历史数据保留显示。
@@ -120,7 +120,7 @@ function today(tz = "Asia/Shanghai") {
     day: "2-digit",
   }).format(new Date());
 }
-type Editor = { task?: Task; split?: boolean };
+type Editor = { task?: Task; split?: boolean; bubble?: boolean };
 type Draft = {
   date: string;
   title: string;
@@ -1041,34 +1041,6 @@ function App() {
                   </div>
                 </div>
               </div>
-              <TodoReminderBar
-                model={todoModel}
-                onOpenDrawer={() => setTodoDrawerOpen(true)}
-                onEditItem={(item) =>
-                  setEditor({
-                    task: {
-                      ...item,
-                      is_todo: item.is_todo ?? true,
-                      confidence: "人工录入",
-                      evidence_level: "人工说明",
-                      suggested_minutes: null,
-                      started_at: null,
-                      ended_at: null,
-                      evidence: [],
-                      time_source: "manual",
-                      time_reason: "",
-                      timing: {
-                        session_span_minutes: 0,
-                        observable_active_minutes: 0,
-                        tool_runtime_minutes: null,
-                        gap_minutes: 5,
-                        confidence: "",
-                        method: "",
-                      },
-                    },
-                  })
-                }
-              />
               {settings && (
                 <Conversations
                   overview={report.conversations}
@@ -1839,6 +1811,7 @@ function App() {
         onEditItem={(item) => {
           setTodoDrawerOpen(false);
           setEditor({
+            bubble: true,
             task: {
               ...item,
               is_todo: item.is_todo ?? true,
@@ -2279,6 +2252,40 @@ function TaskEditor({
     [showAll, setShowAll] = useState(false),
     [templateName, setTemplateName] = useState<string | null>(null);
   const firstTitleRef = useRef<HTMLInputElement>(null);
+  const bubble = !!editor.bubble;
+  const [bubbleSize, setBubbleSize] = useState(() => ({
+    width: Math.min(640, window.innerWidth - 64),
+    height: Math.min(860, window.innerHeight - 96),
+  }));
+  // 气泡贴着右侧，向左拖左边框加宽、向下拖下边框加高
+  const startResize =
+    (axis: "x" | "y" | "both") => (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startW = bubbleSize.width;
+      const startH = bubbleSize.height;
+      const maxW = Math.min(1100, window.innerWidth - 48);
+      const maxH = window.innerHeight - 40;
+      const move = (ev: PointerEvent) => {
+        if (axis !== "y") {
+          const next = Math.min(maxW, Math.max(460, startW + startX - ev.clientX));
+          setBubbleSize((prev) => ({ ...prev, width: next }));
+        }
+        if (axis !== "x") {
+          const next = Math.min(maxH, Math.max(360, startH + ev.clientY - startY));
+          setBubbleSize((prev) => ({ ...prev, height: next }));
+        }
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        document.body.classList.remove("todo-bubble-resizing");
+      };
+      document.body.classList.add("todo-bubble-resizing");
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    };
   useEffect(() => {
     firstTitleRef.current?.focus();
   }, []);
@@ -2433,14 +2440,41 @@ function TaskEditor({
   const categoryOptions = (cur: string) =>
     !cur || categories.includes(cur) ? categories : [cur, ...categories];
   return (
-    <div className="modal-overlay">
-      <form
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={
-          editor.split ? "拆分任务" : editor.task ? "编辑任务" : "添加人工事项"
+    <div className={bubble ? "todo-bubble-layer" : "modal-overlay"}>
+      <div
+        className={bubble ? "todo-bubble-shell" : "todo-editor-host"}
+        style={
+          bubble
+            ? { width: bubbleSize.width, height: bubbleSize.height }
+            : undefined
         }
+      >
+        {bubble && (
+          <>
+            <div
+              className="todo-bubble-resize left"
+              title="拖动调整宽度"
+              onPointerDown={startResize("x")}
+            />
+            <div
+              className="todo-bubble-resize bottom"
+              title="拖动调整高度"
+              onPointerDown={startResize("y")}
+            />
+            <div
+              className="todo-bubble-resize corner"
+              title="拖动调整大小"
+              onPointerDown={startResize("both")}
+            />
+          </>
+        )}
+        <form
+          className={"modal" + (bubble ? " todo-bubble" : "")}
+          role="dialog"
+          aria-modal={bubble ? undefined : true}
+          aria-label={
+            editor.split ? "拆分任务" : editor.task ? "编辑任务" : "添加人工事项"
+          }
         onSubmit={async (e) => {
           e.preventDefault();
           setError("");
@@ -2866,6 +2900,7 @@ function TaskEditor({
           </button>
         </div>
       </form>
+      </div>
     </div>
   );
 }

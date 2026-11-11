@@ -260,7 +260,7 @@ select:focus {
   outline: none;
   border-color: var(--apple-blue) !important;
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.22) !important;
-  background: #ffffff !important;
+  background: var(--apple-card, #ffffff) !important;
 }
 
 input[type="checkbox"] {
@@ -6630,6 +6630,7 @@ code {
 .link-button { align-self: flex-start; background: none; border: 0; padding: 0; color: #0a6cff; font-size: 13px; cursor: pointer; }
 .state.rejected { color: #dc2626; background: rgba(220,38,38,.08); }
 
+/* 待办：右侧常驻悬浮标签 + 抽屉（原首页提醒卡片已整体并入抽屉） */
 /* 首页醒目待办提醒卡片 + 右侧常驻待办悬浮标签与抽屉（UI 层，可独立替换设计） */
 .todo-reminder-card {
   margin: 14px 0 18px;
@@ -6671,20 +6672,20 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(52, 199, 89, 0.12);
-  color: #15803d;
+  background: var(--apple-green-tint, rgba(52, 199, 89, 0.12));
+  color: var(--apple-green-text, #248a3d);
   flex-shrink: 0;
 }
 .todo-pulse-badge.active {
-  background: linear-gradient(135deg, #f59e0b, #ea580c);
-  color: #fff;
-  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45);
+  background: var(--apple-blue-tint, rgba(0, 113, 227, 0.09));
+  color: var(--apple-blue, #0071e3);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--apple-blue, #0071e3) 45%, transparent);
   animation: todo-pulse 2.2s infinite;
 }
 @keyframes todo-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
-  70% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--apple-blue, #0071e3) 45%, transparent); }
+  70% { box-shadow: 0 0 0 9px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 .todo-headline-row {
   display: flex;
@@ -6695,30 +6696,32 @@ code {
 .todo-headline-row strong {
   font-size: 14px;
   font-weight: 600;
-  color: #1d1d1f;
+  color: var(--apple-text-primary, #111827);
 }
 .todo-count-pill {
   font-size: 11.5px;
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(52, 199, 89, 0.12);
-  color: #15803d;
+  background: var(--apple-green-tint, rgba(34, 197, 94, 0.15));
+  color: var(--apple-green-text, #15803d);
 }
 .todo-count-pill.warn {
-  background: #fef3c7;
-  color: #b45309;
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: var(--apple-orange-tint, rgba(245, 158, 11, 0.16));
+  color: var(--apple-orange-text, #b45309);
+  border: 1px solid var(--apple-orange-border, rgba(245, 158, 11, 0.4));
 }
 .todo-sync-hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
-  color: #86868b;
+  font-size: 12px;
+  color: var(--apple-text-secondary, #6b7280);
 }
 .todo-subtext {
-  display: none;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--apple-text-secondary, #4b5563);
 }
 .todo-drawer-trigger {
   display: inline-flex;
@@ -6783,30 +6786,13 @@ code {
   color: inherit;
   cursor: pointer;
 }
-.todo-inline-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.todo-inline-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
 .todo-check-btn {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  border: 1.5px solid #f59e0b;
-  background: #fff;
-  color: #d97706;
+  border: 1.5px solid var(--apple-border-strong, rgba(0, 0, 0, 0.16));
+  background: var(--apple-control-bg, #f5f5f7);
+  color: var(--apple-text-secondary, #6b7280);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6815,26 +6801,14 @@ code {
   padding: 0;
 }
 .todo-check-btn:hover {
-  background: #f59e0b;
+  background: var(--apple-blue, #0071e3);
+  border-color: var(--apple-blue, #0071e3);
   color: #fff;
-}
-.todo-item-main {
-  flex: 1;
-  background: none;
-  border: 0;
-  text-align: left;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  cursor: pointer;
-  padding: 0;
-  color: #111827;
-  min-width: 0;
 }
 .todo-item-title {
   font-size: 13.5px;
   font-weight: 500;
+  color: var(--apple-text-primary, #111827);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6849,8 +6823,8 @@ code {
   font-size: 11.5px;
   padding: 1px 7px;
   border-radius: 999px;
-  background: #f3f4f6;
-  color: #4b5563;
+  background: var(--apple-control-bg, #f3f4f6);
+  color: var(--apple-text-secondary, #4b5563);
 }
 .todo-tag.project {
   background: rgba(10, 108, 255, 0.09);
@@ -6864,14 +6838,14 @@ code {
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 999px;
-  border: 1px solid rgba(22, 163, 74, 0.35);
-  background: rgba(22, 163, 74, 0.08);
-  color: #15803d;
+  border: 1px solid var(--apple-green-border, rgba(52, 199, 89, 0.24));
+  background: var(--apple-green-tint, rgba(52, 199, 89, 0.12));
+  color: var(--apple-green-text, #248a3d);
   cursor: pointer;
   white-space: nowrap;
 }
 .todo-complete-pill:hover {
-  background: #16a34a;
+  background: var(--apple-green, #34c759);
   color: #fff;
 }
 .todo-delete-btn {
@@ -6886,54 +6860,265 @@ code {
 .todo-delete-btn:hover {
   color: #dc2626;
 }
-.todo-inline-more {
-  padding-top: 2px;
-}
 
-/* 右侧常驻悬浮标签 + 抽屉 */
-.todo-side-tab {
+/* 待办水滴悬浮球：长按拖动，贴死边缘才吸附成胶囊，松手弹簧回弹 */
+.todo-drop-layer {
   position: fixed;
-  right: 0;
-  top: 42%;
-  transform: translateY(-50%);
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
   z-index: 45;
+  will-change: transform;
+  pointer-events: none;
+}
+.todo-drop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 84px;
+  height: 104px;
+  padding: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 8px;
-  border-radius: 12px 0 0 12px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-right: 0;
-  background: #ffffff;
-  color: #1f2937;
-  box-shadow: -4px 6px 20px rgba(15, 23, 42, 0.12);
-  cursor: pointer;
+  justify-content: center;
+  --drop-surface: #eaf2ff;
+  --drop-surface: color-mix(in srgb, var(--apple-blue, #007aff) 14%, #ffffff);
+  --drop-fg: var(--apple-text-primary, #1d1d1f);
+  --drop-border: rgba(0, 122, 255, 0.16);
+  --drop-border: color-mix(in srgb, var(--apple-blue, #007aff) 18%, transparent);
+  --drop-accent: var(--apple-blue, #007aff);
+  --drop-badge-bg: rgba(255, 255, 255, 0.72);
+  --drop-badge-fg: var(--apple-blue, #007aff);
+  --drop-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.08));
+  --drop-shadow-hover: var(--shadow-lg, 0 16px 40px rgba(0, 0, 0, 0.1));
+  border: 1px solid var(--drop-border);
+  border-radius: 24px;
+  background: var(--drop-surface);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  color: var(--drop-fg);
+  box-shadow: var(--drop-shadow);
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  will-change: transform, width, height, border-radius, box-shadow;
+  transform: translate(-50%, -50%);
+  transition:
+    width 0.38s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)),
+    height 0.38s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)),
+    border-radius 0.38s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1)),
+    border-color 0.3s ease,
+    box-shadow 0.3s ease,
+    background 0.3s ease,
+    opacity 0.18s ease;
 }
-.todo-side-tab.attention {
-  background: linear-gradient(180deg, #f59e0b, #ea580c);
-  color: #ffffff;
-  border-color: #d97706;
-  box-shadow: -4px 8px 24px rgba(234, 88, 12, 0.35);
+.todo-drop:hover {
+  box-shadow: var(--drop-shadow-hover);
 }
-.todo-side-tab-text {
-  writing-mode: vertical-rl;
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: 2px;
+/* 三套系统主题配色：浅色-蓝、暗色-白、经典-浅绿 */
+:root[data-theme="apple-dark"] .todo-drop {
+  --drop-surface: rgba(255, 255, 255, 0.96);
+  --drop-fg: #1d1d1f;
+  --drop-border: rgba(0, 0, 0, 0.06);
+  --drop-accent: var(--apple-blue, #0a84ff);
+  --drop-badge-bg: rgba(10, 132, 255, 0.12);
+  --drop-badge-fg: var(--apple-blue, #0a84ff);
+  --drop-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.24);
+  --drop-shadow-hover: 0 20px 48px rgba(0, 0, 0, 0.46), 0 6px 16px rgba(0, 0, 0, 0.3);
 }
-.todo-side-tab-badge {
-  min-width: 20px;
-  height: 20px;
+:root[data-theme="classic-preserved"] .todo-drop {
+  --drop-surface: #e8f3ec;
+  --drop-surface: color-mix(in srgb, var(--apple-green, #74b49b) 26%, #ffffff);
+  --drop-fg: var(--apple-text-primary, #243b40);
+  --drop-border: color-mix(in srgb, var(--apple-green-text, #4c7a67) 24%, transparent);
+  --drop-accent: var(--apple-green-hover, #598873);
+  --drop-badge-bg: rgba(255, 255, 255, 0.72);
+  --drop-badge-fg: var(--apple-green-text, #4c7a67);
+}
+.todo-drop .todo-drop-icon-row svg {
+  color: var(--drop-accent);
+}
+.todo-drop.all-clear .todo-drop-badge {
+  background: var(--apple-green-tint, rgba(52, 199, 89, 0.12));
+  color: var(--apple-green-text, #248a3d);
+}
+.todo-drop.all-clear .todo-drop-icon-row svg {
+  color: var(--apple-green-text, #248a3d);
+}
+:root[data-theme="apple-dark"] .todo-drop.all-clear .todo-drop-badge {
+  background: rgba(52, 199, 89, 0.16);
+  color: #248a3d;
+}
+:root[data-theme="apple-dark"] .todo-drop.all-clear .todo-drop-icon-row svg {
+  color: #248a3d;
+}
+.todo-drop.mode-left,
+.todo-drop.mode-right {
+  width: 52px;
+  height: 128px;
+  border-radius: 26px;
+}
+.todo-drop.mode-top,
+.todo-drop.mode-bottom {
+  width: 152px;
+  height: 46px;
+  border-radius: 23px;
+}
+.todo-drop.mode-left {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+}
+.todo-drop.mode-right {
+  border-top-right-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+.todo-drop.mode-top {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+.todo-drop.mode-bottom {
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+.todo-drop-seal {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  pointer-events: none;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.todo-drop.docked .todo-drop-seal {
+  border-color: var(--apple-blue-border, rgba(0, 113, 227, 0.26));
+  box-shadow: 0 0 10px var(--apple-blue-tint, rgba(0, 113, 227, 0.12));
+}
+.todo-drop.dragging {
+  cursor: grabbing;
+  border-color: var(--apple-border-strong, rgba(0, 0, 0, 0.14));
+  box-shadow: var(--shadow-lg, 0 16px 40px rgba(0, 0, 0, 0.1));
+}
+.todo-drop.drawer-open {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, visibility 0s linear 0.16s;
+}
+.todo-drop:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(0, 122, 255, 0.35),
+    var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.08));
+}
+.todo-drop-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition:
+    opacity 0.24s ease,
+    transform 0.32s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1));
+}
+.drop-content-free {
+  flex-direction: column;
+  gap: 3px;
+  opacity: 1;
+  transform: scale(1);
+}
+.todo-drop-icon-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.todo-drop-badge {
+  min-width: 16px;
+  height: 15px;
   padding: 0 5px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 10px;
   font-weight: 700;
+  line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.18);
-  color: inherit;
+  background: var(--drop-badge-bg, rgba(255, 255, 255, 0.72));
+  color: var(--drop-badge-fg, var(--apple-blue, #0071e3));
+}
+.todo-drop-word {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  line-height: 1.2;
+}
+.drop-content-side {
+  flex-direction: row;
+  gap: 3px;
+  opacity: 0;
+  transform: scale(0.68);
+}
+.drop-content-side .todo-drop-icon-row {
+  flex-direction: column;
+  gap: 2px;
+}
+.todo-drop-side-word {
+  writing-mode: vertical-rl;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  line-height: 1;
+}
+.drop-content-tb {
+  flex-direction: row;
+  gap: 6px;
+  opacity: 0;
+  transform: scale(0.68);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  white-space: nowrap;
+}
+.todo-drop-tb-word {
+  line-height: 1;
+}
+.todo-drop.mode-left .drop-content-free,
+.todo-drop.mode-right .drop-content-free,
+.todo-drop.mode-top .drop-content-free,
+.todo-drop.mode-bottom .drop-content-free {
+  opacity: 0;
+  transform: scale(0.68);
+}
+.todo-drop.mode-left .drop-content-side,
+.todo-drop.mode-right .drop-content-side {
+  opacity: 1;
+  transform: scale(1);
+}
+.todo-drop.mode-top .drop-content-tb,
+.todo-drop.mode-bottom .drop-content-tb {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 贴边引力波纹 */
+.todo-drop-aura {
+  position: fixed;
+  pointer-events: none;
+  z-index: 44;
+  border-radius: 999px;
+  background: var(--apple-blue-tint, rgba(0, 113, 227, 0.09));
+  filter: blur(1px);
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s var(--ease-spring, cubic-bezier(0.34, 1.56, 0.64, 1));
+}
+.todo-drop-aura.active {
+  opacity: 1;
+  transform: scale(1);
 }
 .todo-drawer-backdrop {
   position: fixed;
@@ -6946,19 +7131,34 @@ code {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(400px, 92vw);
-  background: #ffffff;
-  box-shadow: -12px 0 36px rgba(15, 23, 42, 0.18);
+  width: min(430px, 94vw);
+  background: var(--apple-material-thick, #ffffff);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  color: var(--apple-text-primary, #1f2937);
+  border-left: 1px solid var(--apple-border, rgba(0, 0, 0, 0.08));
+  border-radius: 20px 0 0 20px;
+  box-shadow: var(--shadow-lg, -12px 0 36px rgba(15, 23, 42, 0.18));
   z-index: 49;
   transform: translateX(102%);
   transition: transform 0.22s ease;
   display: flex;
   flex-direction: column;
-  padding: 18px;
+  padding: 20px 18px;
   gap: 12px;
+  box-sizing: border-box;
 }
 .todo-side-drawer.open {
   transform: translateX(0);
+}
+.todo-drawer-reminder-head {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--apple-border, rgba(0, 0, 0, 0.08));
+}
+.todo-drawer-reminder-head .todo-headline-row {
+  gap: 6px;
 }
 .todo-drawer-header {
   display: flex;
@@ -6981,20 +7181,20 @@ code {
   border: 0;
   padding: 6px;
   cursor: pointer;
-  color: #4b5563;
+  color: var(--apple-text-secondary, #4b5563);
   border-radius: 8px;
 }
 .todo-drawer-hint {
   margin: 0;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary, #6b7280);
 }
 .todo-drawer-form {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding-bottom: 10px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--apple-border, rgba(0, 0, 0, 0.08));
 }
 .todo-drawer-form-row {
   display: flex;
@@ -7014,7 +7214,7 @@ code {
 .todo-drawer-empty {
   text-align: center;
   padding: 36px 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary, #6b7280);
 }
 .todo-drawer-list {
   list-style: none;
@@ -7029,9 +7229,9 @@ code {
   align-items: flex-start;
   gap: 8px;
   padding: 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  background: #fafafa;
+  border-radius: 12px;
+  border: 1px solid var(--apple-border, rgba(0, 0, 0, 0.08));
+  background: var(--apple-card-subtle, #fafafa);
 }
 .todo-drawer-item-content {
   flex: 1;
@@ -7040,11 +7240,129 @@ code {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  border-radius: 8px;
+}
+.todo-drawer-item-content:focus-visible {
+  outline: 2px solid var(--apple-blue, #0071e3);
+  outline-offset: 2px;
+}
+.todo-drawer-item-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+.todo-drawer-item-actions .todo-complete-pill {
+  font-size: 11.5px;
+  padding: 2px 8px;
 }
 .todo-item-details {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary, #6b7280);
   white-space: pre-wrap;
+}
+
+/* 待办编辑气泡：贴右侧的圆角悬浮窗，可拖动左/下边框与左上角缩放 */
+.todo-editor-host {
+  display: contents;
+}
+
+.todo-bubble-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.todo-bubble-shell {
+  position: fixed;
+  top: 64px;
+  right: 24px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 40px);
+  pointer-events: auto;
+  animation: todo-bubble-in 0.22s var(--ease-apple, ease-out);
+}
+
+@keyframes todo-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.modal.todo-bubble {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 24px 24px 20px;
+  border-radius: 26px;
+  background: var(--apple-material-thick, rgba(255, 255, 255, 0.96));
+  border: 1px solid var(--apple-border, rgba(0, 0, 0, 0.08));
+  box-shadow: var(--shadow-modal);
+  animation: none;
+  box-sizing: border-box;
+}
+
+.todo-bubble-resize {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+
+.todo-bubble-resize.left {
+  left: -4px;
+  top: 20px;
+  bottom: 20px;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.todo-bubble-resize.bottom {
+  left: 20px;
+  right: 20px;
+  bottom: -4px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.todo-bubble-resize.corner {
+  left: -4px;
+  bottom: -4px;
+  width: 24px;
+  height: 24px;
+  cursor: nwse-resize;
+}
+
+.todo-bubble-resize.corner::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  bottom: 7px;
+  width: 8px;
+  height: 8px;
+  border-left: 2px solid var(--apple-text-quaternary, #9ca3af);
+  border-bottom: 2px solid var(--apple-text-quaternary, #9ca3af);
+  border-radius: 0 0 0 3px;
+  opacity: 0.85;
+}
+
+body.todo-bubble-resizing {
+  user-select: none;
+}
+
+@media (max-width: 760px) {
+  .todo-bubble-shell {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto !important;
+  }
 }
 
 /* ==========================================================================

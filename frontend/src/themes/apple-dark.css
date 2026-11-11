@@ -154,7 +154,7 @@
 }
 
 :root[data-theme='apple-dark'] .outline,
-:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main) {
+:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main):not(.todo-drop) {
   background: var(--apple-control-bg);
   border-color: var(--apple-border-strong);
   color: var(--apple-text-primary);
