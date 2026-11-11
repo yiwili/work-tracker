@@ -168,7 +168,8 @@ def test_enterprise_tools_follow_official_mcp_contract(monkeypatch):
     assert ge._tool('create_enterprise_issue',{'enterprise_id':1,'title':'work'})['id']==9
     assert [s[0] for s in seen]==['list_enterprises','list_programs','list_issue_types','create_enterprise_issue']
     assert {s[2] for s in seen}=={'enterprise-private-secret'}
-    assert seen[1][1]['status']=='0,1' and seen[2][1]['program_id']==11
+    assert seen[1][1]['statuses']=='0,1' and 'status' not in seen[1][1]
+    assert seen[2][1]['program_id']==11
 
 
 def test_pasted_bearer_prefix_and_quotes_are_normalized(monkeypatch):

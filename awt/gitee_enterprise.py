@@ -101,7 +101,7 @@ def enterprises():
 
 
 def programs(enterprise_id):
-    rows=_paged('list_programs',{'enterprise_id':enterprise_id,'status':'0,1','sort':'name','direction':'asc'})
+    rows=_paged('list_programs',{'enterprise_id':enterprise_id,'statuses':'0,1','sort':'name','direction':'asc'})
     return [{'id':r['id'],'name':str(r.get('name','')),'ident':str(r.get('ident') or ''),'status':r.get('status',0)} for r in rows if type(r.get('id')) is int and r['id']>0 and r.get('status',0)!=2]
 
 
