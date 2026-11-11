@@ -1,7 +1,111 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Clock3, Plus, X } from "lucide-react";
 import { api } from "./api";
 import type { Task } from "./types";
+
+type DropdownPosition = {
+  left: number;
+  top?: number;
+  bottom?: number;
+  minWidth: number;
+  maxHeight: number;
+  placement: "bottom" | "top";
+};
+
+function useFloatingDropdown(
+  open: boolean,
+  setOpen: React.Dispatch<React.SetStateAction<boolean>>,
+  rootRef: React.RefObject<HTMLDivElement | null>,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+  panelRef: React.RefObject<HTMLDivElement | null>,
+  estimatedHeight: number,
+  estimatedWidth = 220,
+) {
+  const [pos, setPos] = useState<DropdownPosition>({
+    left: 0,
+    top: 0,
+    minWidth: 190,
+    maxHeight: 280,
+    placement: "bottom",
+  });
+
+  const updatePosition = useCallback(() => {
+    const btn = triggerRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8;
+    const gap = 4;
+    const panelEl = panelRef.current;
+    const minWidth = Math.max(190, Math.min(280, Math.round(rect.width + 24)));
+    const measuredW = panelEl ? panelEl.offsetWidth : Math.max(minWidth, estimatedWidth);
+    const measuredH = panelEl ? Math.min(panelEl.scrollHeight, 340) : estimatedHeight;
+    const spaceBelow = Math.max(0, vh - rect.bottom - margin - gap);
+    const spaceAbove = Math.max(0, rect.top - margin - gap);
+    const openUpward = spaceBelow < measuredH && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(340, openUpward ? spaceAbove : spaceBelow));
+    const left = Math.max(
+      margin,
+      Math.min(rect.left, vw - Math.max(minWidth, measuredW) - margin),
+    );
+    setPos(
+      openUpward
+        ? {
+            left,
+            bottom: vh - rect.top + gap,
+            minWidth,
+            maxHeight,
+            placement: "top",
+          }
+        : {
+            left,
+            top: rect.bottom + gap,
+            minWidth,
+            maxHeight,
+            placement: "bottom",
+          },
+    );
+  }, [triggerRef, panelRef, estimatedHeight, estimatedWidth]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const raf = window.requestAnimationFrame(updatePosition);
+    return () => window.cancelAnimationFrame(raf);
+  }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        rootRef.current?.contains(target) ||
+        panelRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onViewportChange = () => updatePosition();
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, setOpen, rootRef, panelRef, updatePosition]);
+
+  return pos;
+}
 
 export const hours = (n: number | null | undefined): string => {
   if (typeof n !== "number" || isNaN(n) || n < 0) return "0";
@@ -61,7 +165,10 @@ export function ProjectQuickSelect({
   const [options, setOptions] = useState<string[]>(() => propProjects || cachedProjects || []);
   const [saving, setSaving] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pos = useFloatingDropdown(open, setOpen, rootRef, triggerRef, panelRef, 300, 240);
 
   useEffect(() => {
     if (propProjects && propProjects.length > 0) {
@@ -77,20 +184,6 @@ export function ProjectQuickSelect({
     if (open) {
       setSearch("");
       setTimeout(() => inputRef.current?.focus(), 50);
-      const onDocClick = (e: MouseEvent) => {
-        if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-          setOpen(false);
-        }
-      };
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === "Escape") setOpen(false);
-      };
-      document.addEventListener("mousedown", onDocClick);
-      document.addEventListener("keydown", onKey);
-      return () => {
-        document.removeEventListener("mousedown", onDocClick);
-        document.removeEventListener("keydown", onKey);
-      };
     }
   }, [open]);
 
@@ -124,6 +217,7 @@ export function ProjectQuickSelect({
   return (
     <div className="quick-select-wrapper" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="quick-project-btn"
         title="点击快捷切换项目"
@@ -135,58 +229,70 @@ export function ProjectQuickSelect({
         <ChevronDown size={13} className={`quick-chevron ${open ? "open" : ""}`} />
       </button>
 
-      {open && (
-        <div className="quick-dropdown-panel quick-project-dropdown">
-          <div className="quick-dropdown-header">
-            <span className="quick-dropdown-title">选择所属项目</span>
-          </div>
-          <div className="quick-search-box">
-            <input
-              ref={inputRef}
-              type="text"
-              value={search}
-              placeholder="搜索或输入新项目..."
-              maxLength={200}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && search.trim()) {
-                  e.preventDefault();
-                  void select(search.trim());
-                }
-              }}
-            />
-          </div>
-          <div className="quick-dropdown-list">
-            {showCustomOption && (
-              <button
-                type="button"
-                className="quick-dropdown-item custom-create"
-                onClick={() => void select(search.trim())}
-              >
-                <Plus size={14} />
-                <span>使用新项目：<strong>{search.trim()}</strong></span>
-              </button>
-            )}
-            {filtered.map((p) => {
-              const isSelected = (task.project || "未归属项目") === p;
-              return (
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className={`quick-dropdown-panel quick-project-dropdown placement-${pos.placement}`}
+            style={{
+              left: pos.left,
+              top: pos.top,
+              bottom: pos.bottom,
+              minWidth: pos.minWidth,
+              maxHeight: pos.maxHeight,
+            }}
+          >
+            <div className="quick-dropdown-header">
+              <span className="quick-dropdown-title">选择所属项目</span>
+            </div>
+            <div className="quick-search-box">
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                placeholder="搜索或输入新项目..."
+                maxLength={200}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && search.trim()) {
+                    e.preventDefault();
+                    void select(search.trim());
+                  }
+                }}
+              />
+            </div>
+            <div className="quick-dropdown-list">
+              {showCustomOption && (
                 <button
-                  key={p}
                   type="button"
-                  className={`quick-dropdown-item ${isSelected ? "selected" : ""}`}
-                  onClick={() => void select(p)}
+                  className="quick-dropdown-item custom-create"
+                  onClick={() => void select(search.trim())}
                 >
-                  <span className="item-text">{p}</span>
-                  {isSelected && <Check size={14} className="item-check" />}
+                  <Plus size={14} />
+                  <span>使用新项目：<strong>{search.trim()}</strong></span>
                 </button>
-              );
-            })}
-            {filtered.length === 0 && !showCustomOption && (
-              <div className="quick-dropdown-empty">暂无匹配项目</div>
-            )}
-          </div>
-        </div>
-      )}
+              )}
+              {filtered.map((p) => {
+                const isSelected = (task.project || "未归属项目") === p;
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`quick-dropdown-item ${isSelected ? "selected" : ""}`}
+                    onClick={() => void select(p)}
+                  >
+                    <span className="item-text">{p}</span>
+                    {isSelected && <Check size={14} className="item-check" />}
+                  </button>
+                );
+              })}
+              {filtered.length === 0 && !showCustomOption && (
+                <div className="quick-dropdown-empty">暂无匹配项目</div>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -206,25 +312,9 @@ export function StatusQuickSelect({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (open) {
-      const onDocClick = (e: MouseEvent) => {
-        if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-          setOpen(false);
-        }
-      };
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === "Escape") setOpen(false);
-      };
-      document.addEventListener("mousedown", onDocClick);
-      document.addEventListener("keydown", onKey);
-      return () => {
-        document.removeEventListener("mousedown", onDocClick);
-        document.removeEventListener("keydown", onKey);
-      };
-    }
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pos = useFloatingDropdown(open, setOpen, rootRef, triggerRef, panelRef, 220, 190);
 
   const select = async (statusKey: string) => {
     if (statusKey === task.status) {
@@ -252,6 +342,7 @@ export function StatusQuickSelect({
   return (
     <div className="quick-select-wrapper" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={`quick-status-btn state ${task.status}`}
         title="点击快捷切换完成情况"
@@ -264,31 +355,43 @@ export function StatusQuickSelect({
         <ChevronDown size={13} className={`quick-chevron ${open ? "open" : ""}`} />
       </button>
 
-      {open && (
-        <div className="quick-dropdown-panel quick-status-dropdown">
-          <div className="quick-dropdown-header">
-            <span className="quick-dropdown-title">选择完成情况</span>
-          </div>
-          <div className="quick-dropdown-list">
-            {STATUS_LIST.map((key) => {
-              const info = STATUS_MAP[key];
-              const isSelected = task.status === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  className={`quick-dropdown-item ${isSelected ? "selected" : ""}`}
-                  onClick={() => void select(key)}
-                >
-                  <span className={`status-dot ${info.dotClass}`} />
-                  <span className="item-text">{info.label}</span>
-                  {isSelected && <Check size={14} className="item-check" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className={`quick-dropdown-panel quick-status-dropdown placement-${pos.placement}`}
+            style={{
+              left: pos.left,
+              top: pos.top,
+              bottom: pos.bottom,
+              minWidth: pos.minWidth,
+              maxHeight: pos.maxHeight,
+            }}
+          >
+            <div className="quick-dropdown-header">
+              <span className="quick-dropdown-title">选择完成情况</span>
+            </div>
+            <div className="quick-dropdown-list">
+              {STATUS_LIST.map((key) => {
+                const info = STATUS_MAP[key];
+                const isSelected = task.status === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`quick-dropdown-item ${isSelected ? "selected" : ""}`}
+                    onClick={() => void select(key)}
+                  >
+                    <span className={`status-dot ${info.dotClass}`} />
+                    <span className="item-text">{info.label}</span>
+                    {isSelected && <Check size={14} className="item-check" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

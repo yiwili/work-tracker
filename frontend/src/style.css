@@ -7100,18 +7100,22 @@ code {
 .dot-default   { background-color: #6b7280; }
 
 .quick-dropdown-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   min-width: 190px;
   max-width: 280px;
+  display: flex;
+  flex-direction: column;
   background: #ffffff;
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 10px;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  z-index: 120;
+  z-index: 1200;
   overflow: hidden;
   animation: fadeInQuick 0.15s ease-out;
+}
+
+.quick-dropdown-panel.placement-top {
+  animation: fadeInQuickUp 0.15s ease-out;
 }
 
 @keyframes fadeInQuick {
@@ -7119,7 +7123,13 @@ code {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fadeInQuickUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .quick-dropdown-header {
+  flex-shrink: 0;
   padding: 8px 12px;
   background: #f9fafb;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
@@ -7134,6 +7144,7 @@ code {
 }
 
 .quick-search-box {
+  flex-shrink: 0;
   padding: 6px 8px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
@@ -7154,7 +7165,9 @@ code {
 }
 
 .quick-dropdown-list {
-  max-height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 240px;
   overflow-y: auto;
   padding: 4px;
   display: flex;
