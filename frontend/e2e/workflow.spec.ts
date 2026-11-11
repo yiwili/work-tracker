@@ -17,10 +17,10 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .getByRole("button", { name: "AI 分析全天对话", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "修复订单查询接口超时", exact: true }),
+    page.getByRole("button", { name: /^#\d+\s+(?:【[^】]+】)?修复订单查询接口超时$/ }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "修复订单查询接口超时", exact: true })
+    .getByRole("button", { name: /^#\d+\s+(?:【[^】]+】)?修复订单查询接口超时$/ })
     .click();
   let dialog = page.getByRole("dialog");
   await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
@@ -35,19 +35,19 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
   await dialog
     .getByLabel("详细工作内容")
     .fill("沟通接口变更，确认联调时间和待办事项。");
-  await dialog.getByLabel("工作分类").fill("客户沟通");
+  await dialog.getByLabel("工作分类").selectOption("任务");
   await dialog.getByLabel("完成工时小时 1").fill("2");
   await expect(dialog.getByLabel("预计工时小时 1")).toHaveValue("2");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(
-    page.getByRole("button", { name: "预览并推送工作项" }),
+    page.getByRole("button", { name: "推送至 Gitee", exact: true }),
   ).toBeEnabled();
   await page.request.post("/api/reports/2026-10-24/confirm", { data: {} });
   await page.reload();
   await expect(page.getByLabel("工作日期")).toHaveValue("2026-10-24");
   await expect(
-    page.getByRole("button", { name: "预览并推送工作项" }),
+    page.getByRole("button", { name: "推送至 Gitee", exact: true }),
   ).toBeEnabled();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 Markdown" }).click();
@@ -103,7 +103,7 @@ test("mobile empty layout, split, merge, evidence and reanalysis preserve review
   await page.getByLabel("任务标题").fill("评审需求并整理方案");
   await page.getByLabel("完成工时小时 1").fill("2");
   await page.getByRole("button", { name: "保存记录" }).click();
-  await page.getByLabel("拆分 评审需求并整理方案").click();
+  await page.getByLabel(/^拆分 (?:【[^】]+】)?评审需求并整理方案$/).click();
   let dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("1");
   await expect(dialog.getByLabel("完成工时小时 2")).toHaveValue("1");
@@ -284,20 +284,20 @@ test("AI time allocation preserves pinned communication and applies AI time", as
   await expect(preview).toContainText("已应用");
   await preview.getByRole("button", { name: "关闭", exact: true }).click();
   const meeting = page.locator("tbody tr").filter({
-    has: page.getByRole("button", { name: "客户需求沟通", exact: true }),
+    has: page.getByRole("button", { name: /^#\d+\s+(?:【[^】]+】)?客户需求沟通$/ }),
   });
   await expect(meeting.getByText("固定工时", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "客户需求沟通", exact: true }).click();
+  await page.getByRole("button", { name: /^#\d+\s+(?:【[^】]+】)?客户需求沟通$/ }).click();
   await expect(page.getByLabel("完成工时小时 1")).toHaveValue("1");
   await page.getByLabel("关闭编辑").click();
   await page
-    .getByRole("button", { name: "优化档案查询功能", exact: true })
+    .getByRole("button", { name: /^#\d+\s+(?:【[^】]+】)?优化档案查询功能$/ })
     .click();
   await expect(page.getByLabel("完成工时小时 1")).toHaveValue("7");
   await expect(page.getByLabel("固定此项工时，AI分配时保留")).not.toBeChecked();
   await page.getByLabel("关闭编辑").click();
   await expect(
-    page.getByRole("button", { name: "预览并推送工作项" }),
+    page.getByRole("button", { name: "推送至 Gitee", exact: true }),
   ).toBeEnabled();
   await page.reload();
   await expect(
@@ -397,16 +397,19 @@ test("file import generates reusable style template and Gitee sync enters histor
       .locator(".history-list")
       .getByText("修复附件管理提取问题", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Gitee 企业版" }).click();
   await page
-    .getByLabel("Gitee Token（留空保留）")
+    .getByLabel("MCP 企业令牌（留空保留）")
     .fill("isolated-e2e-gitee-token");
+  await page.getByRole("button", { name: "读取企业列表", exact: true }).click();
+  await expect(page.getByLabel("MCP 企业令牌（留空保留）")).toHaveValue("");
+  await page.getByRole("tab", { name: "提示词与风格" }).click();
   await page
-    .getByRole("button", { name: "立即抓取工作项", exact: true })
+    .getByRole("button", { name: "立即抓取企业历史工作项", exact: true })
     .click();
   await expect(
-    page.getByRole("status").filter({ hasText: "已抓取 1 条，新增 1 条" }),
+    page.getByRole("status").filter({ hasText: /已抓取 1 条.*新增 1 条/ }),
   ).toBeVisible();
-  await expect(page.getByLabel("Gitee Token（留空保留）")).toHaveValue("");
   const history = await page.request.get("/api/history").then((r) => r.json());
   expect(history.total).toBe(2);
   expect(
@@ -535,7 +538,7 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
 }) => {
   await page.goto("/?date=2026-10-18");
   await page.getByRole("button", { name: "系统设置", exact: true }).click();
-  await page.getByRole("tab", { name: "企业同步" }).click();
+  await page.getByRole("tab", { name: "Gitee 企业版" }).click();
   await page.getByRole("button", { name: "读取企业列表", exact: true }).click();
   await page.getByLabel("目标企业", { exact: true }).selectOption("7");
   await page.getByRole("button", { name: "读取企业项目", exact: true }).click();
@@ -557,7 +560,7 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
   ).toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: "系统设置", exact: true }).click();
-  await page.getByRole("tab", { name: "企业同步" }).click();
+  await page.getByRole("tab", { name: "Gitee 企业版" }).click();
   await expect(page.getByLabel("映射文字 2", { exact: true })).toHaveValue(
     "批量打印",
   );
@@ -584,7 +587,7 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
     await page.getByLabel("完成工时小时 1").fill(hoursStr);
     await page.getByRole("button", { name: "保存记录", exact: true }).click();
   }
-  await page.getByRole("button", { name: "提交到 Gitee", exact: true }).click();
+  await page.getByRole("button", { name: "推送至 Gitee", exact: true }).click();
   let dialog = page.getByRole("dialog");
   await expect(
     dialog.getByLabel("提交目标项目 1", { exact: true }),
@@ -614,11 +617,11 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
     dialog.getByText("已创建 #8002", { exact: false }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.getByRole("button", { name: "提交到 Gitee", exact: true }).click();
+  await page.getByRole("button", { name: "推送至 Gitee", exact: true }).click();
   dialog = page.getByRole("dialog");
   await expect(
     dialog.getByLabel("提交工作项 1", { exact: true }),
-  ).toBeDisabled();
+  ).not.toBeChecked();
   await expect(
     dialog.getByRole("button", { name: "确认创建 0 条工作项", exact: true }),
   ).toBeDisabled();
@@ -633,14 +636,14 @@ test("enterprise publishing button is directly accessible on daily report withou
 }) => {
   await page.goto("/?date=2026-10-17");
   await expect(
-    page.getByRole("button", { name: "预览并推送工作项", exact: true }),
+    page.getByRole("button", { name: "推送至 Gitee", exact: true }),
   ).toBeDisabled();
   await page.request.post("/api/tasks", {
     data: { date: "2026-10-16", title: "终端入口验证事项" },
   });
   await page.getByLabel("工作日期", { exact: true }).fill("2026-10-16");
   await page
-    .getByRole("button", { name: "预览并推送工作项", exact: true })
+    .getByRole("button", { name: "推送至 Gitee", exact: true })
     .click();
   await expect(
     page
@@ -795,8 +798,7 @@ test("collect details modal lets the user adopt a Git commit as a work item", as
     await dialog.getByRole("button", { name: "关闭采集详情" }).click();
     await expect(
       page.getByRole("button", {
-        name: "Local User fixture work",
-        exact: true,
+        name: /^#\d+\s+Local User fixture work$/,
       }),
     ).toBeVisible();
   } finally {
@@ -827,14 +829,14 @@ test("deferred AI analysis waits for the user to review and import candidates", 
     await expect(analysisToast).toContainText("AI 分析完成");
     await expect(analysisToast).toContainText("尚未写入今日清单");
     await expect(
-      analysisToast.getByRole("button", { name: "前往查看" }),
+      analysisToast.getByRole("button", { name: "选择替换或新建" }),
     ).toBeVisible();
     await analysisToast.getByRole("button", { name: "关闭提示" }).click();
     await expect(page.locator("tbody tr")).toHaveCount(0);
     await page.getByRole("button", { name: "分析结果（1）" }).click();
     const dialog = page.getByRole("dialog", { name: "AI 分析结果" });
     await expect(dialog).toBeVisible();
-    const rowCheckbox = dialog.getByLabel("导入 修复订单查询接口超时");
+    const rowCheckbox = dialog.getByLabel(/导入 .*修复订单查询接口超时/);
     await expect(rowCheckbox).toBeChecked();
     await dialog.getByLabel("工作项标题").fill("优化档案检索筛选条件");
     await dialog.getByRole("button", { name: "导入选中的 1 项" }).click();
@@ -842,8 +844,7 @@ test("deferred AI analysis waits for the user to review and import candidates", 
     await dialog.getByRole("button", { name: "关闭分析结果" }).click();
     await expect(
       page.getByRole("button", {
-        name: "优化档案检索筛选条件",
-        exact: true,
+        name: /^#\d+\s+(?:【[^】]+】)?优化档案检索筛选条件$/,
       }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "分析结果" })).toBeVisible();

@@ -71,9 +71,15 @@ def fake_enterprise(tool,arguments,credential=None,uncertain=False):
         enterprise_posts.append(arguments)
         identifier=8000+len(enterprise_posts)
         return {'id':identifier,'ident':f'I{identifier}'}
+    if tool=='update_enterprise_issue':
+        iid=int(arguments['issue_id'])
+        return {'id':iid,'ident':f'I{iid}','issue_url':f'https://gitee.com/ent/issue/{iid}'}
     if tool=='list_enterprises':return {'total_count':1,'data':[{'id':7,'name':'测试公司','path':'test-company'}]}
     if tool=='list_programs':return {'total_count':2,'data':[{'id':11,'name':'上海工程技术大学档案系统','ident':'SHGC','status':0},{'id':22,'name':'2026档案系统','ident':'2026','status':0}]}
     if tool=='list_issue_types':return {'total_count':1,'data':[{'id':9,'title':'任务','category':'task'}]}
+    if tool=='list_issue_type_states':return {'total_count':3,'data':[{'id':87,'title':'进行中','types':'progressing'},{'id':88,'title':'已完成','types':'closed'},{'id':89,'title':'已拒绝','types':'rejected'}]}
+    if tool=='list_enterprise_members':return {'total_count':1,'data':[{'user_id':501,'name':'Local User','username':'localuser','email':'local@example.invalid'}]}
+    if tool=='list_enterprise_issues':return {'total_count':0,'data':[]}
     if tool=='get_enterprise_issue_detail':return {'id':int(arguments['issue_id']),'program_id':11,'description':''}
     raise AssertionError('Unexpected enterprise test tool: '+tool)
 gitee_enterprise._tool=fake_enterprise

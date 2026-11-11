@@ -66,11 +66,11 @@ test("setup wizard walks each step, saves the model connection and reports statu
     ).toBeChecked();
     await dialog.getByRole("button", { name: "保存并继续" }).click();
 
-    // 第 4 步：Gitee 接入（历史 Issue + 企业工作项）
+    // 第 4 步：Gitee 接入（企业工作项）
     await expect(
-      dialog.getByText("第 4 步 · Gitee 接入（可选）"),
+      dialog.getByText("第 4 步 · Gitee 企业版接入（可选）"),
     ).toBeVisible();
-    await dialog.getByLabel(/Gitee 私人令牌/).fill("wizard-fixture-token");
+    await dialog.getByLabel(/MCP 企业令牌/).fill("wizard-fixture-token");
     await dialog.getByRole("button", { name: "保存并查看结果" }).click();
 
     // 完成页
