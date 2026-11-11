@@ -399,7 +399,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
                            'status': state_for(list(supporting.values())), 'origin': 'auto',
                            'confidence': '全天 AI 分析 · 曾被删除' if is_previously_deleted else '全天 AI 分析 · 待审核',
                            'evidence_level': '已有行为证据' if has_behavior else '只有对话描述',
-                           'fingerprint': fingerprint, 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
+                           'fingerprint': fingerprint, 'edited': False, 'deleted': False, 'is_todo': False, 'started_at': None, 'ended_at': None},
                           supporting, is_previously_deleted))
     # Everything above is validated before replacing any drafts. The caller commits atomically.
     archived = 0
@@ -487,7 +487,7 @@ def import_pending(conn, day, selections):
                            'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
                            'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核',
                            'evidence_level': candidate.get('evidence_level', '已有行为证据'),
-                           'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'started_at': None, 'ended_at': None},
+                           'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'is_todo': False, 'started_at': None, 'ended_at': None},
                           rows))
     protected_task_ids = {t['id'] for t in protected}
     archived = 0

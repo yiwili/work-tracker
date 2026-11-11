@@ -127,6 +127,7 @@ type Draft = {
   project: string;
   category: string;
   status: string;
+  is_todo: boolean;
   confirmed_minutes: number;
   suggested_minutes?: number | null;
   confirmedHoursText?: string;
@@ -141,7 +142,8 @@ const fromTask = (t?: Task, day = ""): Draft => ({
   details: t?.details || "",
   project: t?.project || "",
   category: t?.category || "任务",
-  status: t?.status || "requested",
+  status: t?.status || "delivered",
+  is_todo: t ? Boolean(t.is_todo) : false,
   confirmed_minutes: t?.confirmed_minutes || 0,
   suggested_minutes: t?.suggested_minutes ?? null,
   confirmedHoursText: hours(t?.confirmed_minutes || 0),
@@ -987,6 +989,7 @@ function App() {
                   setEditor({
                     task: {
                       ...item,
+                      is_todo: item.is_todo ?? true,
                       confidence: "人工录入",
                       evidence_level: "人工说明",
                       suggested_minutes: null,
@@ -1762,6 +1765,7 @@ function App() {
           setEditor({
             task: {
               ...item,
+              is_todo: item.is_todo ?? true,
               confidence: "人工录入",
               evidence_level: "人工说明",
               suggested_minutes: null,
@@ -2307,7 +2311,8 @@ function TaskEditor({
             details: t.details,
             project: t.project,
             category: t.category || "任务",
-            status: t.status || "requested",
+            status: t.status || "delivered",
+            is_todo: false,
             confirmed_minutes: t.confirmed_minutes,
             confirmedHoursText: hours(t.confirmed_minutes || 0),
             suggested_minutes: t.confirmed_minutes > 0 ? t.confirmed_minutes : null,

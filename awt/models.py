@@ -396,6 +396,7 @@ class TaskInput(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     time_locked: bool | None = None
+    is_todo: bool = True
 
     @field_validator("title")
     @classmethod
@@ -432,6 +433,7 @@ class TaskPatch(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     time_locked: bool | None = None
+    is_todo: bool | None = None
 
 
 class TaskFromEventsInput(BaseModel):

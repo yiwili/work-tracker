@@ -476,3 +476,30 @@ def test_patch_suggested_and_confirmed_minutes(client):
     assert updated['confirmed_minutes'] == 90
     assert updated['time_locked'] is True
 
+
+def test_manual_work_items_are_excluded_from_todos(client, tmp_path):
+    manual_entry_id = client.post(
+        '/api/tasks',
+        json={**manual(0, date=DAY, title='【其他】手动补录事项', status='requested'), 'is_todo': False},
+    ).json()['id']
+    todo_id = client.post(
+        '/api/tasks',
+        json={**manual(0, date='2026-10-20', title='【其他】真正待办事项', status='requested'), 'is_todo': True},
+    ).json()['id']
+
+    todos = client.get('/api/todos').json()
+    assert [t['id'] for t in todos] == [todo_id]
+
+    day_tasks = client.get(f'/api/tasks?date={DAY}').json()
+    manual_task = next(t for t in day_tasks if t['id'] == manual_entry_id)
+    assert manual_task['is_todo'] is False
+
+    # 编辑人工补录事项，即使状态仍为 requested 也不得进入 todo
+    client.patch(f'/api/tasks/{manual_entry_id}', json={'title': '【其他】手动补录事项-已修改', 'status': 'requested'}).raise_for_status()
+    assert [t['id'] for t in client.get('/api/todos').json()] == [todo_id]
+
+    # 迁移幂等性：重复执行 db.migrate 应保持成功
+    reopened = db.make_engine(tmp_path / 'work.db')
+    db.migrate(reopened)
+    reopened.dispose()
+

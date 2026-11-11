@@ -19,6 +19,7 @@ export type Task = {
   category: string;
   status: string;
   origin: string;
+  is_todo?: boolean;
   confidence: string;
   evidence_level: string;
   confirmed_minutes: number;

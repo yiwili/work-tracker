@@ -525,3 +525,31 @@ def test_cloud_client_enforces_https_for_non_loopback():
     # HTTPS is allowed
     c3 = CloudClient(base_url="https://remote-server.com")
     assert c3.base_url == "https://remote-server.com"
+
+
+def test_is_todo_flag_syncs_across_devices(make_desktop, fake_cloud):
+    engA, clientA = make_desktop("desktopA")
+    engB, clientB = make_desktop("desktopB")
+
+    cloud_sync.bind(engA, "https://cloud.awt.local", "user@example.com", "password123", "Desktop A", client=clientA)
+    clientA.token = "wts_sessionA"
+    fake_cloud[0].sessions["wts_sessionA"] = {'account_id': 'acc-1', 'device_id': 'devA'}
+
+    cloud_sync.bind(engB, "https://cloud.awt.local", "user@example.com", "password123", "Desktop B", client=clientB)
+    clientB.token = "wts_sessionB"
+    fake_cloud[0].sessions["wts_sessionB"] = {'account_id': 'acc-1', 'device_id': 'devB'}
+
+    with engA.begin() as conn:
+        manual_id = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Manual Entry", status="requested", is_todo=False))
+        todo_id = service.save_task(conn, TaskInput(date=date(2026, 11, 6), title="Real Todo", status="requested", is_todo=True))
+
+    cloud_sync.sync_once(engA, clientA)
+    cloud_sync.sync_once(engB, clientB)
+
+    with engB.connect() as conn:
+        todos_b = service.list_todos(conn)
+        assert [t['id'] for t in todos_b] == [todo_id]
+        tasks_b = service.list_tasks(conn, date(2026, 11, 6))
+        by_id = {t['id']: t for t in tasks_b}
+        assert by_id[manual_id]['is_todo'] is False
+        assert by_id[todo_id]['is_todo'] is True

@@ -692,6 +692,8 @@ def create_app(engine=None):
             existing['suggested_minutes'] = conn.execute(select(db.worklogs.c.suggested_minutes).where(db.worklogs.c.task_id == task_id)).scalar_one_or_none()
             existing['time_locked'] = conn.execute(select(db.worklogs.c.time_locked).where(db.worklogs.c.task_id==task_id)).scalar_one()
             merged = {k: existing.get(k) for k in TaskInput.model_fields}
+            if merged.get('is_todo') is None:
+                merged['is_todo'] = True
             merged.update(payload.model_dump(exclude_unset=True))
             if 'confirmed_minutes' in payload.model_fields_set and 'time_locked' not in payload.model_fields_set:
                 merged['time_locked']=bool(merged['confirmed_minutes'])

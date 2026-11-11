@@ -10,6 +10,7 @@ export type TodoItem = {
   category: string;
   status: string;
   origin: string;
+  is_todo?: boolean;
   confirmed_minutes: number;
   time_locked: boolean;
 };
@@ -206,6 +207,7 @@ export function useTodos({ getToday, onChanged }: UseTodosOptions): UseTodosResu
         project,
         category: draft.category || "任务",
         status: "requested",
+        is_todo: true,
         confirmed_minutes: 0,
         time_locked: false,
       });

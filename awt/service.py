@@ -272,7 +272,7 @@ def state_for(group):
 
 
 def list_todos(conn):
-    """查询跨日期的未完成待办事项（status='requested' 且未删除），按日期倒序。"""
+    """查询跨日期的未完成待办事项（is_todo=True 且 status='requested' 且未删除），按日期倒序。"""
     rows = conn.execute(
         select(
             db.tasks,
@@ -283,7 +283,7 @@ def list_todos(conn):
             db.worklogs.c.time_reason,
         )
         .join(db.worklogs)
-        .where(and_(db.tasks.c.status == "requested", db.tasks.c.deleted == False))
+        .where(and_(db.tasks.c.status == "requested", db.tasks.c.deleted == False, db.tasks.c.is_todo == True))
         .order_by(db.tasks.c.date.desc(), db.tasks.c.id.desc())
     ).mappings().all()
     return [dict(r) for r in rows]
@@ -414,7 +414,7 @@ def tasks_from_events(conn, day, event_ids, start_day=None, end_day=None):
         conn.execute(insert(db.tasks).values(
             id=task_id, date=str(day), title=title, details=changes, project=event['project'] or '未归属项目',
             category=category(title), status='changed', origin='auto', confidence='Git 提交 · 人工选择',
-            evidence_level='Git 提交', fingerprint='git-adopt:' + event_id, edited=True, deleted=False))
+            evidence_level='Git 提交', fingerprint='git-adopt:' + event_id, edited=True, deleted=False, is_todo=False))
         conn.execute(insert(db.worklogs).values(task_id=task_id, suggested_minutes=None, confirmed_minutes=0,
                                                 is_confirmed=False, time_locked=False, time_source='manual', time_reason=''))
         conn.execute(insert(db.evidence).values(task_id=task_id, event_id=event_id))
@@ -465,7 +465,7 @@ def split_task(conn, task_id, parts):
     ids = []
     for part in parts:
         new_id = save_task(conn, part)
-        conn.execute(update(db.tasks).where(db.tasks.c.id == new_id).values(origin=original['origin'], evidence_level='拆分继承证据，请核对归属'))
+        conn.execute(update(db.tasks).where(db.tasks.c.id == new_id).values(origin=original['origin'], is_todo=original.get('is_todo', False), evidence_level='拆分继承证据，请核对归属'))
         for event_id in refs:
             conn.execute(insert(db.evidence).values(task_id=new_id, event_id=event_id))
         ids.append(new_id)

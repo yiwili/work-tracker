@@ -157,7 +157,7 @@ def estimate(conn, day, request=None):
             for index,item in enumerate(request.manual_items):
                 prepared.append(TaskInput(date=day,title=names[index],details=f'人工填写：{item.name}',category=item.category,
                     project=max((t['project'] for t in tasks),key=lambda p:sum(t['project']==p for t in tasks),default='未归属项目'),
-                    confirmed_minutes=item.minutes,time_locked=True,status='attempted'))
+                    confirmed_minutes=item.minutes,time_locked=True,status='attempted',is_todo=False))
         except (ValueError,KeyError,TypeError):
             raise model_provider.ModelError('人工事项命名格式无效，所有事项和工时保持原值；请重试') from None
         analysis_progress.emit(f'人工事项已命名，正在估算 {len(selected)} 个工作项的工时')
