@@ -582,3 +582,17 @@ class HistoryCloudUploadInput(BaseModel):
     all_batches: bool = True
 
 
+class ConversationSessionInput(BaseModel):
+    source: str = Field(min_length=1, max_length=64)
+    session_id: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default='manual_session_exclude', max_length=100)
+
+    @field_validator('source', 'session_id')
+    @classmethod
+    def non_blank_value(cls, value):
+        cleaned = value.strip()
+        if not cleaned or any(ord(c) < 32 for c in cleaned):
+            raise ValueError('会话来源与会话 ID 不能为空或包含控制字符')
+        return cleaned
+
+

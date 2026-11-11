@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import (JSON, Boolean, Column, ForeignKey, Integer, MetaData,
+from sqlalchemy import (JSON, Boolean, Column, ForeignKey, Index, Integer, MetaData,
                         String, Table, Text, create_engine, event)
 
 metadata = MetaData()
@@ -45,6 +45,25 @@ multiday_bindings = Table(
     Column('active', Boolean, nullable=False, server_default='1'),
     Column('created_at', String),
     Column('unbound_at', String),
+)
+analysis_exclusions = Table(
+    'analysis_exclusions',
+    metadata,
+    Column('id', String, primary_key=True),
+    Column('scope', String, nullable=False, index=True),
+    Column('target_key', String, nullable=False, index=True),
+    Column('source', String, nullable=False, index=True),
+    Column('session_id', String, nullable=False, index=True),
+    Column('event_id', String, nullable=True, index=True),
+    Column('reason', String, nullable=False, default=''),
+    Column('note', Text, nullable=False, default=''),
+    Column('created_at', String, nullable=False),
+)
+Index(
+    'uq_analysis_exclusions_scope_target',
+    analysis_exclusions.c.scope,
+    analysis_exclusions.c.target_key,
+    unique=True,
 )
 
 

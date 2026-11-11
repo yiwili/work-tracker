@@ -453,6 +453,147 @@ def delete_task(conn, task_id):
     invalidate(conn, task['date'])
 
 
+def protected_gitee_task_ids(conn, task_ids):
+    if not task_ids:
+        return set()
+    rows = (
+        conn.execute(
+            select(db.gitee_links.c.task_id, db.gitee_links.c.status, db.gitee_links.c.issue_id)
+            .where(db.gitee_links.c.task_id.in_(task_ids))
+        )
+        .mappings()
+        .all()
+    )
+    protected = set()
+    for row in rows:
+        status = str(row.get('status') or '')
+        issue_id = str(row.get('issue_id') or '').strip()
+        if (status == 'created' and bool(issue_id)) or status in ('pending', 'uncertain', 'creating'):
+            protected.add(row['task_id'])
+    return protected
+
+
+def is_clearable_ai_task(task, protected_gitee_ids=None):
+    if task.get('origin') != 'auto':
+        return False
+    fp = str(task.get('fingerprint') or '')
+    if fp.startswith('git-adopt:'):
+        return False
+    if protected_gitee_ids and task.get('id') in protected_gitee_ids:
+        return False
+    return True
+
+
+def clear_ai_tasks(conn, day):
+    """Soft-delete clearable AI tasks & pending candidates and exclude their conversation events."""
+    from . import exclusions, multiday
+
+    binding = multiday.get_active_binding(conn, day)
+    canonical_day = binding['anchor_date'] if binding else str(day)
+    analysis_days = (
+        sorted(set(multiday.bound_dates(binding) + [str(day), canonical_day]))
+        if binding
+        else [canonical_day]
+    )
+
+    active_tasks = list_tasks(conn, day)
+    protected_gitee = protected_gitee_task_ids(conn, [t['id'] for t in active_tasks])
+    to_clear = [t for t in active_tasks if is_clearable_ai_task(t, protected_gitee)]
+    to_retain = [t for t in active_tasks if not is_clearable_ai_task(t, protected_gitee)]
+    retained_protected_ai = sum(
+        1 for t in to_retain if t.get('origin') == 'auto' and not is_clearable_ai_task(t, protected_gitee)
+    )
+
+    analysis_rows_db = (
+        conn.execute(
+            select(db.analyses.c.date, db.analyses.c.snapshot).where(db.analyses.c.date.in_(analysis_days))
+        )
+        .mappings()
+        .all()
+    )
+    pending_event_ids = set()
+    cleared_pending = 0
+    days_with_pending = []
+    for a_row in analysis_rows_db:
+        snap = a_row.get('snapshot')
+        if not isinstance(snap, dict):
+            continue
+        p_tasks = snap.get('pending_tasks') or []
+        if p_tasks:
+            cleared_pending += len(p_tasks)
+            days_with_pending.append(str(a_row['date']))
+            for item in p_tasks:
+                for eid in (item.get('evidence_ids') or []):
+                    if eid:
+                        pending_event_ids.add(str(eid))
+
+    if not to_clear and cleared_pending == 0:
+        return {
+            'cleared_tasks': 0,
+            'cleared_pending': 0,
+            'excluded_events': 0,
+            'newly_excluded_events': 0,
+            'retained_protected_ai': retained_protected_ai,
+            'date': canonical_day,
+        }
+
+    clear_ids = [t['id'] for t in to_clear]
+    for start in range(0, len(clear_ids), 500):
+        chunk = clear_ids[start:start + 500]
+        if chunk:
+            # Mark edited=False so bulk-cleared AI tasks never trigger the "previously deleted" recovery prompt.
+            conn.execute(
+                update(db.tasks)
+                .where(db.tasks.c.id.in_(chunk))
+                .values(deleted=True, edited=False)
+            )
+
+    days_to_clear_analysis = sorted(set([canonical_day, *days_with_pending]))
+    conn.execute(delete(db.analyses).where(db.analyses.c.date.in_(days_to_clear_analysis)))
+    if not to_retain:
+        conn.execute(delete(db.allocations).where(db.allocations.c.date.in_(analysis_days)))
+
+    clear_event_ids = {
+        str(e['id'])
+        for t in to_clear
+        for e in (t.get('evidence') or [])
+        if e.get('id')
+    }
+    clear_event_ids.update(pending_event_ids)
+    retained_event_ids = {
+        str(e['id'])
+        for t in to_retain
+        for e in (t.get('evidence') or [])
+        if e.get('id')
+    }
+    exclude_target_ids = sorted(clear_event_ids - retained_event_ids)
+
+    events_to_exclude = []
+    for start in range(0, len(exclude_target_ids), 500):
+        chunk = exclude_target_ids[start:start + 500]
+        if chunk:
+            events_to_exclude.extend(
+                dict(r)
+                for r in conn.execute(select(db.events).where(db.events.c.id.in_(chunk))).mappings().all()
+            )
+
+    newly_excluded = exclusions.exclude_events(
+        conn,
+        events_to_exclude,
+        reason='cleared_ai_task',
+        note=f'清空全部 AI 项 ({canonical_day})',
+    )
+    invalidate(conn, canonical_day)
+    return {
+        'cleared_tasks': len(to_clear),
+        'cleared_pending': cleared_pending,
+        'excluded_events': len(events_to_exclude),
+        'newly_excluded_events': newly_excluded,
+        'retained_protected_ai': retained_protected_ai,
+        'date': canonical_day,
+    }
+
+
 def merge_tasks(conn, ids):
     from . import multiday
     if len(set(ids)) != len(ids):
@@ -630,8 +771,16 @@ def report(conn, day):
     from . import similarity
     similarity_status = similarity.get_similarity_status(conn, canonical_day, tasks)
 
+    protected_gitee = protected_gitee_task_ids(conn, [t['id'] for t in tasks])
+    for task in tasks:
+        task['gitee_linked'] = task['id'] in protected_gitee
+    clearable_ai_count = sum(1 for t in tasks if is_clearable_ai_task(t, protected_gitee))
+    protected_ai_count = sum(
+        1 for t in tasks if t.get('origin') == 'auto' and not is_clearable_ai_task(t, protected_gitee)
+    )
+
     legacy_count = sum(t['origin'] == 'auto' and not t['edited'] and not t['confirmed_minutes'] and not (t['fingerprint'] or '').startswith('daily-v2:') for t in tasks)
-    return {"date": str(day), "canonical_date": canonical_day, "binding": binding, "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
+    return {"date": str(day), "canonical_date": canonical_day, "binding": binding, "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "clearable_ai_count": clearable_ai_count, "protected_ai_count": protected_ai_count, "total_minutes": total, "target_minutes": effective_target,
             "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,
             "review_items": review_items,

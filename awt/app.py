@@ -13,12 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity, multiday
+from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity, multiday, exclusions
 from . import usage, cloud_sync, history_upload
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -235,6 +235,25 @@ def create_app(engine=None):
             value = daily_analysis.overview(conn, s_day, service.get_settings(conn), end_day=e_day, report_day=r_day)
             value['running'] = bool(analysis_locks.get(r_day) and analysis_locks[r_day].locked())
             return value
+
+    @app.post('/api/conversations/exclude-session')
+    def exclude_conversation_session(payload: ConversationSessionInput):
+        with transaction() as conn:
+            return exclusions.exclude_session(
+                conn,
+                payload.source,
+                payload.session_id,
+                reason=payload.reason,
+            )
+
+    @app.post('/api/conversations/restore-session')
+    def restore_conversation_session(payload: ConversationSessionInput):
+        with transaction() as conn:
+            return exclusions.restore_session(
+                conn,
+                payload.source,
+                payload.session_id,
+            )
 
     @app.get('/api/multiday/binding')
     def multiday_binding(date: date):
@@ -807,6 +826,20 @@ def create_app(engine=None):
     def confirm(day: date):
         with transaction() as conn:
             return service.confirm(conn, day)
+
+    @app.post('/api/reports/{day}/clear-ai')
+    def clear_ai_tasks(day: date):
+        lock_day = _canonical_day(day)
+        lock = analysis_locks.setdefault(lock_day, Lock())
+        if not lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail='该日期的AI分析或工时估算正在进行，请等待完成')
+        try:
+            with transaction() as conn:
+                res = service.clear_ai_tasks(conn, day)
+            trigger_cloud_sync()
+            return res
+        finally:
+            lock.release()
 
     @app.get('/api/reports/{day}/export.md')
     def export(day: date):

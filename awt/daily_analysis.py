@@ -37,6 +37,13 @@ def day_rows(conn, day, settings, end_day=None):
             if e['source'] in sources and not excluded(e['cwd'], settings)]
 
 
+def analysis_rows(conn, day, settings, end_day=None):
+    from . import exclusions
+    all_selected = day_rows(conn, day, settings, end_day=end_day)
+    filtered, excl_stats = exclusions.filter_excluded_rows(conn, all_selected)
+    return filtered, all_selected, excl_stats
+
+
 def is_source_detected(source, settings, conn=None, rows=None):
     if source == 'git':
         if rows and any(e['source'] == 'git' for e in rows):
@@ -68,6 +75,7 @@ def is_source_detected(source, settings, conn=None, rows=None):
 
 
 def overview(conn, day, settings, end_day=None, report_day=None):
+    from . import exclusions
     from .service import visible_events
     s_date = _as_date(day)
     e_date = _as_date(end_day) if end_day is not None else s_date
@@ -75,31 +83,89 @@ def overview(conn, day, settings, end_day=None, report_day=None):
         s_date, e_date = e_date, s_date
     target_day = str(report_day or day)
     all_rows = [e for e in visible_events(conn, s_date, settings, end_day=e_date) if not excluded(e['cwd'], settings)]
+    analyzable_all, excl_stats = exclusions.filter_excluded_rows(conn, all_rows)
+    excluded_row_ids = excl_stats['excluded_row_ids']
+    excluded_sessions_set = excl_stats['excluded_sessions']
     sessions = {}
     for e in all_rows:
         if e['source'] == 'git':
             continue
         key = (e['source'], e['session_id'])
-        session = sessions.setdefault(key, {'id': e['session_id'], 'source': e['source'], 'projects': set(), 'first_at': e['occurred_at'], 'last_at': e['occurred_at'], 'user_messages': 0, 'assistant_messages': 0, 'events': 0, 'preview': ''})
+        session = sessions.setdefault(
+            key,
+            {
+                'id': e['session_id'],
+                'source': e['source'],
+                'projects': set(),
+                'first_at': e['occurred_at'],
+                'last_at': e['occurred_at'],
+                'user_messages': 0,
+                'assistant_messages': 0,
+                'events': 0,
+                'active_user_messages': 0,
+                'active_assistant_messages': 0,
+                'active_events': 0,
+                'excluded_user_messages': 0,
+                'excluded_events': 0,
+                'session_excluded': key in excluded_sessions_set,
+                'preview': '',
+            },
+        )
         session['projects'].add(e['project'])
         session['last_at'] = e['occurred_at']
         session['events'] += 1
+        is_excluded_ev = e['id'] in excluded_row_ids
+        if is_excluded_ev:
+            session['excluded_events'] += 1
+        else:
+            session['active_events'] += 1
         if e['kind'] in ('user_prompt', 'assistant_message'):
             session['user_messages' if e['kind'] == 'user_prompt' else 'assistant_messages'] += 1
+            if is_excluded_ev:
+                if e['kind'] == 'user_prompt':
+                    session['excluded_user_messages'] += 1
+            else:
+                session['active_user_messages' if e['kind'] == 'user_prompt' else 'active_assistant_messages'] += 1
             if e['kind'] == 'user_prompt' and not session['preview']:
                 session['preview'] = e['summary'][:200]
+    for session in sessions.values():
+        active_msgs = session['active_user_messages'] + session['active_assistant_messages']
+        total_msgs = session['user_messages'] + session['assistant_messages']
+        if session['session_excluded'] or (session['events'] > 0 and session['active_events'] == 0) or (total_msgs > 0 and active_msgs == 0):
+            session['exclusion_state'] = 'full'
+        elif session['excluded_events'] > 0:
+            session['exclusion_state'] = 'partial'
+        else:
+            session['exclusion_state'] = 'none'
     source_stats = []
     selected_names = selected_sources(settings)
     for source in (*CONVERSATION_SOURCES, 'git'):
-        items = [e for e in all_rows if e['source'] == source]
-        counts = Counter(e['kind'] for e in items)
+        all_items = [e for e in all_rows if e['source'] == source]
+        active_items = [e for e in analyzable_all if e['source'] == source]
+        counts = Counter(e['kind'] for e in active_items)
         detected = is_source_detected(source, settings, conn, all_rows)
-        source_stats.append({'source': source, 'selected': source in selected_names and detected,
-                             'detected': detected,
-                             'sessions': len({e['session_id'] for e in items}) if source != 'git' else 0,
-                             'user_messages': counts['user_prompt'], 'assistant_messages': counts['assistant_message'], 'events': len(items)})
+        if source != 'git':
+            src_sessions = [s for (src, _), s in sessions.items() if src == source]
+            total_sess_cnt = len(src_sessions)
+            excluded_sess_cnt = sum(1 for s in src_sessions if s['exclusion_state'] == 'full')
+            active_sess_cnt = total_sess_cnt - excluded_sess_cnt
+        else:
+            total_sess_cnt = excluded_sess_cnt = active_sess_cnt = 0
+        source_stats.append({
+            'source': source,
+            'selected': source in selected_names and detected,
+            'detected': detected,
+            'sessions': active_sess_cnt,
+            'total_sessions': total_sess_cnt,
+            'excluded_sessions': excluded_sess_cnt,
+            'user_messages': counts['user_prompt'],
+            'assistant_messages': counts['assistant_message'],
+            'events': len(active_items),
+            'total_events': len(all_items),
+        })
     detected_sources = {s['source'] for s in source_stats if s['detected']}
-    selected = [e for e in all_rows if e['source'] in selected_names and e['source'] in detected_sources]
+    selected_all = [e for e in all_rows if e['source'] in selected_names and e['source'] in detected_sources]
+    selected = [e for e in analyzable_all if e['source'] in selected_names and e['source'] in detected_sources]
 
     tz = ZoneInfo(settings.timezone)
     by_day_selected = defaultdict(list)
@@ -110,7 +176,7 @@ def overview(conn, day, settings, end_day=None, report_day=None):
         except Exception:
             ev_day = str(e['occurred_at'])[:10]
         by_day_all[ev_day].append(e)
-        if e['source'] in selected_names and e['source'] in detected_sources:
+        if e['source'] in selected_names and e['source'] in detected_sources and e['id'] not in excluded_row_ids:
             by_day_selected[ev_day].append(e)
 
     daily_counts = []
@@ -131,11 +197,21 @@ def overview(conn, day, settings, end_day=None, report_day=None):
         curr += timedelta(days=1)
         step_count += 1
 
+    selected_session_items = [s for s in sessions.values() if s['source'] in selected_names and s['source'] in detected_sources]
+    full_excluded_sessions = sum(1 for s in selected_session_items if s['exclusion_state'] == 'full')
+    partial_excluded_sessions = sum(1 for s in selected_session_items if s['exclusion_state'] == 'partial')
+    excluded_events_in_selected = sum(s['excluded_events'] for s in selected_session_items)
+
     result = {'date': target_day, 'start_date': str(s_date), 'end_date': str(e_date),
               'daily_counts': daily_counts, 'sources': source_stats,
               'sessions': [{**value, 'projects': sorted(value['projects'])} for value in sessions.values()],
               'session_count': len({(e['source'], e['session_id']) for e in selected if e['source'] != 'git'}),
+              'total_session_count': len(selected_session_items),
+              'excluded_session_count': full_excluded_sessions,
+              'partial_excluded_session_count': partial_excluded_sessions,
+              'excluded_event_count': excluded_events_in_selected,
               'user_messages': sum(e['kind'] == 'user_prompt' for e in selected),
+              'total_user_messages': sum(e['kind'] == 'user_prompt' for e in selected_all),
               'assistant_messages': sum(e['kind'] == 'assistant_message' for e in selected),
               'event_count': len(selected),
               'selected_sources': [s for s in settings.analysis_sources if s in detected_sources]}
@@ -642,12 +718,19 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
                 )
         analysis_day = str(_as_date(day))
         effective_target = target_minutes
-    rows = day_rows(conn, s_day, settings, end_day=e_day)
+    rows, all_selected_rows, _ = analysis_rows(conn, s_day, settings, end_day=e_day)
     summary = overview(conn, s_day, settings, end_day=e_day, report_day=analysis_day)
     if not settings.llm_enabled:
         return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': [], 'binding': binding}
     if not any(e['kind'] in ('user_prompt', 'assistant_message') for e in rows):
-        msg = f'所选来源在 {s_day} 至 {e_day} 期间没有可分析的对话。' if str(s_day) != str(e_day) else '所选来源在当天没有可分析的对话。'
+        if any(e['kind'] in ('user_prompt', 'assistant_message') for e in all_selected_rows):
+            msg = (
+                f'所选来源在 {s_day} 至 {e_day} 期间的已采集对话已全部排除（不参与下次 AI 分析）；如需重新分析，请在“对话与来源”会话列表中恢复参与分析。'
+                if str(s_day) != str(e_day)
+                else '所选来源当天的已采集对话已全部排除（不参与下次 AI 分析）；如需重新分析，请在“对话与来源”会话列表中恢复参与分析。'
+            )
+        else:
+            msg = f'所选来源在 {s_day} 至 {e_day} 期间没有可分析的对话。' if str(s_day) != str(e_day) else '所选来源在当天没有可分析的对话。'
         return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': [msg], 'conversations': summary, 'merge_suggestions': [], 'binding': binding}
     records, refs, segments = transcript(rows, settings)
     active_tasks = list_tasks_in_range(conn, s_day, e_day)
@@ -687,7 +770,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     conn.commit()
     conn.exec_driver_sql('BEGIN IMMEDIATE')
     current_settings = get_settings(conn)
-    current_rows = day_rows(conn, s_day, current_settings, end_day=e_day)
+    current_rows, _, _ = analysis_rows(conn, s_day, current_settings, end_day=e_day)
     if input_hash(current_rows, current_settings) != input_hash(rows, settings):
         raise model_provider.ModelError('分析期间对话或来源范围发生变化，原任务已保留；请重新分析')
     current_catalog = _load_enterprise_catalog(conn, current_settings)
