@@ -101,12 +101,7 @@ export function GiteePublishModal({
       setSelected(
         new Set(
           p.items
-            .filter(
-              (i) =>
-                !i.existing ||
-                i.existing.status === "failed" ||
-                Boolean(i.matched_issue),
-            )
+            .filter((i) => !i.existing || i.existing.status === "failed")
             .map((i) => i.task_id),
         ),
       );
