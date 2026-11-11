@@ -465,7 +465,7 @@ export function EnterpriseSettings({
                       checked={dedup.dedup_on_publish}
                       onChange={(e) => updateDedup({ dedup_on_publish: e.target.checked })}
                     />
-                    “提交到 Gitee”前检查云端未完成项（若存在则直接关联并补充工时，避免重复创建）
+                    “提交到 Gitee”前对比本地已拉取与云端同步服务记录（不实时请求 gitee.com，避免重复创建）
                   </label>
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginTop: "8px" }}>

@@ -121,6 +121,19 @@ def test_preview_replacement_detection_and_publish_and_verify(ent_client, monkey
         ),
     )
 
+    # Pull issues into local cache first; preview must not query live gitee.com issues
+    c.get(f'/api/gitee/enterprise/issues?date={day}&source=remote').raise_for_status()
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda tool, args: (
+            CATALOG if tool == 'list_programs'
+            else [{'id': 9, 'title': '任务', 'category': 'task'}] if tool == 'list_issue_types'
+            else pytest.fail(f'preview must not call remote {tool}') if tool == 'list_enterprise_issues'
+            else []
+        ),
+    )
+
     p_res = c.post('/api/gitee/enterprise/preview', json={'date': day, 'task_ids': [task_id]})
     p_res.raise_for_status()
     preview_data = p_res.json()
@@ -283,3 +296,209 @@ def test_enterprise_issues_local_history_manual_sync_and_retain(ent_client, monk
     ).json()
     assert retain_again['created_count'] == 0
     assert retain_again['already_linked_count'] == 1
+
+
+def test_preview_matches_cloud_server_without_gitee_live_query(ent_client, monkeypatch):
+    from datetime import date as Date
+    from pathlib import Path
+    import sys
+    import httpx
+    from awt import cloud_sync
+    from awt.cloud_client import CloudClient
+    from awt.models import GiteeConfig, GiteePreviewInput
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from fake_cloud import FakeCloudServer
+
+    c, engine = ent_client
+    day = '2026-03-21'
+    t1 = c.post(
+        '/api/tasks',
+        json={
+            'date': day,
+            'title': '【上海工程】服务端历史同步去重事项',
+            'details': '通过服务端历史记录匹配',
+            'confirmed_minutes': 60,
+            'project': '上海工程技术大学档案系统',
+        },
+    ).json()['id']
+    t2 = c.post(
+        '/api/tasks',
+        json={
+            'date': day,
+            'title': '【上海工程】多端协同发布已登记事项',
+            'details': '通过服务端发布队列匹配',
+            'confirmed_minutes': 90,
+            'project': '上海工程技术大学档案系统',
+        },
+    ).json()['id']
+
+    server = FakeCloudServer()
+    transport = httpx.MockTransport(server.handle)
+    cloud_client = CloudClient(base_url='https://cloud.awt.local', transport=transport)
+    cloud_sync.bind(engine, 'https://cloud.awt.local', 'user@example.com', 'password123', 'TestDev', client=cloud_client)
+    cloud_client.import_history_batch(
+        0,
+        1,
+        [
+            {
+                'id': 'hist-777',
+                'title': '【上海工程】服务端历史同步去重事项',
+                'details': '来自其他设备同步的历史记录',
+                'project': '上海工程技术大学档案系统',
+                'work_date': day,
+                'source': 'gitee_enterprise',
+                'source_id': '777',
+                'url': 'https://gitee.com/ent/issue/777',
+            }
+        ],
+    )
+    batch_res = cloud_client.register_publish_batch(
+        idempotency_key='other-device-batch',
+        executor='device',
+        items=[
+            {
+                'work_item_id': 'other-task',
+                'target_scope': 'ent:7',
+                'operation': 'create',
+                'target': {'enterprise_id': 7, 'program_id': 11},
+                'payload': {
+                    'title': '【上海工程】多端协同发布已登记事项',
+                    'description': f'工作日期：{day}\n预估工时：1.5h',
+                    'duration': 90,
+                    'minutes': 90,
+                },
+            }
+        ],
+    )
+    req_id = batch_res['items'][0]['request_id']
+    cloud_client.claim_publish_request(req_id)
+    cloud_client.report_publish_result(req_id, outcome='succeeded', remote_id='888', url='https://gitee.com/ent/issue/888')
+
+    monkeypatch.setattr(
+        ge,
+        '_paged',
+        lambda tool, args: (
+            CATALOG if tool == 'list_programs'
+            else pytest.fail(f'preview must not call remote {tool}')
+        ),
+    )
+
+    prev = ge.preview(engine, GiteePreviewInput(date=Date(2026, 3, 21), task_ids=[t1, t2]), cloud_client=cloud_client)
+    by_tid = {it['task_id']: it for it in prev['items']}
+    assert by_tid[t1]['matched_issue']['issue_id'] == 777
+    assert by_tid[t2]['matched_issue']['issue_id'] == 888
+
+
+def test_sync_gitee_filters_by_git_global_email(ent_client, monkeypatch):
+    from awt import gitee
+    from awt.models import GiteeConfig
+
+    c, _ = ent_client
+    seen_issue_args = []
+    monkeypatch.setattr(ge.git_tools, 'global_author', lambda: {'name': 'Me', 'email': 'me@example.com', 'source': 'global'})
+
+    member_rows = [
+        {'user_id': 101, 'name': 'Me', 'username': 'me_user', 'email': 'me@example.com'},
+        {'user_id': 202, 'name': 'Coworker', 'username': 'other_user', 'email': 'coworker@example.com'},
+    ]
+    issue_rows = [
+        {
+            'id': 1001,
+            'ident': 'ME-1',
+            'title': '我的企业待办工作项',
+            'description': '工作日期：2026-03-22',
+            'state': 'open',
+            'program_id': 11,
+            'assignee': {'id': 101, 'email': 'me@example.com'},
+            'plan_started_at': '2026-03-22T00:00:00',
+        },
+        {
+            'id': 1002,
+            'ident': 'OT-2',
+            'title': '同事的工作项不应拉取',
+            'description': '工作日期：2026-03-22',
+            'state': 'open',
+            'program_id': 11,
+            'assignee': {'id': 202, 'email': 'coworker@example.com'},
+            'plan_started_at': '2026-03-22T00:00:00',
+        },
+        {
+            'id': 1003,
+            'ident': 'ME-3',
+            'title': '我创建但未指派的工作项',
+            'description': '工作日期：2026-03-22',
+            'state': 'open',
+            'program_id': 11,
+            'author': {'id': 101, 'email': 'me@example.com'},
+            'plan_started_at': '2026-03-22T00:00:00',
+        },
+        {
+            'id': 1004,
+            'ident': 'OT-4',
+            'title': '同事创建的工作项不应拉取',
+            'description': '工作日期：2026-03-22',
+            'state': 'open',
+            'program_id': 11,
+            'author': {'id': 202, 'email': 'coworker@example.com'},
+            'plan_started_at': '2026-03-22T00:00:00',
+        },
+    ]
+
+    def fake_paged(tool, args):
+        if tool == 'list_enterprise_members':
+            return member_rows
+        if tool == 'list_enterprise_issues':
+            seen_issue_args.append(dict(args))
+            return issue_rows
+        return []
+
+    monkeypatch.setattr(ge, '_paged', fake_paged)
+    all_mine = ge.fetch_all_issues(7)
+    open_mine = ge.unfinished_issues(7)
+    assert [i['id'] for i in all_mine] == ['1001', '1003']
+    assert [i['id'] for i in open_mine] == ['1001', '1003']
+    assert len(seen_issue_args) == 2
+    assert all(a.get('assignee_id') == '101' for a in seen_issue_args)
+
+    # Also verify Gitee V5 fetch and fetch_unfinished filter by git global email
+    import httpx
+    original_client = httpx.Client
+    monkeypatch.setattr(gitee, 'token', lambda service='gitee': 'v5-token')
+    monkeypatch.setattr(gitee.git_tools, 'global_author', lambda: {'name': 'Me', 'email': 'me@example.com', 'source': 'global'})
+    v5_queries = []
+
+    def v5_handler(request):
+        if request.url.path.endswith('/user'):
+            return httpx.Response(200, json={'login': 'me_user', 'email': 'me@example.com'})
+        v5_queries.append(dict(request.url.params))
+        return httpx.Response(200, json=[
+            {
+                'id': 1,
+                'title': '我的V5工作项',
+                'created_at': '2026-03-22T08:00:00Z',
+                'repository': {'full_name': 'org/repo'},
+                'assignee': {'login': 'me_user', 'email': 'me@example.com'},
+            },
+            {
+                'id': 2,
+                'title': '同事的V5工作项',
+                'created_at': '2026-03-22T09:00:00Z',
+                'repository': {'full_name': 'org/repo'},
+                'assignee': {'login': 'other_user', 'email': 'coworker@example.com'},
+            },
+            {
+                'id': 3,
+                'title': '同事创建的未指派V5工作项',
+                'created_at': '2026-03-22T10:00:00Z',
+                'repository': {'full_name': 'org/repo'},
+                'user': {'login': 'other_user', 'email': 'coworker@example.com'},
+            },
+        ])
+
+    monkeypatch.setattr(gitee.httpx, 'Client', lambda **kw: original_client(transport=httpx.MockTransport(v5_handler), **kw))
+    fetched, _ = gitee.fetch(GiteeConfig())
+    assert [r['id'] for r in fetched] == [1]
+    unfinished = gitee.fetch_unfinished(GiteeConfig())
+    assert [r['id'] for r in unfinished] == ['1']
+    assert v5_queries[1]['filter'] == 'assigned'

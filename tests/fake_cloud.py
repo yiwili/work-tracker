@@ -256,6 +256,19 @@ class FakeCloudServer:
             self.batches[batch_id] = {'id': batch_id, 'batch_id': batch_id, 'account_id': acc_id, 'status': 'active'}
             return httpx.Response(201, json={'id': batch_id, 'batch_id': batch_id, 'status': 'active', 'items': items, 'requests': requests_list})
 
+        # Publish Requests List
+        if path == '/api/v1/publish/requests' and method == 'GET':
+            state_filter = request.url.params.get('state')
+            work_item_filter = request.url.params.get('work_item_id')
+            limit = int(request.url.params.get('limit', 100))
+            matched_reqs = [
+                r for r in self.requests.values()
+                if r.get('account_id') == acc_id
+                and (not state_filter or r.get('status') == state_filter or r.get('state') == state_filter)
+                and (not work_item_filter or r.get('work_item_id') == work_item_filter)
+            ]
+            return httpx.Response(200, json={'requests': matched_reqs[:limit]})
+
         # Publish Request Claim
         if path.startswith('/api/v1/publish/requests/') and path.endswith('/claim') and method == 'POST':
             req_id = path.split('/')[5]

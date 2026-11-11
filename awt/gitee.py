@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 import httpx
 from sqlalchemy import select
-from . import db, model_provider, style_reference, gitee_enterprise
+from . import db, git_tools, gitee_enterprise, model_provider, style_reference
 from .collectors import stable
 
 lock=Lock()
@@ -81,10 +81,63 @@ def status(conn):
     return {'configured': has_token, 'config': get_settings(conn).gitee.model_dump(mode='json'), **state}
 
 
+def _git_user_email():
+    try:
+        author = git_tools.global_author() or {}
+    except Exception:
+        author = {}
+    return str(author.get('email') or '').strip()
+
+
+def _extract_v5_actor(obj):
+    if not isinstance(obj, dict):
+        return False, '', ''
+    email = str(obj.get('email') or '').strip().casefold()
+    login = str(obj.get('login') or obj.get('username') or '').strip().casefold()
+    return bool(email or login), email, login
+
+
+def _v5_issue_belongs_to_user(item, git_email, user_info=None):
+    if not git_email:
+        return True
+    want_email = git_email.strip().casefold()
+    user_info = user_info or {}
+    user_login = str(user_info.get('login') or '').strip().casefold()
+    user_email = str(user_info.get('email') or '').strip().casefold()
+    identity_ok = (not user_email) or (user_email == want_email)
+
+    has_assignee, a_email, a_login = _extract_v5_actor(item.get('assignee'))
+    if has_assignee:
+        if a_email:
+            return a_email == want_email
+        return bool(identity_ok and user_login and a_login == user_login)
+
+    has_creator = False
+    c_emails = []
+    c_logins = []
+    for key in ('user', 'author', 'creator'):
+        ok, em, lg = _extract_v5_actor(item.get(key))
+        if ok:
+            has_creator = True
+            if em:
+                c_emails.append(em)
+            if lg:
+                c_logins.append(lg)
+    if has_creator:
+        if want_email in c_emails:
+            return True
+        if c_emails and want_email not in c_emails:
+            return False
+        return bool(identity_ok and user_login and user_login in c_logins)
+
+    return bool(identity_ok)
+
+
 def fetch(config):
     key=token()
     if not key:
         raise ValueError('请先保存Gitee Token，或设置服务端GITEE_ACCESS_TOKEN')
+    git_email = _git_user_email()
     def get(client,path,params=None):
         try:
             response=client.get(API+path,params={**(params or {}),'access_token':key})
@@ -118,7 +171,7 @@ def fetch(config):
                     raise ValueError('Gitee仓库地址格式无效，历史未改动')
                 if not repository and url.startswith('https://gitee.com/'):
                     repository='/'.join(url.split('/')[3:5])
-                if not config.repository or repository.lower()==config.repository.lower():
+                if (not config.repository or repository.lower()==config.repository.lower()) and _v5_issue_belongs_to_user(item, git_email, user):
                     rows.append({**item,'project_path':repository})
             if len(items)<100:
                 return rows,{'login':user['login'],'name':user.get('name','')}
@@ -129,6 +182,7 @@ def fetch_unfinished(config=None):
     key = token()
     if not key:
         return []
+    git_email = _git_user_email()
     def get(client, path, params=None):
         try:
             response = client.get(API + path, params={**(params or {}), 'access_token': key})
@@ -139,8 +193,11 @@ def fetch_unfinished(config=None):
             return []
     rows = []
     with httpx.Client(headers={'Accept': 'application/json'}, timeout=30, follow_redirects=False, trust_env=False) as client:
+        raw_user = get(client, '/user')
+        user_info = raw_user if isinstance(raw_user, dict) and raw_user.get('login') else {}
         seen = set()
-        filter_mode = config.filter if config else 'all'
+        raw_filter = config.filter if config else ''
+        filter_mode = 'assigned' if (not raw_filter or raw_filter == 'all') else raw_filter
         repo_filter = config.repository if config else ''
         for page in range(1, 20):
             items = get(client, '/user/issues', {'filter': filter_mode, 'state': 'open', 'sort': 'updated', 'direction': 'desc',
@@ -152,6 +209,8 @@ def fetch_unfinished(config=None):
                 break
             seen.add(sig)
             for item in items:
+                if not _v5_issue_belongs_to_user(item, git_email, user_info):
+                    continue
                 repo = item.get('repository') or {}
                 repo_name = repo.get('full_name') or repo.get('path_with_namespace') or ''
                 if repo_filter and repo_name.lower() != repo_filter.lower():

@@ -300,7 +300,15 @@ def test_publish_with_dedup_and_existing_issue_updates_cloud(sync_client, monkey
         remote_issues if tool == 'list_enterprise_issues' else []
     ))
 
-    # Preview should identify matched_issue
+    # Sync remote issues into local cache first; preview must use local cache and skip live gitee.com queries
+    c.get(f"/api/gitee/enterprise/issues?date={day}&source=remote").raise_for_status()
+    monkeypatch.setattr(ge, "_paged", lambda tool, args: (
+        [{'id': 11, 'name': '上海工程技术大学档案系统', 'ident': 'SHGC', 'status': 0}] if tool == 'list_programs' else
+        [{'id': 9, 'title': '任务', 'category': 'task'}] if tool == 'list_issue_types' else
+        pytest.fail(f"preview must not call remote {tool}") if tool == 'list_enterprise_issues' else []
+    ))
+
+    # Preview should identify matched_issue from local cache without calling list_enterprise_issues
     r = c.post("/api/gitee/enterprise/preview", json={"date": day, "task_ids": [task_id]})
     r.raise_for_status()
     p = r.json()
@@ -434,13 +442,29 @@ def test_sync_gitee_unfinished_ignores_local_ai_tasks(sync_client, monkeypatch):
     assert tasks[0]["origin"] == "auto"
     assert tasks[0]["title"] == "【上海工程】修复附件管理全文提取问题"
 
-    # Unfinished issues from earlier dates must not hijack preview of today's AI task
+    # Unfinished issues cached from earlier dates must not hijack preview of today's AI task,
+    # and preview must not query live list_enterprise_issues.
+    with engine.begin() as conn:
+        ge._save_local_enterprise_issues(
+            conn,
+            10,
+            [
+                {
+                    "id": 6001,
+                    "title": "【上海工程】修复附件管理全文提取问题",
+                    "state": "open",
+                    "program_id": 11,
+                    "plan_started_at": "2026-10-10T00:00:00",
+                    "issue_url": "https://gitee.com/ent/issue/6001",
+                }
+            ],
+        )
     monkeypatch.setattr(
         ge,
         "_paged",
         lambda tool, args: (
             [{"id": 11, "name": "上海工程技术大学档案系统", "ident": "SHGC", "status": 0}] if tool == "list_programs"
-            else [{"id": 6001, "title": "【上海工程】修复附件管理全文提取问题", "state": "open", "program_id": 11, "plan_started_at": "2026-10-10T00:00:00", "issue_url": "https://gitee.com/ent/issue/6001"}] if tool == "list_enterprise_issues"
+            else pytest.fail(f"preview must not call remote {tool}") if tool == "list_enterprise_issues"
             else []
         ),
     )

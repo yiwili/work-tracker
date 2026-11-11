@@ -318,7 +318,7 @@ export function GiteePublishModal({
               preview.remote_day_issues.length > 0 && (
                 <details className="gitee-remote-existing-panel" open>
                   <summary>
-                    📌 Gitee 当日已有工作项（{preview.remote_day_issues.length}{" "}
+                    📌 本地已同步 / 服务端同期工作项（{preview.remote_day_issues.length}{" "}
                     项）· 推送前可对比是否重复或替换
                   </summary>
                   <div className="gitee-remote-existing-list">
@@ -361,7 +361,7 @@ export function GiteePublishModal({
             {preview.remote_day_issues &&
               preview.remote_day_issues.length === 0 && (
                 <div className="gitee-remote-empty-pill">
-                  ✓ Gitee 当日暂无已登记工作项，本次将直接新建
+                  ✓ 本地已同步库及服务端暂无该日工作项，本次将直接新建
                 </div>
               )}
             <fieldset disabled={busy} className="publish-items">

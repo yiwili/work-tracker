@@ -11,7 +11,7 @@ from threading import Lock
 from urllib.parse import urlparse
 from uuid import uuid4
 from sqlalchemy import select, and_, update
-from . import db, gitee, gitee_mcp
+from . import db, git_tools, gitee, gitee_mcp
 from .collectors import stable
 from .privacy import redact
 
@@ -250,26 +250,221 @@ def _issue_description(issue: dict) -> str:
     return _ISSUE_MARKER_RE.sub('', text).strip()
 
 
+def _current_git_email() -> str:
+    try:
+        author = git_tools.global_author() or {}
+    except Exception:
+        author = {}
+    return str(author.get('email') or '').strip()
+
+
+def _int_id(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _match_member_by_email(rows: list[dict], target_email: str) -> tuple[int | None, str]:
+    want = target_email.strip().casefold()
+    if not want:
+        return None, ''
+    for m in rows:
+        if str(m.get('email') or '').strip().casefold() == want:
+            return _int_id(m.get('id') or m.get('user_id')), str(m.get('username') or m.get('name') or '').strip()
+    return None, ''
+
+
+def _collect_actor(raw_val, direct_id=None) -> tuple[bool, set[int], set[str], set[str]]:
+    ids: set[int] = set()
+    emails: set[str] = set()
+    usernames: set[str] = set()
+    did = _int_id(direct_id)
+    if did is not None:
+        ids.add(did)
+    if isinstance(raw_val, dict):
+        for key in ('id', 'user_id'):
+            vid = _int_id(raw_val.get(key))
+            if vid is not None:
+                ids.add(vid)
+        nested = raw_val.get('user')
+        if isinstance(nested, dict):
+            for key in ('id', 'user_id'):
+                vid = _int_id(nested.get(key))
+                if vid is not None:
+                    ids.add(vid)
+            em = str(nested.get('email') or '').strip().casefold()
+            if em:
+                emails.add(em)
+            for uk in ('username', 'login'):
+                un = str(nested.get(uk) or '').strip().casefold()
+                if un:
+                    usernames.add(un)
+        em = str(raw_val.get('email') or '').strip().casefold()
+        if em:
+            emails.add(em)
+        for uk in ('username', 'login'):
+            un = str(raw_val.get(uk) or '').strip().casefold()
+            if un:
+                usernames.add(un)
+    else:
+        vid = _int_id(raw_val)
+        if vid is not None:
+            ids.add(vid)
+    return bool(ids or emails or usernames), ids, emails, usernames
+
+
+def _actor_matches(
+    ids: set[int],
+    emails: set[str],
+    usernames: set[str],
+    want_email: str,
+    matched_uid: int | None,
+    matched_username: str,
+) -> bool:
+    if want_email and want_email in emails:
+        return True
+    if matched_uid is not None and matched_uid in ids:
+        return True
+    if matched_username and matched_username.casefold() in usernames:
+        return True
+    return False
+
+
+def _issue_belongs_to_user(
+    row: dict,
+    git_email: str,
+    matched_uid: int | None,
+    matched_username: str,
+    members_available: bool,
+    server_filtered: bool = False,
+) -> bool:
+    if not git_email:
+        return True
+    want_email = git_email.strip().casefold()
+
+    has_assignee, a_ids, a_emails, a_users = _collect_actor(row.get('assignee'), row.get('assignee_id'))
+    if has_assignee:
+        return _actor_matches(a_ids, a_emails, a_users, want_email, matched_uid, matched_username)
+
+    c_has = False
+    c_ids: set[int] = set()
+    c_emails: set[str] = set()
+    c_users: set[str] = set()
+    for obj_key, id_key in (('author', 'author_id'), ('creator', 'creator_id'), ('user', 'user_id')):
+        hi, ids, ems, usrs = _collect_actor(row.get(obj_key), row.get(id_key))
+        if hi:
+            c_has = True
+            c_ids.update(ids)
+            c_emails.update(ems)
+            c_users.update(usrs)
+    if c_has:
+        return _actor_matches(c_ids, c_emails, c_users, want_email, matched_uid, matched_username)
+
+    if server_filtered:
+        return True
+    return not members_available
+
+
+def _resolve_current_enterprise_user(enterprise_id: int) -> tuple[str, int | None, str, bool]:
+    """Resolve current Gitee Enterprise user via local Git global email."""
+    git_email = _current_git_email()
+    if not git_email or not enterprise_id:
+        return git_email, None, '', False
+
+    members_available = False
+    matched_uid: int | None = None
+    matched_username = ''
+
+    try:
+        found = members(enterprise_id, search=git_email)
+        if found:
+            members_available = True
+            matched_uid, matched_username = _match_member_by_email(found, git_email)
+    except EnterpriseError:
+        pass
+
+    if matched_uid is None:
+        try:
+            all_members = members(enterprise_id)
+            if all_members:
+                members_available = True
+                matched_uid, matched_username = _match_member_by_email(all_members, git_email)
+        except EnterpriseError:
+            pass
+
+    if (
+        matched_uid is None
+        and members is _orig_members
+        and _paged is _orig_paged
+        and _tool is _orig_tool
+        and gitee_mcp.call is _orig_mcp_call
+    ):
+        try:
+            res = _tool(
+                'invoke_tool',
+                {
+                    'name': 'get_member_by_email',
+                    'arguments': {'enterprise_id': enterprise_id, 'email': git_email},
+                },
+            )
+            cand = res.get('data') if isinstance(res, dict) and isinstance(res.get('data'), dict) else res
+            norm = _normalize_member_row(cand) if isinstance(cand, dict) else None
+            if norm:
+                members_available = True
+                norm_email = str(norm.get('email') or '').strip().casefold()
+                if not norm_email or norm_email == git_email.casefold():
+                    matched_uid = _int_id(norm.get('id') or norm.get('user_id'))
+                    matched_username = str(norm.get('username') or norm.get('name') or '').strip()
+        except EnterpriseError:
+            pass
+
+    return git_email, matched_uid, matched_username, members_available
+
+
 def unfinished_issues(enterprise_id, program_id=None):
     if not enterprise_id:
         return []
-    args = {'enterprise_id': enterprise_id, 'state': 'open'}
+    git_email, matched_uid, matched_username, members_available = _resolve_current_enterprise_user(enterprise_id)
+    base_args: dict = {'enterprise_id': enterprise_id}
     if program_id:
-        args['program_id'] = program_id
+        base_args['program_ids'] = str(program_id)
+    server_filtered = False
+    if matched_uid is not None:
+        base_args['assignee_id'] = str(matched_uid)
+        server_filtered = True
     try:
-        rows = _paged('list_enterprise_issues', args)
+        rows = _paged('list_enterprise_issues', {**base_args, 'state': 'open'})
     except EnterpriseError:
         try:
-            raw_args = {'enterprise_id': enterprise_id}
-            if program_id:
-                raw_args['program_id'] = program_id
-            rows = _paged('list_enterprise_issues', raw_args)
-            rows = [r for r in rows if str(r.get('state') or '').lower() not in ('closed', 'finished', 'resolved', 'done', '已关闭', '已解决', '已完成')]
+            rows = _paged('list_enterprise_issues', dict(base_args))
+            rows = [
+                r for r in rows
+                if str(r.get('state') or '').lower()
+                not in ('closed', 'finished', 'resolved', 'done', 'rejected', '已关闭', '已解决', '已完成', '已拒绝')
+            ]
         except EnterpriseError:
             return []
     items = []
+    seen_ids: set[int] = set()
     for r in rows:
         if type(r.get('id')) is int and r['id'] > 0:
+            if r['id'] in seen_ids:
+                continue
+            if not _issue_belongs_to_user(
+                r,
+                git_email,
+                matched_uid,
+                matched_username,
+                members_available,
+                server_filtered=server_filtered,
+            ):
+                continue
+            seen_ids.add(r['id'])
             ident = str(r.get('ident') or r['id'])
             date_val = _extract_issue_date(r) or str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
             dur = _issue_minutes(r)
@@ -294,26 +489,45 @@ def unfinished_issues(enterprise_id, program_id=None):
 def fetch_all_issues(enterprise_id, since=None, state='all', raise_on_error=False):
     if not enterprise_id:
         return []
-    args = {'enterprise_id': enterprise_id, 'state': state}
+    git_email, matched_uid, matched_username, members_available = _resolve_current_enterprise_user(enterprise_id)
+    base_args: dict = {'enterprise_id': enterprise_id}
+    server_filtered = False
+    if matched_uid is not None:
+        base_args['assignee_id'] = str(matched_uid)
+        server_filtered = True
+    args = {**base_args, 'state': state} if (state and state != 'all') else dict(base_args)
     try:
         rows = _paged('list_enterprise_issues', args)
     except EnterpriseError as first_exc:
         if raise_on_error and any(k in str(first_exc) for k in ('Token', '认证', '超时', '连接失败', 'npx', 'Node.js', 'HTTP 401', 'HTTP 403', 'HTTP 404')):
             raise
         try:
-            open_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'open'})
-            closed_rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id, 'state': 'closed'})
+            open_rows = _paged('list_enterprise_issues', {**base_args, 'state': 'open'})
+            closed_rows = _paged('list_enterprise_issues', {**base_args, 'state': 'closed'})
             rows = open_rows + closed_rows
-        except EnterpriseError as second_exc:
+        except EnterpriseError:
             try:
-                rows = _paged('list_enterprise_issues', {'enterprise_id': enterprise_id})
+                rows = _paged('list_enterprise_issues', dict(base_args))
             except EnterpriseError as third_exc:
                 if raise_on_error:
                     raise third_exc from None
                 return []
     items = []
+    seen_ids: set[int] = set()
     for r in rows:
         if type(r.get('id')) is int and r['id'] > 0:
+            if r['id'] in seen_ids:
+                continue
+            if not _issue_belongs_to_user(
+                r,
+                git_email,
+                matched_uid,
+                matched_username,
+                members_available,
+                server_filtered=server_filtered,
+            ):
+                continue
+            seen_ids.add(r['id'])
             created_at = _extract_issue_date(r) or str(r.get('plan_started_at') or r.get('created_at') or '')[:10]
             if since and created_at and created_at < str(since):
                 continue
@@ -349,6 +563,7 @@ def fetch_all_issues(enterprise_id, since=None, state='all', raise_on_error=Fals
 
 
 _orig_programs = programs
+_orig_members = members
 _orig_paged = _paged
 _orig_issue_types = issue_types
 _orig_issue_type_states = issue_type_states
@@ -919,20 +1134,21 @@ def cache_programs(engine,enterprise_id):
 
 def preview(engine,payload,cloud_client=None):
     from .service import get_settings,upsert,now
+    from . import multiday
+    c_client = cloud_client
+    server_sync_enabled = False
     try:
-        c_client = cloud_client
-        if not c_client:
-            from . import cloud_sync
-            from .cloud_client import CloudClient
-            with engine.connect() as conn:
-                bound = cloud_sync.get_meta(conn, 'bound', False)
-                server_url = cloud_sync.get_meta(conn, 'server_url', '')
-            if bound and server_url:
-                c_token = gitee.token(service='cloud-session')
-                if c_token:
-                    c_client = CloudClient(base_url=server_url, token=c_token)
-        if c_client:
-            from . import cloud_sync
+        from . import cloud_sync
+        from .cloud_client import CloudClient
+        with engine.connect() as conn:
+            bound = bool(cloud_sync.get_meta(conn, 'bound', False))
+            server_url = cloud_sync.get_meta(conn, 'server_url', '')
+        server_sync_enabled = bool(bound or c_client is not None)
+        if not c_client and bound and server_url:
+            c_token = gitee.token(service='cloud-session')
+            if c_token:
+                c_client = CloudClient(base_url=server_url, token=c_token)
+        if c_client and server_sync_enabled:
             cloud_sync.sync_once(engine, c_client)
     except Exception:
         pass
@@ -940,39 +1156,136 @@ def preview(engine,payload,cloud_client=None):
         settings=get_settings(conn);config=settings.gitee_enterprise
         tasks=task_snapshot(conn,payload.date,payload.task_ids)
         existing_links={r['task_id']:dict(r) for r in conn.execute(select(db.gitee_links).where(db.gitee_links.c.enterprise_id==config.enterprise_id)).mappings()}
+        binding = multiday.get_active_binding(conn, payload.date)
+        range_start = binding['start_date'] if binding else str(payload.date)
+        range_end = binding['end_date'] if binding else str(payload.date)
+        cached_prog_blob = conn.execute(
+            select(db.integrations.c.value).where(
+                db.integrations.c.id == f'gitee-enterprise-programs:{config.enterprise_id}'
+            )
+        ).scalar() or {}
+        cached_catalog = cached_prog_blob.get('items', []) if isinstance(cached_prog_blob, dict) else []
+        local_prog_map = {
+            p['id']: p['name']
+            for p in cached_catalog
+            if isinstance(p, dict) and 'id' in p
+        }
+        local_cached_issues, _ = _load_local_enterprise_issues(conn, config.enterprise_id, local_prog_map)
     if not config.enterprise_id:
         raise ValueError('请先在系统设置选择Gitee企业并保存')
-    catalog=programs(config.enterprise_id)
+    if programs is not _orig_programs or _paged is not _orig_paged or not cached_catalog:
+        catalog=programs(config.enterprise_id)
+    else:
+        catalog=cached_catalog
+    prog_map = {p['id']: p['name'] for p in catalog if isinstance(p, dict) and 'id' in p}
     items=[]
     dedup=settings.gitee_dedup
     matched_issues={}
-    remote_issues=[]
-    remote_day_issues=[]
-    should_fetch_remote = not (
-        programs is not _orig_programs
-        and _paged is _orig_paged
-        and fetch_all_issues is _orig_fetch_all_issues
-        and unfinished_issues is _orig_unfinished_issues
-        and gitee_mcp.call is _orig_mcp_call
-    )
-    if should_fetch_remote:
+
+    # 只匹配本地已拉取/已留存的工作项，以及启用的服务端同步记录；不实时请求 gitee.com。
+    candidate_by_id: dict[str, dict] = {}
+    for li in local_cached_issues:
+        rid = str(li.get('issue_id') or li.get('id') or '').strip()
+        if not rid:
+            continue
+        item_copy = dict(li)
+        if not item_copy.get('program_name') and item_copy.get('program_id') in prog_map:
+            item_copy['program_name'] = prog_map[item_copy['program_id']]
+            item_copy['project'] = item_copy['program_name']
+        candidate_by_id[rid] = item_copy
+
+    if c_client and server_sync_enabled:
         try:
-            remote_issues = fetch_all_issues(config.enterprise_id, since=str(payload.date), state='all')
-            if not remote_issues and dedup.enabled and dedup.dedup_on_publish:
-                remote_issues = unfinished_issues(config.enterprise_id)
+            hist_res = c_client.list_cloud_history(
+                page=1,
+                limit=100,
+                date_from=range_start,
+                date_to=range_end,
+            )
+            for hr in hist_res.get('items', []):
+                if str(hr.get('source') or '') not in ('gitee_enterprise', 'gitee', 'gitee_v5'):
+                    continue
+                sid = str(hr.get('source_id') or '').strip()
+                if not sid or not sid.isdigit():
+                    continue
+                w_date = str(hr.get('work_date') or '')[:10]
+                proj = str(hr.get('project') or '')
+                matched_pid = next((pid for pid, pname in prog_map.items() if pname == proj), None)
+                prev_entry = candidate_by_id.get(sid, {})
+                candidate_by_id[sid] = {
+                    **prev_entry,
+                    'id': sid,
+                    'issue_id': sid,
+                    'title': prev_entry.get('title') or str(hr.get('title') or ''),
+                    'description': prev_entry.get('description') or str(hr.get('details') or ''),
+                    'details': prev_entry.get('details') or str(hr.get('details') or ''),
+                    'state': prev_entry.get('state') or 'closed',
+                    'program_id': prev_entry.get('program_id') or matched_pid,
+                    'program_name': prev_entry.get('program_name') or proj,
+                    'project': prev_entry.get('project') or proj,
+                    'duration': int(prev_entry.get('duration') or 0),
+                    'minutes': int(prev_entry.get('minutes') or 0),
+                    'issue_date': prev_entry.get('issue_date') or w_date,
+                    'date': prev_entry.get('date') or w_date,
+                    'work_date': prev_entry.get('work_date') or w_date,
+                    'url': safe_url(prev_entry.get('url') or hr.get('url') or ''),
+                    'source': prev_entry.get('source') or 'server_history',
+                }
         except Exception:
-            remote_issues = []
+            pass
+
+        try:
+            reqs = c_client.list_publish_requests(limit=100)
+            scope_prefix = f'ent:{config.enterprise_id}'
+            for req in reqs:
+                if req.get('target_scope') != scope_prefix:
+                    continue
+                req_status = str(req.get('status') or req.get('state') or '').lower()
+                if req_status in ('failed', 'cancelled'):
+                    continue
+                rid = str(req.get('remote_id') or '').strip()
+                if not rid or not rid.isdigit():
+                    continue
+                p_obj = req.get('payload') if isinstance(req.get('payload'), dict) else {}
+                t_obj = req.get('target') if isinstance(req.get('target'), dict) else {}
+                pid = t_obj.get('program_id')
+                pname = prog_map.get(pid, '')
+                dur = int(p_obj.get('minutes') or p_obj.get('duration') or 0)
+                w_date = _extract_issue_date(p_obj) or str(req.get('updated_at') or req.get('created_at') or '')[:10]
+                prev_entry = candidate_by_id.get(rid, {})
+                candidate_by_id[rid] = {
+                    **prev_entry,
+                    'id': rid,
+                    'issue_id': rid,
+                    'title': prev_entry.get('title') or str(p_obj.get('title') or ''),
+                    'description': prev_entry.get('description') or str(p_obj.get('description') or ''),
+                    'details': prev_entry.get('details') or str(p_obj.get('description') or ''),
+                    'state': prev_entry.get('state') or ('closed' if req_status == 'succeeded' else 'progressing'),
+                    'program_id': prev_entry.get('program_id') or pid,
+                    'program_name': prev_entry.get('program_name') or pname,
+                    'project': prev_entry.get('project') or pname,
+                    'duration': int(prev_entry.get('duration') or dur),
+                    'minutes': int(prev_entry.get('minutes') or dur),
+                    'issue_date': prev_entry.get('issue_date') or w_date,
+                    'date': prev_entry.get('date') or w_date,
+                    'work_date': prev_entry.get('work_date') or w_date,
+                    'url': safe_url(prev_entry.get('url') or req.get('url') or ''),
+                    'source': prev_entry.get('source') or 'server_publish',
+                }
+        except Exception:
+            pass
+
     linked_issue_ids = {
         str(existing_links[t['id']]['issue_id'])
         for t in tasks
         if t['id'] in existing_links and existing_links[t['id']].get('issue_id')
     }
-    remote_by_id = {}
-    for r in remote_issues:
+    remote_by_id = dict(candidate_by_id)
+    remote_day_issues = []
+    for r in candidate_by_id.values():
         rid = str(r.get('issue_id') or r.get('id') or '')
-        if rid:
-            remote_by_id[rid] = r
-        if _extract_issue_date(r) == str(payload.date) or (rid and rid in linked_issue_ids):
+        issue_day = _extract_issue_date(r) or str(r.get('issue_date') or '')[:10]
+        if (issue_day and range_start <= issue_day <= range_end) or (rid and rid in linked_issue_ids):
             remote_day_issues.append(r)
 
     if remote_day_issues and dedup.enabled and dedup.dedup_on_publish:
