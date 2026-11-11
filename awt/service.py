@@ -585,16 +585,16 @@ def report(conn, day):
     from .activity_time import profile
     for task in tasks:
         task['timing']=profile(task['evidence'],timeline,settings.activity_gap_minutes)
+    effective_target = stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes
     from .time_allocation import state_hash
     allocation=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==str(day))).scalar_one_or_none()
     if allocation:
-        allocation={**allocation,'stale':allocation['state_hash']!=state_hash(tasks,settings)}
+        allocation={**allocation,'stale':allocation['state_hash']!=state_hash(tasks,settings,effective_target)}
 
     from . import similarity
     similarity_status = similarity.get_similarity_status(conn, day, tasks)
 
     legacy_count = sum(t['origin'] == 'auto' and not t['edited'] and not t['confirmed_minutes'] and not (t['fingerprint'] or '').startswith('daily-v2:') for t in tasks)
-    effective_target = stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes
     return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
             "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,

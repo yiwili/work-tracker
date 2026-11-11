@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Check, Sparkles, X } from "lucide-react";
+import { api } from "./api";
 import type { Report } from "./types";
 import "./workflows.css";
 
@@ -26,21 +27,11 @@ export function AllocationPreviewModal({
     setBusy(true);
     setError("");
     try {
-      const response = await fetch(
-        `/api/reports/${report.date}/apply-allocation`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        },
-      );
-      const result = await response.json();
-      if (!response.ok)
-        throw Error(
-          typeof result.detail === "string"
-            ? result.detail
-            : "应用工时失败，请重试",
-        );
+      const result = await api<{
+        allocated: number;
+        fixed_minutes: number;
+        warnings?: string[];
+      }>(`/reports/${report.date}/apply-allocation`, "POST", {});
       await onApplied(
         `已应用 ${result.allocated} 个工作项的 AI 工时，保留 ${h(
           result.fixed_minutes,

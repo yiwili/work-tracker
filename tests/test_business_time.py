@@ -149,6 +149,69 @@ def test_preview_apply_rejects_changes_since_estimation(client,monkeypatch):
     assert c.get('/api/reports/2026-10-24').json()['total_minutes']==0
 
 
+def test_custom_target_reallocation_is_not_stale_and_applies_cleanly(client,monkeypatch):
+    c,_=client
+    settings=c.get('/api/settings').json();settings['auto_apply_allocation']=False
+    c.put('/api/settings',json=settings).raise_for_status()
+    t1=add_task(c,'优化多天报表面板')
+    t2=add_task(c,'修复同步状态保存')
+    c.put('/api/reports/2026-10-24/target',json={'target_minutes':960}).raise_for_status()
+    weights(monkeypatch)
+
+    # First allocation with custom 16h (960m) target in preview mode
+    first=c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'custom-1','task_ids':[t1,t2],'target_minutes':960})
+    first.raise_for_status()
+    rep=c.get('/api/reports/2026-10-24').json()
+    assert rep['target_minutes']==960
+    assert rep['time_allocation']['pending'] is True
+    assert rep['time_allocation']['stale'] is False
+
+    # Task changes -> becomes stale
+    c.patch('/api/tasks/'+t1,json={'status':'changed'}).raise_for_status()
+    stale_rep=c.get('/api/reports/2026-10-24').json()
+    assert stale_rep['time_allocation']['stale'] is True
+
+    # Re-allocate with AI -> must clear stale and apply cleanly
+    re=c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'custom-2','task_ids':[t1,t2],'target_minutes':960})
+    re.raise_for_status()
+    fresh_rep=c.get('/api/reports/2026-10-24').json()
+    assert fresh_rep['time_allocation']['stale'] is False
+    assert fresh_rep['time_allocation']['pending'] is True
+
+    applied=c.post('/api/reports/2026-10-24/apply-allocation',json={})
+    applied.raise_for_status()
+    done_rep=c.get('/api/reports/2026-10-24').json()
+    assert done_rep['total_minutes']==960
+    assert done_rep['time_allocation']['pending'] is False
+    assert done_rep['time_allocation']['stale'] is False
+
+    # Updating daily target after apply marks allocation stale until re-estimated
+    c.put('/api/reports/2026-10-24/target',json={'target_minutes':720}).raise_for_status()
+    assert c.get('/api/reports/2026-10-24').json()['time_allocation']['stale'] is True
+
+
+def test_reallocate_when_remaining_zero_clears_stale_snapshot(client,monkeypatch):
+    c,_=client
+    settings=c.get('/api/settings').json();settings['auto_apply_allocation']=False
+    c.put('/api/settings',json=settings).raise_for_status()
+    t1=add_task(c,'需求评审',120)
+    t2=add_task(c,'修复后端接口')
+    weights(monkeypatch)
+    c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'zero-1','task_ids':[t2]}).raise_for_status()
+    c.post('/api/reports/2026-10-24/apply-allocation',json={}).raise_for_status()
+
+    # Manually pin t2 to consume remaining 360m (now total=480, remaining=0)
+    c.patch('/api/tasks/'+t2,json={'confirmed_minutes':360,'time_locked':True}).raise_for_status()
+    assert c.get('/api/reports/2026-10-24').json()['time_allocation']['stale'] is True
+
+    # Re-running estimate-time with remaining=0 (including empty task_ids from modal) clears stale
+    r=c.post('/api/reports/2026-10-24/estimate-time',json={'request_id':'zero-2','task_ids':[]})
+    r.raise_for_status()
+    rep=c.get('/api/reports/2026-10-24').json()
+    assert rep['time_allocation']['stale'] is False
+    assert rep['time_allocation']['pending'] is False
+
+
 def test_time_changes_during_ai_wait_are_never_overwritten(client,monkeypatch):
     c,_=client
     task=add_task(c,'修复业务功能')

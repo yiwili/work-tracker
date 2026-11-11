@@ -100,8 +100,6 @@ def estimate(conn, day, request=None):
         raise ValueError('请先生成或补录真实工作项，再估算工时')
     locked=[t for t in tasks if t['time_locked']]
     selected,preserved=select_tasks(tasks,request.task_ids)
-    if request.task_ids is not None and not selected:
-        raise ValueError('请至少勾选一个需要AI分配工时的工作项')
     stored_target = conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date == str(day))).scalar_one_or_none()
     target_minutes = request.target_minutes or stored_target or settings.target_minutes
     human_fixed=sum(t['confirmed_minutes'] for t in locked)+sum(i.minutes for i in request.manual_items)
@@ -116,8 +114,30 @@ def estimate(conn, day, request=None):
         if any(t['confirmed_minutes'] for t in selected):
             raise ValueError('固定工时已占满目标，请先人工核对其余已有分配，系统不会静默清零')
         if not request.manual_items:
+            existing_alloc = conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date == str(day))).scalar_one_or_none()
+            if existing_alloc:
+                refreshed_snapshot = {
+                    **existing_alloc,
+                    'estimated_at': now(),
+                    'target_minutes': target_minutes,
+                    'fixed_minutes': human_fixed,
+                    'preserved_minutes': preserved_minutes,
+                    'distributed_minutes': 0,
+                    'items': [],
+                    'manual_tasks': [],
+                    'selected_ids': [],
+                    'pending': False,
+                    'applied_at': now(),
+                    'total_minutes': retained,
+                    'warnings': ['固定工时已达到目标，无需AI分配。'],
+                    'state_hash': state_hash(tasks, settings, target_minutes),
+                }
+                upsert(conn, db.allocations, {'date': str(day), 'snapshot': refreshed_snapshot}, 'date')
+                upsert(conn, db.reports, {'date': str(day), 'target_minutes': target_minutes, 'confirmed': False}, 'date')
             return {'allocated':0,'fixed_minutes':human_fixed,'total_minutes':retained,'warnings':['固定工时已达到目标，无需AI分配。'],'applied':False,'pending':False}
     if remaining and not selected:
+        if request.task_ids is not None:
+            raise ValueError('请至少勾选一个需要AI分配工时的工作项')
         raise ValueError('已选工作项均带固定工时，请改选需要AI估算的工作项')
     analysis_progress.emit('开始估算工时，正在整理参与分配的工作项')
     analysis_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==str(day))).scalar_one_or_none() or {}
@@ -205,7 +225,9 @@ def apply(conn, day):
         raise ValueError('该工时建议已应用，无需重复应用')
     settings=get_settings(conn)
     tasks=list_tasks(conn,day)
-    if state_hash(tasks,settings)!=snapshot.get('state_hash'):
+    stored_target=conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date==str(day))).scalar_one_or_none()
+    effective_target=stored_target or snapshot.get('target_minutes') or settings.target_minutes
+    if state_hash(tasks,settings,effective_target)!=snapshot.get('state_hash'):
         raise ValueError('工作项、工时或分析设置已变化，请重新分配；本次未写入任何记录')
     selected_ids=set(snapshot.get('selected_ids') or [t['id'] for t in tasks if not t['time_locked']])
     added=[save_task(conn,TaskInput.model_validate(p)) for p in snapshot.get('manual_tasks',[])]
@@ -217,7 +239,7 @@ def apply(conn, day):
     invalidate(conn,day)
     final=list_tasks(conn,day)
     snapshot={**snapshot,'pending':False,'applied_at':now(),'total_minutes':sum(t['confirmed_minutes'] for t in final),
-              'state_hash':state_hash(final,settings)}
+              'state_hash':state_hash(final,settings,effective_target)}
     upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
     return {'allocated':len(selected_ids),'added_manual_ids':added,'fixed_minutes':snapshot.get('fixed_minutes',0),
             'preserved_minutes':snapshot.get('preserved_minutes',0),'total_minutes':snapshot['total_minutes'],
