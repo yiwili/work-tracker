@@ -663,7 +663,8 @@ def create_app(engine=None):
                 progress.finish('success')
                 return result
         except model_provider.ModelError as exc:
-            progress.add('分析失败，原有记录已保留；请查看页面错误提示')
+            reason=getattr(exc,'user_reason','')
+            progress.add(f'分析失败：{reason}' if reason else '分析失败，原有记录已保留；请查看页面错误提示')
             progress.finish('error')
             logging.getLogger('awt.analysis').warning('全天分析失败 date=%s reason=%s',date,str(exc))
             raise

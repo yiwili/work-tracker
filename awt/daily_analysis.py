@@ -609,7 +609,10 @@ def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
             if not usage:
                 raise
             prefix='约 ' if usage['estimated'] else ''
-            raise model_provider.ModelError(f"{exc}；本次已记录模型用量{prefix}{usage['total_tokens']:,} tokens（输入 {usage['prompt_tokens']:,} / 输出 {usage['completion_tokens']:,}）") from None
+            error=model_provider.ModelError(f"{exc}；本次已记录模型用量{prefix}{usage['total_tokens']:,} tokens（输入 {usage['prompt_tokens']:,} / 输出 {usage['completion_tokens']:,}）")
+            if getattr(exc,'user_reason',''):
+                error.user_reason=str(error)
+            raise error from None
 
 
 def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minutes=None):

@@ -789,3 +789,23 @@ def test_auto_import_protected_ai_match_moves_to_pending_for_choice(app_client, 
     assert imp.json()['replaced'] == 1
     tasks = client.get('/api/tasks?date=2026-10-24').json()
     assert len(tasks) == 1 and tasks[0]['title'] == '【其他】确认更新的标题'
+
+
+def test_failed_analysis_progress_shows_provider_reason(app_client, monkeypatch):
+    client, engine = app_client
+    add_events(engine, 1)
+
+    def fail(*args, **kwargs):
+        error = model_provider.ModelError(
+            '模型请求失败（HTTP 402）：供应商账户额度或余额不足。请充值后重试；原任务已保留'
+        )
+        error.user_reason = str(error)
+        raise error
+
+    monkeypatch.setattr(model_provider, 'complete', fail)
+    response = client.post('/api/analyze?date=2026-10-24', json={})
+    assert response.status_code == 400
+    assert '额度或余额不足' in response.json()['detail']
+    progress = client.get('/api/analysis/progress?date=2026-10-24').json()
+    assert progress['state'] == 'error'
+    assert '额度或余额不足' in progress['logs'][-1]['message']
