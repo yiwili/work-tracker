@@ -666,3 +666,126 @@ def test_ai_task_fixed_template_shanghai_mapping_and_blank_other_fallback(app_cl
     assert '【其他】整理常用命令备忘' in by_title
     assert by_title['【其他】整理常用命令备忘']['project'] == '空'
     assert by_title['【其他】整理常用命令备忘']['category'] == '任务'
+
+
+def test_multi_run_ai_mapping_replace_and_create_no_unique_error(app_client, monkeypatch):
+    client, engine = app_client
+    add_events(engine, 3)
+    s = client.get('/api/settings').json()
+    s['auto_import_analysis'] = False
+    client.put('/api/settings', json=s).raise_for_status()
+
+    monkeypatch.setattr(model_provider, 'complete', scope_model(lambda *a, **kw: result(['e1', 'e2'], '修复接口超时')))
+    r1 = client.post('/api/analyze?date=2026-10-24', json={}).json()
+    cand1 = r1['pending_tasks'][0]
+    imp1 = client.post('/api/analysis/import', json={
+        'date': '2026-10-24',
+        'items': [{'fingerprint': cand1['fingerprint'], 'title': cand1['title']}],
+    }).json()
+    assert imp1['created'] == 1
+
+    tasks1 = client.get('/api/tasks?date=2026-10-24').json()
+    task1_id = tasks1[0]['id']
+    client.patch(f'/api/tasks/{task1_id}', json={'confirmed_minutes': 90}).raise_for_status()
+    with engine.begin() as conn:
+        service.upsert(conn, db.gitee_links, {
+            'id': 'link-1',
+            'enterprise_id': 0,
+            'task_id': task1_id,
+            'program_id': 11,
+            'status': 'created',
+            'issue_id': '8101',
+            'url': 'https://gitee.com/ent/issue/8101',
+            'error': '',
+            'updated_at': '2026-10-24T12:00:00Z',
+        }, 'id')
+
+    # 第二次生成：能映射回上次 AI 工作项，带出工时与 Gitee 关联
+    monkeypatch.setattr(model_provider, 'complete', scope_model(lambda *a, **kw: result(['e1', 'e2', 'e3'], '修复接口超时与重连逻辑')))
+    r2 = client.post('/api/analyze?date=2026-10-24', json={}).json()
+    cand2 = r2['pending_tasks'][0]
+    assert cand2['matched_task'] is not None
+    assert cand2['matched_task']['id'] == task1_id
+    assert cand2['matched_task']['confirmed_minutes'] == 90
+    assert cand2['matched_task']['gitee_issue_id'] == '8101'
+
+    # 选择替换：保留 task_id、工时与 Gitee 关联，刷新标题
+    imp2 = client.post('/api/analysis/import', json={
+        'date': '2026-10-24',
+        'items': [{
+            'fingerprint': cand2['fingerprint'],
+            'title': '【其他】修复接口超时与重连逻辑',
+            'action': 'replace',
+            'target_task_id': task1_id,
+        }],
+    })
+    imp2.raise_for_status()
+    assert imp2.json()['replaced'] == 1
+    tasks2 = client.get('/api/tasks?date=2026-10-24').json()
+    assert len(tasks2) == 1
+    assert tasks2[0]['id'] == task1_id
+    assert tasks2[0]['title'] == '【其他】修复接口超时与重连逻辑'
+    assert tasks2[0]['confirmed_minutes'] == 90
+    with engine.connect() as conn:
+        link_row = conn.execute(select(db.gitee_links).where(db.gitee_links.c.task_id == task1_id)).mappings().first()
+        assert link_row is not None and link_row['issue_id'] == '8101'
+
+    # 第三次生成并选择“保留原项并新建”：不能报 UNIQUE 约束错误，且保留原项
+    r3 = client.post('/api/analyze?date=2026-10-24', json={}).json()
+    cand3 = r3['pending_tasks'][0]
+    assert cand3['matched_task'] is not None and cand3['matched_task']['id'] == task1_id
+    imp3 = client.post('/api/analysis/import', json={
+        'date': '2026-10-24',
+        'items': [{
+            'fingerprint': cand3['fingerprint'],
+            'title': '【其他】单独拆分的新工作项',
+            'action': 'create',
+        }],
+    })
+    imp3.raise_for_status()
+    tasks3 = client.get('/api/tasks?date=2026-10-24').json()
+    assert len(tasks3) == 2
+    assert {t['id'] for t in tasks3} >= {task1_id}
+
+
+def test_auto_import_protected_ai_match_moves_to_pending_for_choice(app_client, monkeypatch):
+    client, engine = app_client
+    add_events(engine, 2)
+    monkeypatch.setattr(model_provider, 'complete', scope_model(lambda *a, **kw: result(['e1', 'e2'], '初始 AI 任务')))
+    r1 = client.post('/api/analyze?date=2026-10-24', json={}).json()
+    assert r1['created'] == 1
+    t1_id = client.get('/api/tasks?date=2026-10-24').json()[0]['id']
+
+    with engine.begin() as conn:
+        service.upsert(conn, db.gitee_links, {
+            'id': 'link-auto-1',
+            'enterprise_id': 0,
+            'task_id': t1_id,
+            'program_id': 11,
+            'status': 'created',
+            'issue_id': '8201',
+            'url': 'https://gitee.com/ent/issue/8201',
+            'error': '',
+            'updated_at': '2026-10-24T12:00:00Z',
+        }, 'id')
+
+    monkeypatch.setattr(model_provider, 'complete', scope_model(lambda *a, **kw: result(['e1', 'e2'], '二次生成标题')))
+    r2 = client.post('/api/analyze?date=2026-10-24', json={}).json()
+    assert r2['created'] == 0
+    assert r2['pending'] == 1
+    assert r2['pending_tasks'][0]['matched_task']['id'] == t1_id
+    assert r2['pending_tasks'][0]['matched_task']['gitee_issue_id'] == '8201'
+
+    imp = client.post('/api/analysis/import', json={
+        'date': '2026-10-24',
+        'items': [{
+            'fingerprint': r2['pending_tasks'][0]['fingerprint'],
+            'title': '【其他】确认更新的标题',
+            'action': 'replace',
+            'target_task_id': t1_id,
+        }],
+    })
+    imp.raise_for_status()
+    assert imp.json()['replaced'] == 1
+    tasks = client.get('/api/tasks?date=2026-10-24').json()
+    assert len(tasks) == 1 and tasks[0]['title'] == '【其他】确认更新的标题'

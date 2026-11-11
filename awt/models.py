@@ -138,6 +138,7 @@ class GiteeExportTarget(BaseModel):
     issue_type_id: int | None = Field(default=None, ge=1, strict=True)
     existing_issue_id: int | None = Field(default=None, ge=1, strict=True)
     replace_existing: bool = False
+    force_create: bool = False
 
 
 class GiteeDedupConfig(BaseModel):
@@ -450,6 +451,8 @@ class AnalysisImportItem(BaseModel):
     project: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, min_length=1, max_length=100)
     status: TaskStatus | None = None
+    action: Literal['replace', 'create', 'skip'] | None = None
+    target_task_id: str | None = Field(default=None, max_length=100)
 
 
 class AnalysisImportInput(BaseModel):

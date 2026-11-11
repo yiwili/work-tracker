@@ -469,7 +469,10 @@ function App() {
       const deletedPending = (a.pending_tasks || []).filter(
         (t) => t.previously_deleted,
       );
-      if (a.auto_imported && deletedPending.length > 0) {
+      const conflictPending = (a.pending_tasks || []).filter(
+        (t) => !t.previously_deleted,
+      );
+      if (a.auto_imported && deletedPending.length > 0 && conflictPending.length === 0) {
         // 如果没有分析结果弹窗，在导入前弹出一个专门的弹窗（相似度匹配的弹窗信息也在这里面，不要弹出多个窗口）
         setRecoveryModal({
           day: jobDay,
@@ -481,15 +484,18 @@ function App() {
       const warnings = a.warnings.length
         ? ` 提示：${a.warnings.join("；")}`
         : "";
+      const hasReviewablePending = conflictPending.length > 0;
       setToast({
         title: "AI 分析完成",
         message: a.auto_imported
-          ? `已归纳 ${a.created} 项工作并写入今日清单，替换 ${a.archived} 项未审核草稿。${usage}${warnings}`
+          ? hasReviewablePending
+            ? `已自动写入 ${a.created} 项工作；另有 ${conflictPending.length} 条候选对应已有 AI 项，请确认替换或新建。${usage}${warnings}`
+            : `已归纳 ${a.created} 项工作并写入今日清单，替换 ${a.archived} 项未审核草稿。${usage}${warnings}`
           : `已生成 ${a.pending} 条候选工作项，尚未写入今日清单；确认后即可导入。${usage}${warnings}`,
-        actionLabel: "前往查看",
+        actionLabel: !a.auto_imported || hasReviewablePending ? "选择替换或新建" : "前往查看",
         onAction: () => {
           setToast(null);
-          if (a.auto_imported) {
+          if (a.auto_imported && !hasReviewablePending) {
             setPage("daily");
           } else {
             setAnalysisView({
@@ -1676,7 +1682,7 @@ function App() {
       {giteeOpen && (
         <GiteePublishModal
           day={day}
-          taskIds={selected}
+          taskIds={selected.filter((id) => report?.tasks.some((t) => t.id === id))}
           onClose={() => setGiteeOpen(false)}
           onSettings={() => {
             setGiteeOpen(false);

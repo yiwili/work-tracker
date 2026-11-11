@@ -649,6 +649,11 @@ export function GiteePublishModal({
                         issue_type_id: chosenTypes[id] || null,
                         existing_issue_id: shouldReplace ? matchedId : null,
                         replace_existing: shouldReplace,
+                        force_create: Boolean(
+                          !shouldReplace &&
+                            (item?.existing?.status === "created" ||
+                              item?.matched_issue),
+                        ),
                       };
                     }),
                   });

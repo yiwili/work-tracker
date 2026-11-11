@@ -349,3 +349,100 @@ def test_publish_with_dedup_and_existing_issue_updates_cloud(sync_client, monkey
     assert updated_calls[0]["issue_id"] == "5001"
     assert updated_calls[0]["duration"] == 100
     assert "工作日期：2026-10-25" in updated_calls[0]["description"]
+
+    # Explicit force_create must create a new Gitee item instead of silent skip
+    preview2 = c.post("/api/gitee/enterprise/preview", json={"date": day, "task_ids": [task_id]})
+    preview2.raise_for_status()
+    p2 = preview2.json()
+    assert p2["items"][0]["matched_issue"] is not None
+    assert p2["items"][0]["matched_issue"]["issue_id"] == 5001
+    pub_force = c.post(
+        "/api/gitee/enterprise/publish",
+        json={
+            "batch_id": p2["batch_id"],
+            "confirmed": True,
+            "targets": [
+                {
+                    "task_id": task_id,
+                    "program_id": 11,
+                    "issue_type_id": 9,
+                    "existing_issue_id": None,
+                    "replace_existing": False,
+                    "force_create": True,
+                }
+            ],
+        },
+    )
+    pub_force.raise_for_status()
+    assert pub_force.json()["created"] == 1
+    assert len(created_calls) == 1
+
+
+def test_sync_gitee_unfinished_ignores_local_ai_tasks(sync_client, monkeypatch):
+    c, engine = sync_client
+    day = "2026-10-25"
+
+    r_auto = c.post(
+        "/api/tasks",
+        json={
+            "date": day,
+            "title": "【上海工程】修复附件管理全文提取问题",
+            "details": "本地 AI 生成的工作内容",
+            "confirmed_minutes": 90,
+            "project": "上海工程技术大学档案系统",
+        },
+    )
+    r_auto.raise_for_status()
+    auto_id = r_auto.json()["id"]
+    with engine.begin() as conn:
+        from sqlalchemy import update
+        conn.execute(update(db.tasks).where(db.tasks.c.id == auto_id).values(origin="auto"))
+
+    remote_issues = [
+        {
+            "id": "6001",
+            "issue_id": "6001",
+            "ident": "SHGC-6001",
+            "title": "【上海工程】修复附件管理全文提取问题",
+            "description": "云端未完成历史事项",
+            "state": "open",
+            "program_id": 11,
+            "program": "上海工程技术大学档案系统",
+            "date": "2026-10-10",
+            "url": "https://gitee.com/ent/issue/6001",
+            "source": "gitee_enterprise",
+        }
+    ]
+    monkeypatch.setattr(ge, "unfinished_issues", lambda eid, pid=None: remote_issues)
+    monkeypatch.setattr(gitee, "fetch_unfinished", lambda cfg=None: [])
+
+    res = c.post(f"/api/reports/{day}/sync-gitee", json={}).json()
+    assert res["auto_matched"] == []
+    assert res["ambiguous"] == []
+
+    # Direct confirmation targeting an auto task must also leave it unchanged
+    confirm_res = c.post(
+        f"/api/reports/{day}/confirm-gitee-match",
+        json={
+            "date": day,
+            "decisions": [{"remote_issue_id": "6001", "action": "match", "target_task_id": auto_id}],
+        },
+    ).json()
+    assert confirm_res["applied"] == []
+
+    tasks = c.get(f"/api/reports/{day}").json()["tasks"]
+    assert tasks[0]["origin"] == "auto"
+    assert tasks[0]["title"] == "【上海工程】修复附件管理全文提取问题"
+
+    # Unfinished issues from earlier dates must not hijack preview of today's AI task
+    monkeypatch.setattr(
+        ge,
+        "_paged",
+        lambda tool, args: (
+            [{"id": 11, "name": "上海工程技术大学档案系统", "ident": "SHGC", "status": 0}] if tool == "list_programs"
+            else [{"id": 6001, "title": "【上海工程】修复附件管理全文提取问题", "state": "open", "program_id": 11, "plan_started_at": "2026-10-10T00:00:00", "issue_url": "https://gitee.com/ent/issue/6001"}] if tool == "list_enterprise_issues"
+            else []
+        ),
+    )
+    prev = c.post("/api/gitee/enterprise/preview", json={"date": day, "task_ids": [auto_id]}).json()
+    assert prev["items"][0]["matched_issue"] is None

@@ -234,7 +234,7 @@ export function Conversations({
           </span>
         </div>
         <div className="conversation-actions">
-          {!settings.auto_import_analysis && (
+          {(!settings.auto_import_analysis || pendingCount > 0) && (
             <button
               className="outline"
               disabled={busy}

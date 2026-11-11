@@ -867,12 +867,12 @@ def preview(engine,payload,cloud_client=None):
         if _extract_issue_date(r) == str(payload.date) or (rid and rid in linked_issue_ids):
             remote_day_issues.append(r)
 
-    if remote_issues and dedup.enabled and dedup.dedup_on_publish:
+    if remote_day_issues and dedup.enabled and dedup.dedup_on_publish:
         from . import matching
         try:
             match_res=matching.match_tasks_with_remote(
                 tasks,
-                remote_issues,
+                remote_day_issues,
                 threshold_high=dedup.threshold_high,
                 threshold_low=dedup.threshold_low,
                 date_weight=dedup.date_weight,
@@ -908,7 +908,7 @@ def preview(engine,payload,cloud_client=None):
                 matched = _matched_issue_payload(rem, 1.0, 'linked')
                 if matched:
                     matched_issues[tid] = matched
-            elif remote_issues or remote_day_issues:
+            else:
                 matched_issues[tid] = {
                     'issue_id': int(link['issue_id']),
                     'title': task['title'],
@@ -1068,9 +1068,10 @@ def publish(engine,payload,cloud_client=None):
                 conn.exec_driver_sql('BEGIN IMMEDIATE')
                 prior=conn.execute(select(db.gitee_links).where(db.gitee_links.c.id==identity)).mappings().first()
                 wants_replace = bool(target.existing_issue_id or getattr(target, 'replace_existing', False))
+                force_create = bool(getattr(target, 'force_create', False))
                 if prior and prior['status'] in ('pending', 'uncertain'):
                     results.append(dict(prior));conn.commit();continue
-                if prior and prior['status'] == 'created' and not wants_replace:
+                if prior and prior['status'] == 'created' and not wants_replace and not force_create:
                     results.append({**dict(prior), 'action': 'skipped_existing', 'verified': True});conn.commit();continue
                 if task_snapshot(conn,snapshot['date'],[t['id'] for t in snapshot['tasks']])!=snapshot['tasks'] or get_settings(conn).gitee_enterprise.model_dump(mode='json')!=snapshot['config'] or stable(token())!=snapshot['account']:
                     raise ValueError('提交期间工作项、凭据或设置发生变化；已创建项保留，其余未继续发送，请重新预览')

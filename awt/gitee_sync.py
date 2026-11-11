@@ -68,7 +68,8 @@ def sync_gitee_tasks(engine, day: str) -> dict[str, Any]:
 
     # 3. Process matches in transaction
     with engine.begin() as conn:
-        local_tasks = list_tasks(conn, day)
+        # Gitee 中的未完成项不影响本地 AI 生成的项（origin == 'auto'）。
+        local_tasks = [t for t in list_tasks(conn, day) if t.get("origin") != "auto"]
         match_result = matching.match_tasks_with_remote(
             local_tasks,
             remote_issues,
@@ -168,6 +169,8 @@ def apply_user_decisions(engine, day: str, decisions: list[dict[str, Any]]) -> d
 
             if action == "match" and target_id and target_id in local_tasks:
                 local_t = local_tasks[target_id]
+                if local_t.get("origin") == "auto":
+                    continue
                 merged = matching.merge_local_into_remote(local_t, remote_i)
 
                 conn.execute(

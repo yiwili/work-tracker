@@ -277,6 +277,22 @@ export type Settings = {
   gitee_dedup?: GiteeDedupConfig;
 };
 
+export type PendingMatchedTask = {
+  id: string;
+  title: string;
+  project: string;
+  confirmed_minutes: number;
+  suggested_minutes?: number | null;
+  time_source: string;
+  edited: boolean;
+  status: string;
+  gitee_issue_id: string;
+  gitee_url: string;
+  similarity: number;
+  evidence_overlap: number;
+  match_reason: string;
+};
+
 export type PendingTask = {
   fingerprint: string;
   title: string;
@@ -288,6 +304,7 @@ export type PendingTask = {
   evidence_level: string;
   evidence_ids: string[];
   previously_deleted?: boolean;
+  matched_task?: PendingMatchedTask | null;
 };
 
 export type DailyCollectionCount = {

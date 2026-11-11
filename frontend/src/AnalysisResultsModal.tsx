@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AlertCircle,
   Check,
   FolderInput,
+  GitBranch,
   LoaderCircle,
   Sparkles,
   X,
@@ -10,7 +11,27 @@ import {
 import type { PendingTask, SimilarityCheckResponse } from "./types";
 import { api } from "./api";
 
-type Row = PendingTask & { selected: boolean };
+type Row = PendingTask & {
+  selected: boolean;
+  action: "replace" | "create";
+};
+
+function buildRows(pending: PendingTask[]): Row[] {
+  const claimedTargets = new Set<string>();
+  return pending.map((item) => {
+    const matchId = item.matched_task?.id || "";
+    const canDefaultReplace = Boolean(matchId && !claimedTargets.has(matchId));
+    if (canDefaultReplace && matchId) {
+      claimedTargets.add(matchId);
+    }
+    return {
+      ...item,
+      // 历史曾删除任务的候选默认不勾选，由用户逐条确认是否恢复。
+      selected: item.previously_deleted ? false : true,
+      action: canDefaultReplace ? "replace" : "create",
+    };
+  });
+}
 
 export function AnalysisResultsModal({
   day,
@@ -27,13 +48,10 @@ export function AnalysisResultsModal({
   onClose: () => void;
   onImported: (similarityCheck?: SimilarityCheckResponse) => Promise<void> | void;
 }) {
-  const [rows, setRows] = useState<Row[]>(() =>
-    pending.map((item) => ({
-      ...item,
-      // 历史曾删除任务的候选默认不勾选，由用户逐条确认是否恢复。
-      selected: item.previously_deleted ? false : true,
-    })),
-  );
+  const [rows, setRows] = useState<Row[]>(() => buildRows(pending));
+  useEffect(() => {
+    setRows(buildRows(pending));
+  }, [pending]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -53,6 +71,7 @@ export function AnalysisResultsModal({
     try {
       const result = await api<{
         created: number;
+        replaced?: number;
         archived: number;
         remaining: number;
         imported: string[];
@@ -66,15 +85,29 @@ export function AnalysisResultsModal({
           details: row.details,
           project: row.project,
           category: "任务",
+          action: row.matched_task ? row.action : "create",
+          target_task_id:
+            row.matched_task && row.action === "replace"
+              ? row.matched_task.id
+              : undefined,
         })),
       });
       const imported = new Set(result.imported || []);
       setRows(rows.filter((row) => !imported.has(row.fingerprint)));
       await onImported(result.similarity_check);
-      const pieces = [`已导入 ${result.created} 项工作`];
+      const replacedCount = result.replaced || 0;
+      const newCount = Math.max(0, result.created - replacedCount);
+      const pieces: string[] = [];
+      if (replacedCount && newCount) {
+        pieces.push(`已替换更新 ${replacedCount} 项，新建 ${newCount} 项工作`);
+      } else if (replacedCount) {
+        pieces.push(`已替换更新 ${replacedCount} 项已有工作`);
+      } else {
+        pieces.push(`已导入 ${result.created} 项工作`);
+      }
       if (result.remaining) pieces.push(`还剩 ${result.remaining} 条候选`);
       if (result.archived)
-        pieces.push(`替换 ${result.archived} 项未审核草稿`);
+        pieces.push(`清理 ${result.archived} 项未审核草稿`);
       if (result.warnings.length) pieces.push(...result.warnings);
       setMessage(pieces.join("；") + "。");
     } catch (e) {
@@ -169,6 +202,38 @@ export function AnalysisResultsModal({
                       <span className="previously-deleted-badge">
                         历史曾删除
                       </span>
+                    )}
+                    {row.matched_task && (
+                      <div className="analysis-matched-banner">
+                        <div className="analysis-matched-info">
+                          <GitBranch size={14} />
+                          <span>
+                            已映射至已有 AI 项：「{row.matched_task.title}」
+                            {row.matched_task.confirmed_minutes > 0 &&
+                              ` · 已记 ${Number((row.matched_task.confirmed_minutes / 60).toFixed(2))}h`}
+                            {row.matched_task.gitee_issue_id &&
+                              ` · Gitee #${row.matched_task.gitee_issue_id}`}
+                            {row.matched_task.match_reason &&
+                              `（${row.matched_task.match_reason}）`}
+                          </span>
+                        </div>
+                        <select
+                          className="analysis-match-select"
+                          aria-label={"处理方式 " + row.title}
+                          value={row.action}
+                          disabled={saving}
+                          onChange={(e) =>
+                            change(row.fingerprint, {
+                              action: e.target.value as "replace" | "create",
+                            })
+                          }
+                        >
+                          <option value="replace">
+                            替换上次 AI 项（保留工时与 Gitee 关联）
+                          </option>
+                          <option value="create">保留原项并新建一条</option>
+                        </select>
+                      </div>
                     )}
                     <label>
                       工作项标题
