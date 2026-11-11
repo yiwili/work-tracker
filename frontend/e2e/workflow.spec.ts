@@ -901,3 +901,114 @@ test("analysis log updates during a pending request and isolates dates", async (
   await page.getByLabel("工作日期").fill("2026-10-25");
   await expect(page.getByLabel("AI 思考与输出")).toHaveCount(0);
 });
+
+test("clear all AI tasks excludes conversations and session controls can exclude and restore", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/?date=2026-10-25");
+  const aiTaskBtn = page.getByRole("button", {
+    name: /^#\d+\s+(?:【[^】]+】)?优化档案检索筛选条件$/,
+  });
+  await expect(aiTaskBtn).toBeVisible();
+
+  // Add a manual task first to verify clearing all AI tasks preserves manual items.
+  await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByLabel("任务标题").fill("整理发布清单");
+  await dialog.getByLabel("完成工时小时 1").fill("2");
+  await dialog.getByRole("button", { name: "保存记录", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  const manualTaskBtn = page.getByRole("button", {
+    name: /^#\d+\s+(?:【[^】]+】)?整理发布清单$/,
+  });
+  await expect(manualTaskBtn).toBeVisible();
+
+  const clearBtn = page.getByRole("button", { name: /^清空全部 AI 项/ });
+  await expect(clearBtn).toBeEnabled();
+  await expect(clearBtn).toHaveText("清空全部 AI 项（1）");
+
+  // Dismissing confirmation leaves the AI task intact.
+  page.once("dialog", (d) => d.dismiss());
+  await clearBtn.click();
+  await expect(aiTaskBtn).toBeVisible();
+
+  // Accepting confirmation clears AI tasks, keeps manual items, and excludes linked turns.
+  page.once("dialog", (d) => d.accept());
+  await clearBtn.click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已清空 1 项 AI 工作项" }),
+  ).toBeVisible();
+  await expect(aiTaskBtn).toHaveCount(0);
+  await expect(manualTaskBtn).toBeVisible();
+  await expect(clearBtn).toBeDisabled();
+  await expect(clearBtn).toHaveText("清空全部 AI 项");
+
+  const banner = page.locator(".exclusion-banner");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("已采集对话已全部排除");
+  const analyzeBtn = page.getByRole("button", {
+    name: "AI 分析全天对话",
+    exact: true,
+  });
+  await expect(analyzeBtn).toBeDisabled();
+
+  // Inspect excluded state in the session list and check mobile layout without overflow.
+  const sessionDetails = page.locator("details.session-list");
+  await sessionDetails.locator("summary").click();
+  const sessionCard = sessionDetails
+    .locator("article")
+    .filter({ hasText: "browser-test-session-2" });
+  await expect(sessionCard).toBeVisible();
+  await expect(sessionCard).toContainText("已排除 · 不参与下次 AI 分析");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
+  // Restore session, manually exclude it, and restore again before re-analyzing.
+  await sessionCard
+    .getByRole("button", { name: "恢复参与分析", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已恢复会话" }),
+  ).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(analyzeBtn).toBeEnabled();
+
+  await sessionCard
+    .getByRole("button", { name: "不参与下次 AI 分析", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已排除会话" }),
+  ).toBeVisible();
+  await expect(banner).toBeVisible();
+  await expect(analyzeBtn).toBeDisabled();
+
+  await sessionCard
+    .getByRole("button", { name: "恢复参与分析", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "已恢复会话" }),
+  ).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(analyzeBtn).toBeEnabled();
+
+  // Re-analyzing after restore regenerates the AI task cleanly without triggering deleted-recovery.
+  await analyzeBtn.click();
+  await expect(
+    page.getByRole("button", {
+      name: /^#\d+\s+(?:【[^】]+】)?修复订单查询接口超时$/,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "历史删除工作项确认" }),
+  ).toHaveCount(0);
+  await expect(manualTaskBtn).toBeVisible();
+  await expect(clearBtn).toHaveText("清空全部 AI 项（1）");
+  expect(errors).toEqual([]);
+});

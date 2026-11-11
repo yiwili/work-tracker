@@ -20,6 +20,7 @@ export type Task = {
   status: string;
   origin: string;
   is_todo?: boolean;
+  gitee_linked?: boolean;
   confidence: string;
   evidence_level: string;
   confirmed_minutes: number;
@@ -108,6 +109,8 @@ export type Report = {
   time_allocation: null | AllocationSnapshot;
   conversations: ConversationOverview;
   legacy_count: number;
+  clearable_ai_count?: number;
+  protected_ai_count?: number;
   merge_suggestions: {
     ids: string[];
     indices?: number[];
@@ -351,7 +354,12 @@ export type ConversationOverview = {
   end_date?: string;
   daily_counts?: DailyCollectionCount[];
   session_count: number;
+  total_session_count?: number;
+  excluded_session_count?: number;
+  partial_excluded_session_count?: number;
+  excluded_event_count?: number;
   user_messages: number;
+  total_user_messages?: number;
   assistant_messages: number;
   event_count: number;
   selected_sources: string[];
@@ -361,9 +369,12 @@ export type ConversationOverview = {
     selected: boolean;
     detected?: boolean;
     sessions: number;
+    total_sessions?: number;
+    excluded_sessions?: number;
     user_messages: number;
     assistant_messages: number;
     events: number;
+    total_events?: number;
   }[];
   sessions: {
     id: string;
@@ -374,6 +385,13 @@ export type ConversationOverview = {
     user_messages: number;
     assistant_messages: number;
     events: number;
+    active_user_messages?: number;
+    active_assistant_messages?: number;
+    active_events?: number;
+    excluded_user_messages?: number;
+    excluded_events?: number;
+    session_excluded?: boolean;
+    exclusion_state?: "none" | "partial" | "full";
     preview: string;
     timing: Timing;
   }[];

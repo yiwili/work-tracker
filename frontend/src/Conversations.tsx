@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Activity,
   ArrowUpRight,
+  Ban,
   Check,
   LoaderCircle,
   Plus,
@@ -65,6 +66,8 @@ export function Conversations({
   onSources,
   onView,
   onViewPending,
+  onExcludeSession,
+  onRestoreSession,
 }: {
   overview: ConversationOverview;
   settings: Settings;
@@ -85,9 +88,12 @@ export function Conversations({
   onSources: (sources: string[]) => void;
   onView: (source: string, session: string) => void;
   onViewPending: () => void;
+  onExcludeSession?: (source: string, sessionId: string) => Promise<void> | void;
+  onRestoreSession?: (source: string, sessionId: string) => Promise<void> | void;
 }) {
   const isBound = Boolean(binding?.active);
   const [sourceTab, setSourceTab] = useState<"ready" | "all">("ready");
+  const [sessionBusyKey, setSessionBusyKey] = useState<string | null>(null);
   const effectiveDay = currentDay || overview.date || new Date().toISOString().slice(0, 10);
   const [showMultiDay, setShowMultiDay] = useState(() => Boolean(binding?.active));
   const [startDate, setStartDate] = useState(() => {
@@ -218,10 +224,44 @@ export function Conversations({
 
   // 只有 Git 提交时 AI 分析一定是灰的：后端也要求当天存在对话才归纳。
   // 不解释一句，用户会以为按钮坏了或者自己点漏了。
-  const onlyGit = messages === 0 && gitEvents > 0;
+  const excludedSessionCount = activeOverview.excluded_session_count ?? 0;
+  const partialExcludedSessionCount =
+    activeOverview.partial_excluded_session_count ?? 0;
+  const excludedEventCount = activeOverview.excluded_event_count ?? 0;
+  const allChatsExcluded =
+    messages === 0 &&
+    (excludedSessionCount > 0 || (activeOverview.total_user_messages ?? 0) > 0);
+  const onlyGit = messages === 0 && gitEvents > 0 && !allChatsExcluded;
   const noConversationSource = !settings.analysis_sources.some(
     (source) => source !== "git",
   );
+
+  const visibleSessions = activeOverview.sessions.filter((s) =>
+    settings.analysis_sources.includes(s.source),
+  );
+  const fullExcludedVisible = visibleSessions.filter(
+    (s) =>
+      (s.exclusion_state || (s.session_excluded ? "full" : "none")) === "full",
+  ).length;
+  const partialExcludedVisible = visibleSessions.filter(
+    (s) => s.exclusion_state === "partial",
+  ).length;
+  const activeVisible = visibleSessions.length - fullExcludedVisible;
+
+  const runSessionAction = async (
+    sourceName: string,
+    sessionId: string,
+    fn?: (source: string, id: string) => Promise<void> | void,
+  ) => {
+    if (!fn) return;
+    const key = `${sourceName}:${sessionId}`;
+    setSessionBusyKey(key);
+    try {
+      await fn(sourceName, sessionId);
+    } finally {
+      setSessionBusyKey((prev) => (prev === key ? null : prev));
+    }
+  };
 
   const dailyCounts = activeOverview.daily_counts || [];
   const emptyDaysCount = dailyCounts.filter(
@@ -236,7 +276,7 @@ export function Conversations({
 
   const handleSelectWithData = () => {
     const withData = detectedAgents
-      .filter((s) => s.sessions > 0)
+      .filter((s) => (s.total_sessions ?? s.sessions) > 0)
       .map((s) => s.source);
     const gitPart = isGitChecked && gitEvents > 0 ? ["git"] : [];
     onSources([...gitPart, ...withData]);
@@ -311,11 +351,13 @@ export function Conversations({
                   : onAnalyze()
               }
               title={
-                messages === 0
-                  ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
-                  : isBound && binding
-                    ? `当前已绑定 ${binding.start_date} ~ ${binding.end_date}，继续在绑定区间重新生成`
-                    : undefined
+                allChatsExcluded
+                  ? "当前所选对话均已排除（不参与下次 AI 分析），请在下方会话列表中恢复"
+                  : messages === 0
+                    ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
+                    : isBound && binding
+                      ? `当前已绑定 ${binding.start_date} ~ ${binding.end_date}，继续在绑定区间重新生成`
+                      : undefined
               }
             >
               {analyzing || overview.running ? (
@@ -583,9 +625,11 @@ export function Conversations({
                   })
                 }
                 title={
-                  !autoCollectBeforeAnalyze && messages === 0
-                    ? "跨天区间暂无可分析对话，请先采集或勾选自动补采"
-                    : undefined
+                  !autoCollectBeforeAnalyze && allChatsExcluded
+                    ? "跨天区间所选对话均已排除（不参与下次 AI 分析），请在下方会话列表中恢复"
+                    : !autoCollectBeforeAnalyze && messages === 0
+                      ? "跨天区间暂无可分析对话，请先采集或勾选自动补采"
+                      : undefined
                 }
               >
                 {analyzing || overview.running ? (
@@ -613,6 +657,21 @@ export function Conversations({
         <p className="muted">
           {`仅有 ${gitEvents} 条 Git 提交。AI 归纳还需要对话记录，请在设置中配置日志目录或手工添加事项。`}
         </p>
+      )}
+      {(excludedSessionCount > 0 || excludedEventCount > 0) && (
+        <div className="exclusion-banner" role="status">
+          <Ban size={15} />
+          <div>
+            {allChatsExcluded
+              ? `当前所选日期的已采集对话已全部排除（涉及 ${excludedSessionCount} 个会话，跳过 ${excludedEventCount} 条记录），不会参与下次 AI 分析。`
+              : excludedSessionCount > 0 && partialExcludedSessionCount > 0
+                ? `已有 ${excludedSessionCount} 个完整会话及 ${partialExcludedSessionCount} 个会话的部分历史轮次不参与下次 AI 分析（共跳过 ${excludedEventCount} 条记录）。`
+                : excludedSessionCount > 0
+                  ? `已有 ${excludedSessionCount} 个会话不参与下次 AI 分析（跳过 ${excludedEventCount} 条记录）。`
+                  : `已有 ${partialExcludedSessionCount} 个会话的部分历史轮次不参与下次 AI 分析（跳过 ${excludedEventCount} 条记录）。`}
+            {" "}后续在同一会话新增提问会自动纳入分析，也可在下方会话列表中随时恢复参与分析。
+          </div>
+        </div>
       )}
 
       {/* 顶部控制栏：苹果风格分段切换与快捷操作 */}
@@ -670,6 +729,7 @@ export function Conversations({
           const isDetected = s.detected ?? false;
           const isChecked = settings.analysis_sources.includes(s.source);
           const count = s.sessions;
+          const excludedCount = s.excluded_sessions ?? 0;
 
           if (!isDetected) {
             return (
@@ -711,12 +771,19 @@ export function Conversations({
                 <SourceIcon source={s.source} size={18} />
               </span>
               <span className="agent-card-title">{names[s.source] || s.source}</span>
-              <span className={`count-tag ${count > 0 ? "has-data" : ""}`}>
+              <span
+                className={`count-tag ${
+                  count > 0 ? "has-data" : excludedCount > 0 ? "excluded" : ""
+                }`}
+              >
                 {count > 0 ? (
                   <>
                     <span className="live-dot" />
                     {count} 会话
+                    {excludedCount > 0 ? ` · ${excludedCount} 排除` : ""}
                   </>
+                ) : excludedCount > 0 ? (
+                  `${excludedCount} 已排除`
                 ) : (
                   "0"
                 )}
@@ -792,6 +859,11 @@ export function Conversations({
           <strong>{activeOverview.session_count} 个会话</strong> ·
           {activeOverview.user_messages} 问 · {activeOverview.assistant_messages}{" "}
           答
+          {(excludedSessionCount > 0 || excludedEventCount > 0) && (
+            <span className="excluded-metrics-note">
+              （另已排除 {excludedEventCount} 条记录）
+            </span>
+          )}
         </span>
         <span className="conversation-timing">
           跨度 {activeOverview.timing.session_span_minutes}m
@@ -847,11 +919,38 @@ export function Conversations({
         </div>
       )}
       <details className="session-list">
-        <summary>查看本次 {activeOverview.session_count} 个会话</summary>
-        {activeOverview.sessions
-          .filter((s) => settings.analysis_sources.includes(s.source))
-          .map((s) => (
-            <article key={s.source + s.id}>
+        <summary>
+          {fullExcludedVisible > 0 || partialExcludedVisible > 0
+            ? `查看会话列表：${activeVisible} 个参与分析` +
+              (fullExcludedVisible > 0 ? ` · ${fullExcludedVisible} 个整段排除` : "") +
+              (partialExcludedVisible > 0 ? ` · ${partialExcludedVisible} 个部分排除` : "") +
+              `（共 ${visibleSessions.length} 个）`
+            : `查看本次 ${activeOverview.session_count} 个会话`}
+        </summary>
+        {visibleSessions.map((s) => {
+          const exclState =
+            s.exclusion_state || (s.session_excluded ? "full" : "none");
+          const isFullExcluded = exclState === "full";
+          const isPartialExcluded = exclState === "partial";
+          const actionBusy =
+            busy ||
+            overview.running ||
+            analyzing ||
+            sessionBusyKey === `${s.source}:${s.id}`;
+          const activeUserMsgs = s.active_user_messages ?? s.user_messages;
+          const activeAssistantMsgs =
+            s.active_assistant_messages ?? s.assistant_messages;
+          return (
+            <article
+              key={s.source + s.id}
+              className={
+                isFullExcluded
+                  ? "session-card-excluded"
+                  : isPartialExcluded
+                    ? "session-card-partial"
+                    : undefined
+              }
+            >
               <div>
                 <strong className="source-check-name">
                   <SourceIcon source={s.source} size={15} />
@@ -879,12 +978,105 @@ export function Conversations({
                   })}
                 </span>
                 <span>
-                  {s.user_messages} 问 / {s.assistant_messages} 答
+                  {isPartialExcluded
+                    ? `参与 ${activeUserMsgs} 问 / ${activeAssistantMsgs} 答（共 ${s.user_messages} 问 / ${s.assistant_messages} 答）`
+                    : `${s.user_messages} 问 / ${s.assistant_messages} 答`}
                 </span>
-                <button onClick={() => onView(s.source, s.id)}>
-                  查看对话
-                  <ArrowUpRight size={13} />
-                </button>
+                {isFullExcluded && (
+                  <span className="tag session-excluded-tag">
+                    已排除 · 不参与下次 AI 分析
+                  </span>
+                )}
+                {isPartialExcluded && (
+                  <span className="tag session-partial-tag">
+                    部分历史轮次已排除（{s.excluded_events ?? 0} 条）
+                  </span>
+                )}
+                <div className="session-card-actions">
+                  {exclState === "none" && onExcludeSession && (
+                    <button
+                      type="button"
+                      className="session-exclude-btn"
+                      disabled={actionBusy}
+                      onClick={() =>
+                        void runSessionAction(
+                          s.source,
+                          s.id,
+                          onExcludeSession,
+                        )
+                      }
+                      title="整段排除此会话，不参与后续 AI 分析；可随时在此恢复"
+                    >
+                      <Ban size={13} />
+                      不参与下次 AI 分析
+                    </button>
+                  )}
+                  {isPartialExcluded && (
+                    <>
+                      {onRestoreSession && (
+                        <button
+                          type="button"
+                          className="session-restore-btn"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            void runSessionAction(
+                              s.source,
+                              s.id,
+                              onRestoreSession,
+                            )
+                          }
+                          title="清除该会话中已排除的历史轮次，恢复全部轮次参与 AI 分析"
+                        >
+                          <RotateCcw size={13} />
+                          恢复全部轮次
+                        </button>
+                      )}
+                      {onExcludeSession && (
+                        <button
+                          type="button"
+                          className="session-exclude-btn"
+                          disabled={actionBusy}
+                          onClick={() =>
+                            void runSessionAction(
+                              s.source,
+                              s.id,
+                              onExcludeSession,
+                            )
+                          }
+                          title="将整个会话设为不参与下次 AI 分析"
+                        >
+                          <Ban size={13} />
+                          排除整段会话
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {isFullExcluded && onRestoreSession && (
+                    <button
+                      type="button"
+                      className="session-restore-btn"
+                      disabled={actionBusy}
+                      onClick={() =>
+                        void runSessionAction(
+                          s.source,
+                          s.id,
+                          onRestoreSession,
+                        )
+                      }
+                      title="恢复此会话及其已排除轮次，重新参与后续 AI 分析"
+                    >
+                      <RotateCcw size={13} />
+                      恢复参与分析
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onView(s.source, s.id)}
+                  >
+                    查看对话
+                    <ArrowUpRight size={13} />
+                  </button>
+                </div>
               </div>
               <p>{s.preview || "该会话当天没有用户请求消息"}</p>
               <p className="session-timing">
@@ -896,7 +1088,8 @@ export function Conversations({
                 {s.projects.join(" / ")} · {s.id}
               </small>
             </article>
-          ))}
+          );
+        })}
       </details>
     </section>
   );

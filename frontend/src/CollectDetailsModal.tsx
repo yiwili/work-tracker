@@ -294,6 +294,12 @@ export function CollectDetailsModal({
                         答
                       </span>
                       <span>{session.events} 条活动</span>
+                      {session.exclusion_state === "full" && (
+                        <span className="tag session-excluded-tag">已排除分析</span>
+                      )}
+                      {session.exclusion_state === "partial" && (
+                        <span className="tag session-partial-tag">部分已排除</span>
+                      )}
                     </div>
                     <p>{session.preview || "该会话当天没有用户请求消息"}</p>
                     <small>

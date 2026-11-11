@@ -494,7 +494,11 @@ function App() {
         ? `本次模型用量${a.usage.estimated ? "约 " : " "}${a.usage.total_tokens.toLocaleString("zh-CN")} tokens（输入 ${a.usage.prompt_tokens.toLocaleString("zh-CN")} / 输出 ${a.usage.completion_tokens.toLocaleString("zh-CN")}）。`
         : "";
       if (!a.created && !a.pending && !a.archived) {
-        setNotice(`AI 分析已完成，未发现可归纳的工作项。${usage}`);
+        setNotice(
+          a.warnings?.length
+            ? `${a.warnings.join("；")}${usage ? ` ${usage}` : ""}`
+            : `AI 分析已完成，未发现可归纳的工作项。${usage}`,
+        );
         return;
       }
       if (a.auto_imported && a.similarity_check?.has_duplicates && a.similarity_check.pairs.length > 0) {
@@ -714,6 +718,89 @@ function App() {
         await api("/tasks/" + t.id, "DELETE");
         await refresh();
       });
+  };
+  const clearAllAiTasks = () => {
+    if (!report) return;
+    const clearableCount = report.clearable_ai_count ?? 0;
+    const pendingCount = report.conversations.analysis?.pending_tasks?.length ?? 0;
+    const protectedCount = report.protected_ai_count ?? 0;
+    if (clearableCount === 0 && pendingCount === 0) return;
+    const parts: string[] = [];
+    if (clearableCount > 0) parts.push(`${clearableCount} 项 AI 生成工作项`);
+    if (pendingCount > 0) parts.push(`${pendingCount} 条待导入分析候选`);
+    const confirmLines = [
+      `确定清空当前${parts.join("和")}？`,
+      "对应对话轮次将标记为「不参与下次 AI 分析」，后续可随时在「对话与来源」会话列表中恢复。",
+      "人工补录、手动选入的 Git 提交与已推送/关联 Gitee 的工作项会保留。",
+    ];
+    if (protectedCount > 0) {
+      confirmLines.push(`其中 ${protectedCount} 项受保护 AI 工作项（已关联 Gitee 或手动选入的 Git 提交）不会被清空。`);
+    }
+    if (!window.confirm(confirmLines.join("\n"))) return;
+    const jobDay = day;
+    setToast(null);
+    void run("正在清空 AI 项", async () => {
+      const res = await api<{
+        cleared_tasks: number;
+        cleared_pending: number;
+        excluded_events: number;
+        newly_excluded_events: number;
+        retained_protected_ai: number;
+        date: string;
+      }>(`/reports/${jobDay}/clear-ai`, "POST", {});
+      setAnalysisView((prev) => (prev && prev.day === res.date ? null : prev));
+      setRecoveryModal((prev) => (prev && prev.day === res.date ? null : prev));
+      await refresh(jobDay);
+      const summaryParts: string[] = [];
+      if (res.cleared_tasks > 0) summaryParts.push(`已清空 ${res.cleared_tasks} 项 AI 工作项`);
+      if (res.cleared_pending > 0) summaryParts.push(`已清除 ${res.cleared_pending} 条待导入候选`);
+      if (res.excluded_events > 0) summaryParts.push(`${res.excluded_events} 条关联对话记录已排除（不参与下次 AI 分析）`);
+      if (res.retained_protected_ai > 0) summaryParts.push(`保留 ${res.retained_protected_ai} 项受保护工作项`);
+      setNotice(
+        summaryParts.length ? summaryParts.join("，") + "。" : "未发现可清空的 AI 工作项或候选。",
+      );
+    });
+  };
+  const excludeSession = async (sourceName: string, sessionId: string) => {
+    const jobDay = day;
+    const shortId = sessionId.length > 20 ? sessionId.slice(0, 20) + "…" : sessionId;
+    setError("");
+    setNotice("");
+    try {
+      await api("/conversations/exclude-session", "POST", {
+        source: sourceName,
+        session_id: sessionId,
+        reason: "manual_session_exclude",
+      });
+      await refresh(jobDay);
+      setNotice(`已排除会话 ${shortId}，后续 AI 分析将不再纳入该会话。`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const restoreSession = async (sourceName: string, sessionId: string) => {
+    const jobDay = day;
+    const shortId = sessionId.length > 20 ? sessionId.slice(0, 20) + "…" : sessionId;
+    setError("");
+    setNotice("");
+    try {
+      const res = await api<{ removed_rules: number }>(
+        "/conversations/restore-session",
+        "POST",
+        {
+          source: sourceName,
+          session_id: sessionId,
+        },
+      );
+      await refresh(jobDay);
+      setNotice(
+        res.removed_rules > 0
+          ? `已恢复会话 ${shortId} 参与后续 AI 分析（已解除 ${res.removed_rules} 条排除规则）。`
+          : `会话 ${shortId} 已处于可分析状态。`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
   const filtered = events.filter(
     (e) =>
@@ -1047,7 +1134,7 @@ function App() {
                   settings={settings}
                   currentDay={day}
                   binding={report.binding}
-                  busy={collecting || analyzing}
+                  busy={collecting || analyzing || allocating || Boolean(busy)}
                   collecting={collecting}
                   analyzing={analyzing}
                   pendingCount={
@@ -1065,6 +1152,8 @@ function App() {
                   onMultiDayChange={setMultiDayState}
                   onSettings={() => setPage("settings")}
                   onViewPending={openAnalysisResults}
+                  onExcludeSession={excludeSession}
+                  onRestoreSession={restoreSession}
                   onSources={async (values) => {
                     const prev = settings;
                     const next: Settings = {
@@ -1172,6 +1261,37 @@ function App() {
                         合并 {selected.length} 项
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="outline danger clear-ai-btn"
+                      disabled={
+                        !!busy ||
+                        collecting ||
+                        analyzing ||
+                        allocating ||
+                        Boolean(report.conversations.running) ||
+                        Boolean(report.allocation_running) ||
+                        ((report.clearable_ai_count ?? 0) === 0 &&
+                          (report.conversations.analysis?.pending_tasks?.length ?? 0) === 0)
+                      }
+                      onClick={clearAllAiTasks}
+                      title={
+                        (report.clearable_ai_count ?? 0) === 0 &&
+                        (report.conversations.analysis?.pending_tasks?.length ?? 0) === 0
+                          ? (report.protected_ai_count ?? 0) > 0
+                            ? "当前仅剩已关联 Gitee 或手动选入的 Git 受保护工作项，无可清空的 AI 项"
+                            : "当前没有可清空的 AI 工作项或待导入候选"
+                          : "清空 AI 生成的工作项与待导入候选，并将其关联对话标记为不参与下次 AI 分析（保留人工补录与已关联 Gitee 工作项）"
+                      }
+                    >
+                      <Trash2 size={15} />
+                      清空全部 AI 项
+                      {(report.clearable_ai_count ?? 0) > 0
+                        ? `（${report.clearable_ai_count}）`
+                        : (report.conversations.analysis?.pending_tasks?.length ?? 0) > 0
+                          ? `（含 ${report.conversations.analysis?.pending_tasks?.length} 条候选）`
+                          : ""}
+                    </button>
                     <button
                       className="primary"
                       disabled={!!busy || !report.tasks.length || checkingSimilarity}
