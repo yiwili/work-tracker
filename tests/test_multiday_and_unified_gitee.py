@@ -241,3 +241,171 @@ def test_multiday_collect_and_conversations_overview_and_from_events(test_client
     adopt_res.raise_for_status()
     assert adopt_res.json()['created'] == 2
 
+
+def test_multiday_binding_persistence_unified_view_rerun_and_unbind(test_client, monkeypatch):
+    client, engine = test_client
+    db.migrate(engine)  # Verify migration idempotency
+
+    # Create manual entries on 2026-11-04 and 2026-11-05, plus an unrelated day 2026-11-03
+    m_d1 = client.post('/api/tasks', json={
+        'date': '2026-11-04',
+        'title': '【项目A】第一天人工补录事项',
+        'details': 'D1 manual',
+        'project': 'archive',
+        'category': '任务',
+        'status': 'delivered',
+        'is_todo': False,
+        'confirmed_minutes': 60,
+    }).json()['id']
+    m_d2 = client.post('/api/tasks', json={
+        'date': '2026-11-05',
+        'title': '【项目A】第二天人工补录事项',
+        'details': 'D2 manual',
+        'project': 'archive',
+        'category': '任务',
+        'status': 'delivered',
+        'is_todo': False,
+        'confirmed_minutes': 60,
+    }).json()['id']
+
+    # Create an earlier todo and complete it on today (2026-11-05)
+    todo_id = client.post('/api/tasks', json={
+        'date': '2026-11-02',
+        'title': '【项目A】遗留待办收尾',
+        'details': 'todo details',
+        'project': 'archive',
+        'category': '任务',
+        'status': 'requested',
+        'is_todo': True,
+        'confirmed_minutes': 0,
+    }).json()['id']
+    client.patch(f'/api/tasks/{todo_id}', json={'status': 'delivered', 'date': '2026-11-05'}).raise_for_status()
+
+    # Create uncompleted todo on an earlier day (must stay in /api/todos, not leak into 11-04..11-05 report)
+    pending_todo_id = client.post('/api/tasks', json={
+        'date': '2026-11-02',
+        'title': '【项目A】未完成待办',
+        'details': '',
+        'project': 'archive',
+        'category': '任务',
+        'status': 'requested',
+        'is_todo': True,
+        'confirmed_minutes': 0,
+    }).json()['id']
+    todos_list = client.get('/api/todos').json()
+    todo_ids_in_dock = {t['id'] for t in todos_list}
+    assert pending_todo_id in todo_ids_in_dock
+    assert m_d1 not in todo_ids_in_dock
+    assert m_d2 not in todo_ids_in_dock
+    assert todo_id not in todo_ids_in_dock
+
+    with engine.begin() as conn:
+        conn.execute(insert(db.events).values(
+            id='bind-e1', source='codex', session_id='sb1',
+            occurred_at='2026-11-04T09:00:00+08:00',
+            kind='user_prompt', summary='Day1 核心功能开发',
+            cwd='', project='archive', raw_ref='r1', metadata={}
+        ))
+        conn.execute(insert(db.events).values(
+            id='bind-e2', source='codex', session_id='sb2',
+            occurred_at='2026-11-05T10:00:00+08:00',
+            kind='user_prompt', summary='Day2 联调与验证',
+            cwd='', project='archive', raw_ref='r2', metadata={}
+        ))
+
+    seen_payloads = []
+    call_round = {'n': 0}
+
+    def fake_complete(settings, system, text, **kwargs):
+        payload = json.loads(text)
+        if 'required_refs' in payload:
+            return json.dumps({'work_refs': payload['required_refs'], 'excluded': [], 'uncertain_refs': []})
+        seen_payloads.append(payload)
+        call_round['n'] += 1
+        suffix = f"（第{call_round['n']}轮）"
+        return json.dumps({
+            'summary': '两日协同工作分析结果',
+            'tasks': [
+                {'title': f'完成跨天核心模块联调{suffix}', 'details': '涵盖两天记录', 'project': 'archive', 'refs': ['e1', 'e2']},
+            ],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(model_provider, 'complete', fake_complete)
+
+    # 1. Analyze 2026-11-04 ~ 2026-11-05 from 2026-11-05 -> automatically persists binding
+    res1 = client.post('/api/analyze?date=2026-11-05&start_date=2026-11-04&end_date=2026-11-05&target_minutes=960', json={})
+    res1.raise_for_status()
+    data1 = res1.json()
+    assert data1['binding']['active'] is True
+    assert data1['binding']['start_date'] == '2026-11-04'
+    assert data1['binding']['end_date'] == '2026-11-05'
+    assert data1['binding']['anchor_date'] == '2026-11-05'
+
+    # 2. Switching to either bound day shows identical combined tasks (D1 manual, D2 manual, completed todo, AI task)
+    rep_d1 = client.get('/api/reports/2026-11-04').json()
+    rep_d2 = client.get('/api/reports/2026-11-05').json()
+    assert rep_d1['target_minutes'] == 960
+    assert rep_d2['target_minutes'] == 960
+    assert rep_d1['binding']['id'] == rep_d2['binding']['id']
+    assert [t['id'] for t in rep_d1['tasks']] == [t['id'] for t in rep_d2['tasks']]
+    ids_d1 = {t['id'] for t in rep_d1['tasks']}
+    assert m_d1 in ids_d1
+    assert m_d2 in ids_d1
+    assert todo_id in ids_d1
+    assert len(rep_d1['tasks']) == 4
+
+    bind_status = client.get('/api/multiday/binding?date=2026-11-04').json()
+    assert bind_status['bound'] is True
+
+    # 3. Re-running AI analysis on Day 1 without explicit range uses the bound 2-day range
+    res2 = client.post('/api/analyze?date=2026-11-04', json={})
+    res2.raise_for_status()
+    assert len(seen_payloads) == 2
+    assert '2026-11-04 至 2026-11-05' in seen_payloads[-1]['date']
+    rep_d1_after = client.get('/api/reports/2026-11-04').json()
+    rep_d2_after = client.get('/api/reports/2026-11-05').json()
+    assert [t['id'] for t in rep_d1_after['tasks']] == [t['id'] for t in rep_d2_after['tasks']]
+    assert any('第2轮' in t['title'] for t in rep_d1_after['tasks'])
+    assert m_d1 in {t['id'] for t in rep_d1_after['tasks']}
+    assert m_d2 in {t['id'] for t in rep_d1_after['tasks']}
+    assert todo_id in {t['id'] for t in rep_d1_after['tasks']}
+
+    # 4. Changing analysis range while bound is blocked until manual unbind
+    bad_range = client.post('/api/analyze?date=2026-11-04&start_date=2026-11-03&end_date=2026-11-04', json={})
+    assert bad_range.status_code == 400
+    assert '手动解绑' in bad_range.json()['detail']
+
+    # 5. Cross-day merge is permitted while days are bound
+    merge_res = client.post('/api/tasks/merge', json={'ids': [m_d1, m_d2]})
+    merge_res.raise_for_status()
+    rep_merged = client.get('/api/reports/2026-11-04').json()
+    assert m_d2 not in {t['id'] for t in rep_merged['tasks']}
+    assert any(t['id'] == m_d1 and t['confirmed_minutes'] == 120 for t in rep_merged['tasks'])
+
+    # 6. Manual unbind restores independent day views and default target minutes
+    unbind_res = client.post('/api/multiday/unbind', json={'date': '2026-11-04'})
+    unbind_res.raise_for_status()
+    assert unbind_res.json()['unbound'] is True
+    assert client.get('/api/multiday/binding?date=2026-11-04').json()['bound'] is False
+
+    rep_d1_unbound = client.get('/api/reports/2026-11-04').json()
+    rep_d2_unbound = client.get('/api/reports/2026-11-05').json()
+    assert rep_d1_unbound['binding'] is None
+    assert rep_d1_unbound['target_minutes'] == 480
+    assert rep_d2_unbound['target_minutes'] == 480
+    assert {t['id'] for t in rep_d1_unbound['tasks']} == {m_d1}
+    assert todo_id in {t['id'] for t in rep_d2_unbound['tasks']}
+    assert m_d1 not in {t['id'] for t in rep_d2_unbound['tasks']}
+
+    # 7. Explicit manual bind endpoint works after unbind
+    bind_res = client.post('/api/multiday/bind', json={
+        'start_date': '2026-11-03',
+        'end_date': '2026-11-04',
+        'anchor_date': '2026-11-04',
+        'target_minutes': 900,
+    })
+    bind_res.raise_for_status()
+    assert bind_res.json()['bound'] is True
+    assert client.get('/api/reports/2026-11-03').json()['target_minutes'] == 900
+
+

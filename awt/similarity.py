@@ -42,10 +42,12 @@ def compute_baseline_titles(tasks: list[dict[str, Any]]) -> dict[str, str]:
 
 def mark_titles_modified(conn: Any, day: date | str) -> None:
     """Mark similarity state for day as having modified titles."""
-    state = get_similarity_state(conn, day)
+    from . import multiday
+    c_day = multiday.canonical_day(conn, day)
+    state = get_similarity_state(conn, c_day)
     if state:
         state = {**state, "titles_modified": True}
-        save_similarity_state(conn, day, state)
+        save_similarity_state(conn, c_day, state)
 
 
 def calculate_task_pair_similarity(manual_task: dict[str, Any], ai_task: dict[str, Any]) -> tuple[float, str]:
@@ -208,7 +210,8 @@ def save_similarity_state(conn: Any, day: date | str, state: dict[str, Any]) -> 
 
 def get_similarity_status(conn: Any, day: date | str, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Check whether similarity check is clean and whether tasks have changed."""
-    day_str = str(day)
+    from . import multiday
+    day_str = multiday.canonical_day(conn, day)
     current_sig = compute_tasks_signature(tasks)
     state = get_similarity_state(conn, day_str)
 
@@ -252,7 +255,8 @@ def check_day_similarity(
     If unchanged and already handled, returns clean without re-checking.
     If force=True or tasks changed, executes check and returns recommendations.
     """
-    day_str = str(day)
+    from . import multiday
+    day_str = multiday.canonical_day(conn, day)
     settings = settings or get_settings(conn)
     tasks = list_tasks(conn, day_str)
     current_sig = compute_tasks_signature(tasks)
@@ -338,7 +342,8 @@ def resolve_similarity(
     - 'keep_ai': Preserves AI task, migrates manual task's minutes and evidence, deletes manual task.
     - 'ignore': Dismisses pair without changes.
     """
-    day_str = str(day)
+    from . import multiday
+    day_str = multiday.canonical_day(conn, day)
     state = get_similarity_state(conn, day_str) or {}
     dismissed = set(state.get("dismissed_pairs", []))
 

@@ -80,8 +80,21 @@ export type ReviewAlertItem = {
   reason: string;
 };
 
+export type MultiDayBinding = {
+  id: string;
+  start_date: string;
+  end_date: string;
+  anchor_date: string;
+  target_minutes: number;
+  active: boolean;
+  created_at: string;
+  unbound_at?: string | null;
+};
+
 export type Report = {
   date: string;
+  canonical_date?: string;
+  binding?: MultiDayBinding | null;
   tasks: Task[];
   total_minutes: number;
   target_minutes: number;

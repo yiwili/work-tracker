@@ -21,6 +21,7 @@ import {
   Link2,
   ListFilter,
   LoaderCircle,
+  LockKeyhole,
   Palette,
   PieChart,
   Plus,
@@ -254,6 +255,42 @@ function App() {
   });
   const refresh = async (d = day) => {
     await Promise.all([refreshReportOnly(d), todoModel.reload()]);
+  };
+  const bindMultiDay = async (options: {
+    startDate: string;
+    endDate: string;
+    targetMinutes?: number;
+  }) => {
+    try {
+      setError("");
+      setNotice("");
+      await api("/multiday/bind", "POST", {
+        start_date: options.startDate,
+        end_date: options.endDate,
+        anchor_date: day,
+        target_minutes: options.targetMinutes,
+      });
+      await refresh(day);
+      setNotice(
+        `已绑定多天区间 ${options.startDate} ~ ${options.endDate}，切换区间内日期均查看统一工作清单。`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const unbindMultiDay = async (bindingId?: string) => {
+    try {
+      setError("");
+      setNotice("");
+      await api("/multiday/unbind", "POST", {
+        date: day,
+        binding_id: bindingId || report?.binding?.id || null,
+      });
+      await refresh(day);
+      setNotice("已手动解绑多天工作项，恢复按单日查看。");
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -759,30 +796,30 @@ function App() {
                     : "系统设置"}
               </h1>
             </div>
-            {(page === "daily" || page === "timeline") && (
+            {(page === "daily" || page === "timeline") && (() => {
+              const activeMultiRange =
+                page === "daily" && multiDayState.enabled
+                  ? { startDate: multiDayState.startDate, endDate: multiDayState.endDate }
+                  : page === "daily" && report?.binding?.active
+                    ? { startDate: report.binding.start_date, endDate: report.binding.end_date }
+                    : null;
+              return (
               <div className="heading-actions">
                 <button
                   className="outline"
                   disabled={!report}
                   onClick={() => {
-                    if (page === "daily" && multiDayState.enabled) {
-                      setCollectRange({
-                        startDate: multiDayState.startDate,
-                        endDate: multiDayState.endDate,
-                      });
-                    } else {
-                      setCollectRange(null);
-                    }
+                    setCollectRange(activeMultiRange);
                     setCollectDay(day);
                   }}
                   title={
-                    page === "daily" && multiDayState.enabled
-                      ? `查看 ${multiDayState.startDate} ~ ${multiDayState.endDate} 跨天已采集的对话会话与 Git 提交`
+                    activeMultiRange
+                      ? `查看 ${activeMultiRange.startDate} ~ ${activeMultiRange.endDate} 跨天已采集的对话会话与 Git 提交`
                       : "查看当天已采集的对话会话与 Git 提交；可勾选 Git 提交直接添加为工作项"
                   }
                 >
                   <FolderGit2 size={16} />
-                  {page === "daily" && multiDayState.enabled
+                  {activeMultiRange
                     ? "查看跨天详情"
                     : "查看采集详情"}
                 </button>
@@ -790,16 +827,13 @@ function App() {
                   className="primary"
                   disabled={collecting || analyzing}
                   onClick={() =>
-                    page === "daily" && multiDayState.enabled
-                      ? void collect({
-                          startDate: multiDayState.startDate,
-                          endDate: multiDayState.endDate,
-                        })
+                    activeMultiRange
+                      ? void collect(activeMultiRange)
                       : void collect()
                   }
                   title={
-                    page === "daily" && multiDayState.enabled
-                      ? `读取本地对话日志，并读取 ${multiDayState.startDate} 至 ${multiDayState.endDate} 期间仓库里的本人 Git 提交`
+                    activeMultiRange
+                      ? `读取本地对话日志，并读取 ${activeMultiRange.startDate} 至 ${activeMultiRange.endDate} 期间仓库里的本人 Git 提交`
                       : "读取本地对话日志，并读取已配置仓库里你自己那天的 Git 提交"
                   }
                 >
@@ -810,12 +844,13 @@ function App() {
                   )}
                   {collecting
                     ? "正在采集…"
-                    : page === "daily" && multiDayState.enabled
-                      ? `采集跨天数据 (${multiDayState.startDate.slice(5)}~${multiDayState.endDate.slice(5)})`
+                    : activeMultiRange
+                      ? `采集跨天数据 (${activeMultiRange.startDate.slice(5)}~${activeMultiRange.endDate.slice(5)})`
                       : "采集当天数据"}
                 </button>
               </div>
-            )}
+              );
+            })()}
           </div>
           {collectProgress && (
             <p className="muted" role="status">
@@ -883,6 +918,24 @@ function App() {
                   />
                   {report?.confirmed ? "日报已确认" : "草稿 · 待审核"}
                 </span>
+                {report?.binding?.active && (
+                  <span
+                    className="multiday-bound-pill"
+                    title={`当前日期已与 ${report.binding.start_date} ~ ${report.binding.end_date} 绑定，切换区间内日期均查看统一工作项`}
+                  >
+                    <LockKeyhole size={12} />
+                    已绑定 {report.binding.start_date.slice(5)}~
+                    {report.binding.end_date.slice(5)}
+                    <button
+                      type="button"
+                      className="multiday-bound-pill-unbind"
+                      disabled={!!busy || collecting || analyzing}
+                      onClick={() => void unbindMultiDay(report.binding!.id)}
+                    >
+                      解绑
+                    </button>
+                  </span>
+                )}
                 {report?.warnings && report.warnings.length > 0 && (
                   <button
                     type="button"
@@ -1021,6 +1074,7 @@ function App() {
                   overview={report.conversations}
                   settings={settings}
                   currentDay={day}
+                  binding={report.binding}
                   busy={collecting || analyzing}
                   collecting={collecting}
                   analyzing={analyzing}
@@ -1030,6 +1084,8 @@ function App() {
                   legacyCount={report.legacy_count}
                   onAnalyze={analyzeDay}
                   onCollect={collect}
+                  onBind={bindMultiDay}
+                  onUnbind={unbindMultiDay}
                   onOpenCollectDetails={(range) => {
                     setCollectRange(range || null);
                     setCollectDay(day);
@@ -1074,6 +1130,12 @@ function App() {
                     <h2>
                       今日工作清单{" "}
                       <span className="count">{report.tasks.length}</span>
+                      {report.binding?.active && (
+                        <span className="multiday-list-tag">
+                          已绑定 {report.binding.start_date.slice(5)} ~{" "}
+                          {report.binding.end_date.slice(5)}
+                        </span>
+                      )}
                     </h2>
                   </div>
                   <div className="actions">
@@ -1343,6 +1405,14 @@ function App() {
                                     ? "人工补录"
                                     : "AI / Git 提取"}
                                 </span>
+                                {report.binding?.active && (
+                                  <span
+                                    className="tag task-date-tag"
+                                    title={`工作项归属日期：${t.date}`}
+                                  >
+                                    {t.date.slice(5)}
+                                  </span>
+                                )}
                                 {matchedAlerts.length > 0 && (
                                   <button
                                     type="button"

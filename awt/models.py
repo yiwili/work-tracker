@@ -543,6 +543,18 @@ class ReportTargetInput(BaseModel):
     target_minutes: int = Field(..., ge=1, le=1440 * 30)
 
 
+class MultiDayBindInput(BaseModel):
+    start_date: Date
+    end_date: Date
+    anchor_date: Date | None = None
+    target_minutes: int | None = Field(default=None, ge=1, le=1440 * 30)
+
+
+class MultiDayUnbindInput(BaseModel):
+    date: Date | None = None
+    binding_id: str | None = Field(default=None, max_length=100)
+
+
 class CloudBindInput(BaseModel):
     server_url: str = Field(min_length=1, max_length=1000)
     email: str = Field(min_length=1, max_length=320)

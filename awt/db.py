@@ -34,6 +34,18 @@ sync_dirty = Table('sync_dirty', metadata, Column('entity_type', String, primary
 sync_ops = Table('sync_ops', metadata, Column('op_id', String, primary_key=True), Column('entity_type', String), Column('entity_id', String), Column('base_version', Integer), Column('fields', JSON), Column('dirty_seq', Integer), Column('created_at', String), Column('attempts', Integer, default=0))
 sync_conflicts = Table('sync_conflicts', metadata, Column('id', String, primary_key=True), Column('entity_type', String), Column('entity_id', String), Column('fields', JSON), Column('local', JSON), Column('remote', JSON), Column('created_at', String), Column('resolved_at', String))
 sync_suppress = Table('sync_suppress', metadata, Column('id', Integer, primary_key=True))
+multiday_bindings = Table(
+    'multiday_bindings',
+    metadata,
+    Column('id', String, primary_key=True),
+    Column('start_date', String, index=True),
+    Column('end_date', String, index=True),
+    Column('anchor_date', String),
+    Column('target_minutes', Integer),
+    Column('active', Boolean, nullable=False, server_default='1'),
+    Column('created_at', String),
+    Column('unbound_at', String),
+)
 
 
 def data_dir():

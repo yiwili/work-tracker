@@ -13,12 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity
+from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity, multiday
 from . import usage, cloud_sync, history_upload
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -228,9 +228,39 @@ def create_app(engine=None):
     @app.get('/api/conversations')
     def conversations(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:
-            value = daily_analysis.overview(conn, start_date or date, service.get_settings(conn), end_day=end_date or date, report_day=date)
-            value['running'] = bool(analysis_locks.get(date) and analysis_locks[date].locked())
+            binding = multiday.get_active_binding(conn, date)
+            s_day = start_date or (type(date).fromisoformat(binding['start_date']) if binding else date)
+            e_day = end_date or (type(date).fromisoformat(binding['end_date']) if binding else date)
+            r_day = type(date).fromisoformat(binding['anchor_date']) if binding else date
+            value = daily_analysis.overview(conn, s_day, service.get_settings(conn), end_day=e_day, report_day=r_day)
+            value['running'] = bool(analysis_locks.get(r_day) and analysis_locks[r_day].locked())
             return value
+
+    @app.get('/api/multiday/binding')
+    def multiday_binding(date: date):
+        with engine.connect() as conn:
+            binding = multiday.get_active_binding(conn, date)
+            return {'bound': bool(binding), 'binding': binding}
+
+    @app.post('/api/multiday/bind')
+    def multiday_bind(payload: MultiDayBindInput):
+        with transaction() as conn:
+            binding = multiday.bind_days(
+                conn,
+                payload.start_date,
+                payload.end_date,
+                anchor_date=payload.anchor_date,
+                target_minutes=payload.target_minutes,
+            )
+        trigger_cloud_sync()
+        return {'bound': True, 'binding': binding}
+
+    @app.post('/api/multiday/unbind')
+    def multiday_unbind(payload: MultiDayUnbindInput):
+        with transaction() as conn:
+            binding = multiday.unbind_days(conn, day=payload.date, binding_id=payload.binding_id)
+        trigger_cloud_sync()
+        return {'unbound': binding is not None, 'binding': binding}
 
     @app.get('/api/model/presets')
     def model_presets():
@@ -508,9 +538,14 @@ def create_app(engine=None):
             res = similarity.resolve_similarity(conn, day, [r.model_dump() for r in payload.resolutions], settings=settings)
             return res
 
+    def _canonical_day(d: date) -> date:
+        with engine.connect() as conn:
+            return date.fromisoformat(multiday.canonical_day(conn, d))
+
     @app.get('/api/allocation/progress')
     def allocation_status(date: date):
-        progress = allocation_runs.get(date)
+        key = _canonical_day(date)
+        progress = allocation_runs.get(key)
         return progress.snapshot() if progress else {
             'state': 'idle', 'elapsed_seconds': 0, 'logs': [], 'thinking': '', 'thinking_live': False, 'model': '',
             'thinking_seconds': 0,
@@ -518,13 +553,14 @@ def create_app(engine=None):
 
     @app.post('/api/reports/{day}/estimate-time')
     def estimate_time(day:date,payload:AllocationInput=AllocationInput()):
-        lock=analysis_locks.setdefault(day,Lock())
+        lock_day = _canonical_day(day)
+        lock=analysis_locks.setdefault(lock_day,Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409,detail='该日期的AI分析或工时估算正在进行，请等待完成')
         progress=analysis_progress.Progress()
-        allocation_runs[day]=progress
+        allocation_runs[lock_day]=progress
         for old in list(allocation_runs):
-            if len(allocation_runs)>32 and old!=day and allocation_runs[old].state!='running':
+            if len(allocation_runs)>32 and old!=lock_day and allocation_runs[old].state!='running':
                 del allocation_runs[old]
         progress.add('开始估算工时')
         try:
@@ -553,7 +589,8 @@ def create_app(engine=None):
 
     @app.post('/api/reports/{day}/apply-allocation')
     def apply_allocation(day:date):
-        lock=analysis_locks.setdefault(day,Lock())
+        lock_day = _canonical_day(day)
+        lock=analysis_locks.setdefault(lock_day,Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409,detail='该日期的AI分析或工时估算正在进行，请等待完成')
         try:
@@ -564,20 +601,26 @@ def create_app(engine=None):
 
     @app.post('/api/collect')
     def collect(date: date, start_date: date | None = None, end_date: date | None = None):
-        state = collect_states[str(date)] = {"running": True, "source": "", "files_done": 0, "files_total": 0, "new_events": 0}
+        c_day = _canonical_day(date)
+        state = collect_states[str(c_day)] = {"running": True, "source": "", "files_done": 0, "files_total": 0, "new_events": 0}
         try:
             with transaction() as conn:
-                return service.collect(conn, date, state.update, start_day=start_date, end_day=end_date)
+                binding = multiday.get_active_binding(conn, date) if (start_date is None and end_date is None) else None
+                s_day = start_date or (binding['start_date'] if binding else None)
+                e_day = end_date or (binding['end_date'] if binding else None)
+                return service.collect(conn, c_day, state.update, start_day=s_day, end_day=e_day)
         finally:
             state["running"] = False
 
     @app.get('/api/collect/status')
     def collect_status(date: date):
-        return collect_states.get(str(date), {"running": False})
+        c_day = _canonical_day(date)
+        return collect_states.get(str(c_day), {"running": False})
 
     @app.get('/api/analysis/progress')
     def analysis_status(date: date):
-        progress = analysis_runs.get(date)
+        c_day = _canonical_day(date)
+        progress = analysis_runs.get(c_day)
         return progress.snapshot() if progress else {
             'state': 'idle', 'elapsed_seconds': 0, 'logs': [], 'thinking': '', 'thinking_live': False, 'model': '',
             'thinking_seconds': 0,
@@ -585,13 +628,14 @@ def create_app(engine=None):
 
     @app.post('/api/analyze')
     def analyze(date: date, start_date: date | None = None, end_date: date | None = None, target_minutes: int | None = None):
-        lock = analysis_locks.setdefault(date, Lock())
+        lock_day = _canonical_day(date)
+        lock = analysis_locks.setdefault(lock_day, Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail='该日期正在进行 AI 分析，请等待完成后刷新；未重复发送模型请求')
         progress = analysis_progress.Progress()
-        analysis_runs[date] = progress
+        analysis_runs[lock_day] = progress
         for old in list(analysis_runs):
-            if len(analysis_runs) > 32 and old != date and analysis_runs[old].state != 'running':
+            if len(analysis_runs) > 32 and old != lock_day and analysis_runs[old].state != 'running':
                 del analysis_runs[old]
         label = f"{start_date} 至 {end_date}" if start_date and end_date and start_date != end_date else '全天'
         progress.add(f'开始分析{label}对话')
@@ -616,7 +660,8 @@ def create_app(engine=None):
 
     @app.post('/api/analysis/import')
     def import_analysis(payload: AnalysisImportInput):
-        lock = analysis_locks.setdefault(payload.date, Lock())
+        lock_day = _canonical_day(payload.date)
+        lock = analysis_locks.setdefault(lock_day, Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail='该日期正在进行 AI 分析或导入，请稍后重试')
         try:
@@ -628,12 +673,18 @@ def create_app(engine=None):
     @app.post('/api/tasks/from-events')
     def tasks_from_events(payload: TaskFromEventsInput):
         with transaction() as conn:
-            return service.tasks_from_events(conn, payload.date, payload.event_ids, start_day=payload.start_date, end_day=payload.end_date)
+            binding = multiday.get_active_binding(conn, payload.date) if (payload.start_date is None and payload.end_date is None) else None
+            s_day = payload.start_date or (binding['start_date'] if binding else None)
+            e_day = payload.end_date or (binding['end_date'] if binding else None)
+            return service.tasks_from_events(conn, payload.date, payload.event_ids, start_day=s_day, end_day=e_day)
 
     @app.get('/api/events')
     def events(date: date, start_date: date | None = None, end_date: date | None = None):
         with engine.connect() as conn:
-            return service.visible_events(conn, start_date or date, service.get_settings(conn), end_day=end_date or date)
+            binding = multiday.get_active_binding(conn, date) if (start_date is None and end_date is None) else None
+            s_day = start_date or (type(date).fromisoformat(binding['start_date']) if binding else date)
+            e_day = end_date or (type(date).fromisoformat(binding['end_date']) if binding else date)
+            return service.visible_events(conn, s_day, service.get_settings(conn), end_day=e_day)
 
     @app.get('/api/repositories')
     def repositories():
@@ -729,9 +780,10 @@ def create_app(engine=None):
     def report(day: date):
         with engine.connect() as conn:
             value = service.report(conn, day)
-            analysis_run = analysis_runs.get(day)
+            c_day = date.fromisoformat(value.get('canonical_date') or str(day))
+            analysis_run = analysis_runs.get(c_day)
             value['conversations']['running'] = bool(analysis_run and analysis_run.state == 'running')
-            value['allocation_running'] = bool(allocation_runs.get(day) and allocation_runs[day].state == 'running')
+            value['allocation_running'] = bool(allocation_runs.get(c_day) and allocation_runs[c_day].state == 'running')
             return value
 
     @app.post('/api/reports/{day}/confirm')

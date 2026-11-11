@@ -613,24 +613,51 @@ def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
 
 
 def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minutes=None):
-    from .service import get_settings, invalidate, list_tasks, now, state_for, upsert
+    from . import multiday
+    from .service import get_settings, invalidate, list_tasks_in_range, now, state_for, upsert
     settings = get_settings(conn)
-    s_day = start_day or day
-    e_day = end_day or day
+    binding = multiday.get_active_binding(conn, day)
+    if binding:
+        if start_day is not None or end_day is not None:
+            exp_s, exp_e = multiday.normalize_range(start_day or day, end_day or day)
+            if (exp_s, exp_e) != (binding['start_date'], binding['end_date']):
+                raise ValueError(
+                    f"当前已与 {binding['start_date']} ~ {binding['end_date']} 形成多天绑定，除非手动解绑，否则不能更改分析区间"
+                )
+        s_day = binding['start_date']
+        e_day = binding['end_date']
+        analysis_day = binding['anchor_date']
+        effective_target = target_minutes or binding.get('target_minutes')
+    else:
+        s_day, e_day = multiday.normalize_range(start_day or day, end_day or day)
+        if s_day != e_day:
+            overlaps = multiday.find_overlapping_bindings(conn, s_day, e_day)
+            if overlaps:
+                b = overlaps[0]
+                raise ValueError(
+                    f"所选日期区间与现有多天绑定（{b['start_date']} ~ {b['end_date']}）重叠，请先手动解绑后再重新分析"
+                )
+        analysis_day = str(_as_date(day))
+        effective_target = target_minutes
     rows = day_rows(conn, s_day, settings, end_day=e_day)
-    summary = overview(conn, s_day, settings, end_day=e_day, report_day=day)
+    summary = overview(conn, s_day, settings, end_day=e_day, report_day=analysis_day)
     if not settings.llm_enabled:
-        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': []}
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'analysis_required': True, 'warnings': ['已统计对话。请在设置中接通并开启 AI，再分析实际工作任务；不会按提问或提交自动生成任务。'], 'conversations': summary, 'merge_suggestions': [], 'binding': binding}
     if not any(e['kind'] in ('user_prompt', 'assistant_message') for e in rows):
         msg = f'所选来源在 {s_day} 至 {e_day} 期间没有可分析的对话。' if str(s_day) != str(e_day) else '所选来源在当天没有可分析的对话。'
-        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': [msg], 'conversations': summary, 'merge_suggestions': []}
+        return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': [msg], 'conversations': summary, 'merge_suggestions': [], 'binding': binding}
     records, refs, segments = transcript(rows, settings)
-    active_tasks = list_tasks(conn, day)
+    active_tasks = list_tasks_in_range(conn, s_day, e_day)
     ent_id = getattr(getattr(settings, 'gitee_enterprise', None), 'enterprise_id', 0) or 0
     links_by_task = _active_gitee_links_by_task(conn, [t['id'] for t in active_tasks], ent_id)
     protected = [t for t in active_tasks if t['origin'] != 'auto' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate') or t['id'] in links_by_task]
     protected_ids = {e['id'] for t in protected for e in t['evidence']}
-    deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
+    deleted_cond = (
+        and_(db.tasks.c.date == analysis_day, db.tasks.c.deleted == True, db.tasks.c.edited == True)
+        if s_day == e_day
+        else and_(db.tasks.c.date >= s_day, db.tasks.c.date <= e_day, db.tasks.c.deleted == True, db.tasks.c.edited == True)
+    )
+    deleted = list(conn.execute(select(db.tasks).where(deleted_cond)).mappings())
     deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
     reviewed = [
         {
@@ -643,7 +670,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     reviewed += [{'title': t['title'], 'project': t['project'], 'decision': '用户历史曾删除；请结合实施证据与操作历史综合推测置信度：若当天有充分确凿的代码修改、工具调用、提交或明确实施动作（排除误删可能），可作为高置信度候选重新列出；若缺乏实施证据或明确不再需要，则尊重删除决定，不生成'} for t in deleted]
     records, work_refs, scope, filter_requests = filter_work(records,refs,segments,settings)
     refs=work_refs
-    date_label = f"{s_day} 至 {e_day}" if str(s_day) != str(e_day) else str(day)
+    date_label = f"{s_day} 至 {e_day}" if str(s_day) != str(e_day) else analysis_day
     initial_catalog = _load_enterprise_catalog(conn, settings)
     initial_meta = matching.get_prefix_metadata(conn, settings)
     project_hints = _build_project_hints(initial_catalog, initial_meta, settings)
@@ -662,17 +689,17 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         raise model_provider.ModelError('分析期间对话或来源范围发生变化，原任务已保留；请重新分析')
     current_catalog = _load_enterprise_catalog(conn, current_settings)
     current_meta = matching.get_prefix_metadata(conn, current_settings)
-    active_tasks = list_tasks(conn, day)
+    active_tasks = list_tasks_in_range(conn, s_day, e_day)
     cur_ent_id = getattr(getattr(current_settings, 'gitee_enterprise', None), 'enterprise_id', 0) or 0
     links_by_task = _active_gitee_links_by_task(conn, [t['id'] for t in active_tasks], cur_ent_id)
-    report_confirmed = conn.execute(select(db.reports.c.confirmed).where(db.reports.c.date == str(day))).scalar_one_or_none()
+    report_confirmed = conn.execute(select(db.reports.c.confirmed).where(db.reports.c.date == analysis_day)).scalar_one_or_none()
     protected = [t for t in active_tasks if report_confirmed or t['origin'] != 'auto' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate') or t['id'] in links_by_task]
     protected_task_ids = {t['id'] for t in protected}
     manual_protected = [t for t in active_tasks if t['origin'] != 'auto']
     manual_protected_ids = {e['id'] for t in manual_protected for e in t['evidence']}
     auto_active_tasks = [t for t in active_tasks if t.get('origin') == 'auto']
     auto_protected_ids = {e['id'] for t in auto_active_tasks if t['id'] in protected_task_ids for e in t['evidence']}
-    deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
+    deleted = list(conn.execute(select(db.tasks).where(deleted_cond)).mappings())
     deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
     owners={}
     for anchor, events in segments.items():
@@ -701,7 +728,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         if not any(e['kind'] in ('user_prompt', 'tool_call', 'shell_command', 'git_commit') for e in supporting.values()):
             raise model_provider.ModelError('AI 候选只有回复文本，缺少工作请求或行为依据；原任务已保留')
         ev_dates = sorted({str(e.get('occurred_at') or '')[:10] for e in supporting.values() if e.get('occurred_at')})
-        ev_date_label = '/'.join(ev_dates) if ev_dates else str(day)
+        ev_date_label = '/'.join(ev_dates) if ev_dates else analysis_day
         if set(supporting) & manual_protected_ids:
             matched_prot = [
                 f"第 #{idx + 1} 条「{pt['title']}」"
@@ -720,7 +747,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         if signature in used:
             continue
         used.add(signature)
-        desired_fp = 'daily-v2:' + stable(str(day), sorted(supporting), resolved_title)
+        desired_fp = 'daily-v2:' + stable(analysis_day, sorted(supporting), resolved_title)
         matched_t, matched_meta = _match_candidate_to_ai_task(
             resolved_title,
             project,
@@ -763,7 +790,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
             if not settings.auto_import_analysis
             else _available_fingerprint(conn, desired_fp, exclude_task_id=target_id)
         )
-        generated.append(({'id': target_id, 'date': str(day),
+        generated.append(({'id': target_id, 'date': analysis_day,
                            'title': resolved_title,
                            'details': _format_task_details(task['details'], settings), 'project': project,
                            'category': '任务',
@@ -787,7 +814,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
                 # 已人工修改、已填工时或已关联 Gitee 的 AI 项不自动覆盖，放入 pending_tasks 让用户选择是否替换或新建
                 pending_tasks.append(pending_item(task, supporting, False, matched_task=matched_meta))
                 warnings.append(
-                    f"【{day} · AI 分析候选】新候选「{task['title']}」已映射至已有工作项「{matched_t['title']}」，请在「分析结果」中选择替换或保留原项新建。"
+                    f"【{analysis_day} · AI 分析候选】新候选「{task['title']}」已映射至已有工作项「{matched_t['title']}」，请在「分析结果」中选择替换或保留原项新建。"
                 )
                 continue
             task_fp = _available_fingerprint(conn, task['fingerprint'], exclude_task_id=task['id'])
@@ -817,34 +844,42 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     usage = model_provider.usage_summary(usage_calls)
     snapshot = {'scope':scope, 'prompt_roles':['scope_filter','task_writer'], 'input_hash': input_hash(rows, settings), 'analyzed_at': now(), 'provider': settings.llm_provider,
                 'usage': usage, 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-                'start_date': str(s_day), 'end_date': str(e_day), 'target_day': str(day), 'target_minutes': target_minutes,
+                'start_date': str(s_day), 'end_date': str(e_day), 'target_day': analysis_day, 'target_minutes': effective_target,
                 'model': model_provider.status(settings)['model'], 'summary': redact(result.get('summary', ''), settings.redact_patterns),
                 'session_count': summary['session_count'], 'user_messages': summary['user_messages'], 'assistant_messages': summary['assistant_messages'],
                 'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings}
-    upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
-    if target_minutes:
-        upsert(conn, db.reports, {'date': str(day), 'target_minutes': target_minutes, 'confirmed': False}, 'date')
+    upsert(conn, db.analyses, {'date': analysis_day, 'snapshot': snapshot}, 'date')
+    if str(s_day) != str(e_day):
+        if not binding:
+            binding = multiday.bind_days(conn, s_day, e_day, anchor_date=analysis_day, target_minutes=effective_target)
+        elif effective_target and effective_target != binding.get('target_minutes'):
+            binding = multiday.update_binding_target(conn, binding, effective_target)
+            upsert(conn, db.reports, {'date': analysis_day, 'target_minutes': effective_target, 'confirmed': False}, 'date')
+    elif effective_target:
+        upsert(conn, db.reports, {'date': analysis_day, 'target_minutes': effective_target, 'confirmed': False}, 'date')
     if settings.auto_import_analysis and (imported or archived):
-        invalidate(conn, day)
+        invalidate(conn, analysis_day)
     from . import similarity
-    sim_check = similarity.check_day_similarity(conn, day, settings=settings, force=False)
-    return {'created': len(imported), 'updated': 0, 'archived': archived,
+    sim_check = similarity.check_day_similarity(conn, analysis_day, settings=settings, force=False)
+    return {'created': len(imported), 'updated': 0, 'archived': archived, 'date': analysis_day, 'binding': binding,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=day), 'merge_suggestions': [],
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=analysis_day), 'merge_suggestions': [],
             'similarity_check': sim_check}
 
 
 def import_pending(conn, day, selections):
+    from . import multiday
     from .service import get_settings, invalidate, list_tasks, now, upsert
     settings = get_settings(conn)
-    snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == str(day))).scalar_one_or_none()
+    canonical_day = multiday.canonical_day(conn, day)
+    snapshot = conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date == canonical_day)).scalar_one_or_none()
     if not snapshot or not snapshot.get('pending_tasks'):
         raise ValueError('没有待导入的分析结果，请先分析当天对话')
     pending = {item['fingerprint']: item for item in snapshot['pending_tasks']}
     unknown = [item.fingerprint for item in selections if item.fingerprint not in pending]
     if unknown:
         raise ValueError('分析结果已变化，请关闭窗口后重新打开分析结果')
-    active_tasks = list_tasks(conn, day)
+    active_tasks = list_tasks(conn, canonical_day)
     active_by_id = {t['id']: t for t in active_tasks}
     active_auto_by_id = {t['id']: t for t in active_tasks if t.get('origin') == 'auto'}
     protected_task_ids = {
@@ -918,7 +953,7 @@ def import_pending(conn, day, selections):
         upserts.append((
             {
                 'id': task_id,
-                'date': str(day),
+                'date': canonical_day,
                 'title': title,
                 'details': _format_task_details(details, settings),
                 'project': project or _default_unassigned_project(catalog, settings),
@@ -973,10 +1008,10 @@ def import_pending(conn, day, selections):
             conn.execute(sqlite_insert(db.evidence).values(task_id=task['id'], event_id=event_id).on_conflict_do_nothing())
     remaining = [item for item in snapshot['pending_tasks'] if item['fingerprint'] not in handled_fingerprints]
     snapshot = {**snapshot, 'pending_tasks': remaining, 'imported_at': now(), 'imported_tasks': len(upserts)}
-    upsert(conn, db.analyses, {'date': str(day), 'snapshot': snapshot}, 'date')
+    upsert(conn, db.analyses, {'date': canonical_day, 'snapshot': snapshot}, 'date')
     if upserts or archived:
-        invalidate(conn, day)
+        invalidate(conn, canonical_day)
     from . import similarity
-    sim_check = similarity.check_day_similarity(conn, day, settings=settings, force=False)
+    sim_check = similarity.check_day_similarity(conn, canonical_day, settings=settings, force=False)
     return {'created': len(upserts), 'updated': replaced_count, 'replaced': replaced_count, 'archived': archived, 'remaining': len(remaining),
             'imported': sorted(handled_fingerprints), 'warnings': warnings, 'similarity_check': sim_check}

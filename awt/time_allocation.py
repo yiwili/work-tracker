@@ -81,10 +81,13 @@ def select_tasks(tasks, task_ids):
 
 
 def estimate(conn, day, request=None):
+    from . import multiday
     from .daily_analysis import day_rows,input_hash
     from .service import get_settings,invalidate,list_tasks,now,upsert,save_task
     request=request or AllocationInput()
-    request_key=stable(str(day),request.request_id) if request.request_id else ''
+    binding = multiday.get_active_binding(conn, day)
+    canonical_day = binding['anchor_date'] if binding else str(day)
+    request_key=stable(canonical_day,request.request_id) if request.request_id else ''
     request_hash=stable(request.model_dump(mode='json'))
     if request_key:
         prior=conn.execute(select(db.allocation_requests).where(db.allocation_requests.c.id==request_key)).mappings().first()
@@ -95,13 +98,13 @@ def estimate(conn, day, request=None):
     settings=get_settings(conn)
     if not settings.llm_enabled:
         raise ValueError('请先接通并开启AI模型，再估算工时')
-    tasks=list_tasks(conn,day)
+    tasks=list_tasks(conn,canonical_day)
     if not tasks and not request.manual_items:
         raise ValueError('请先生成或补录真实工作项，再估算工时')
     locked=[t for t in tasks if t['time_locked']]
     selected,preserved=select_tasks(tasks,request.task_ids)
-    stored_target = conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date == str(day))).scalar_one_or_none()
-    target_minutes = request.target_minutes or stored_target or settings.target_minutes
+    stored_target = conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date == canonical_day)).scalar_one_or_none()
+    target_minutes = request.target_minutes or (binding.get('target_minutes') if binding else None) or stored_target or settings.target_minutes
     human_fixed=sum(t['confirmed_minutes'] for t in locked)+sum(i.minutes for i in request.manual_items)
     preserved_minutes=sum(t['confirmed_minutes'] for t in preserved)
     retained=human_fixed+preserved_minutes
@@ -114,7 +117,7 @@ def estimate(conn, day, request=None):
         if any(t['confirmed_minutes'] for t in selected):
             raise ValueError('固定工时已占满目标，请先人工核对其余已有分配，系统不会静默清零')
         if not request.manual_items:
-            existing_alloc = conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date == str(day))).scalar_one_or_none()
+            existing_alloc = conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date == canonical_day)).scalar_one_or_none()
             if existing_alloc:
                 refreshed_snapshot = {
                     **existing_alloc,
@@ -132,17 +135,19 @@ def estimate(conn, day, request=None):
                     'warnings': ['固定工时已达到目标，无需AI分配。'],
                     'state_hash': state_hash(tasks, settings, target_minutes),
                 }
-                upsert(conn, db.allocations, {'date': str(day), 'snapshot': refreshed_snapshot}, 'date')
-                upsert(conn, db.reports, {'date': str(day), 'target_minutes': target_minutes, 'confirmed': False}, 'date')
+                upsert(conn, db.allocations, {'date': canonical_day, 'snapshot': refreshed_snapshot}, 'date')
+                upsert(conn, db.reports, {'date': canonical_day, 'target_minutes': target_minutes, 'confirmed': False}, 'date')
+                if binding:
+                    multiday.update_binding_target(conn, binding, target_minutes)
             return {'allocated':0,'fixed_minutes':human_fixed,'total_minutes':retained,'warnings':['固定工时已达到目标，无需AI分配。'],'applied':False,'pending':False}
     if remaining and not selected:
         if request.task_ids is not None:
             raise ValueError('请至少勾选一个需要AI分配工时的工作项')
         raise ValueError('已选工作项均带固定工时，请改选需要AI估算的工作项')
     analysis_progress.emit('开始估算工时，正在整理参与分配的工作项')
-    analysis_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==str(day))).scalar_one_or_none() or {}
-    s_day=analysis_snap.get('start_date') or day
-    e_day=analysis_snap.get('end_date') or day
+    analysis_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==canonical_day)).scalar_one_or_none() or {}
+    s_day=analysis_snap.get('start_date') or (binding['start_date'] if binding else canonical_day)
+    e_day=analysis_snap.get('end_date') or (binding['end_date'] if binding else canonical_day)
     timeline=day_rows(conn,s_day,settings,end_day=e_day)
     initial_hash=state_hash(tasks,settings,target_minutes)
     scope_hash=input_hash(timeline,settings)
@@ -155,13 +160,13 @@ def estimate(conn, day, request=None):
                 raise ValueError()
             names={i['index']:i['title'] for i in named}
             for index,item in enumerate(request.manual_items):
-                prepared.append(TaskInput(date=day,title=names[index],details=f'人工填写：{item.name}',category=item.category,
+                prepared.append(TaskInput(date=canonical_day,title=names[index],details=f'人工填写：{item.name}',category=item.category,
                     project=max((t['project'] for t in tasks),key=lambda p:sum(t['project']==p for t in tasks),default='未归属项目'),
                     confirmed_minutes=item.minutes,time_locked=True,status='attempted',is_todo=False))
         except (ValueError,KeyError,TypeError):
             raise model_provider.ModelError('人工事项命名格式无效，所有事项和工时保持原值；请重试') from None
         analysis_progress.emit(f'人工事项已命名，正在估算 {len(selected)} 个工作项的工时')
-    payload={'date':str(day),'target_minutes':target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
+    payload={'date':canonical_day,'target_minutes':target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
              'locked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'minutes':t['confirmed_minutes']} for t in locked]+[{'id':f'quick-{i}','title':p.title,'minutes':p.confirmed_minutes} for i,p in enumerate(prepared)],
              'unlocked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'details':redact(t['details'],settings.redact_patterns),
                                 'project':t['project'],'category':t['category'],'status':t['status'],'source':t['origin'],
@@ -179,10 +184,10 @@ def estimate(conn, day, request=None):
         warnings.append(f'剩余目标 {remaining} 分钟明显高于AI独立估算 {estimates} 分钟；请按实际投入核对，必要时保留差额。')
     analysis_progress.emit(f'工时估算完成：{len(eligible)} 个工作项参与分配，正在核对工作项是否变化')
     conn.commit();conn.exec_driver_sql('BEGIN IMMEDIATE')
-    current_settings=get_settings(conn);current_tasks=list_tasks(conn,day)
-    current_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==str(day))).scalar_one_or_none() or {}
-    c_s_day=current_snap.get('start_date') or day
-    c_e_day=current_snap.get('end_date') or day
+    current_settings=get_settings(conn);current_tasks=list_tasks(conn,canonical_day)
+    current_snap=conn.execute(select(db.analyses.c.snapshot).where(db.analyses.c.date==canonical_day)).scalar_one_or_none() or {}
+    c_s_day=current_snap.get('start_date') or (binding['start_date'] if binding else canonical_day)
+    c_e_day=current_snap.get('end_date') or (binding['end_date'] if binding else canonical_day)
     if state_hash(current_tasks,current_settings,target_minutes)!=initial_hash or input_hash(day_rows(conn,c_s_day,current_settings,end_day=c_e_day),current_settings)!=scope_hash:
         raise ValueError('估算期间工作项、工时或对话范围发生变化，未覆盖人工修改；请重新估算')
     apply_now=settings.auto_apply_allocation
@@ -193,11 +198,11 @@ def estimate(conn, day, request=None):
             minutes=allocation.get(item['id'],0)
             reason=redact(item['reason'],settings.redact_patterns)
             conn.execute(update(db.worklogs).where(db.worklogs.c.task_id==item['id']).values(confirmed_minutes=minutes,suggested_minutes=item.get('estimated_minutes'),time_locked=False,time_source='ai_estimate',time_reason=reason,is_confirmed=False))
-        invalidate(conn,day)
+        invalidate(conn,canonical_day)
         analysis_progress.emit('工时已应用到所选工作项')
     else:
         analysis_progress.emit('工时建议已保存为预览，确认后才会写入工作项')
-    final_tasks=list_tasks(conn,day)
+    final_tasks=list_tasks(conn,canonical_day)
     snapshot={'estimated_at':now(),'model':model_provider.status(settings)['model'],'target_minutes':target_minutes,'step_minutes':ALLOCATION_STEP,
               'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,'distributed_minutes':remaining,'independent_estimate_minutes':estimates,
               'note':redact(str(result.get('note',''))[:3000],settings.redact_patterns),'warnings':warnings,
@@ -205,8 +210,10 @@ def estimate(conn, day, request=None):
               'manual_tasks':[p.model_dump(mode='json') for p in prepared],'selected_ids':[t['id'] for t in selected],
               'pending':not apply_now,'applied_at':now() if apply_now else None,
               'state_hash':state_hash(final_tasks,settings,target_minutes),'scope_hash':scope_hash}
-    upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
-    upsert(conn,db.reports,{'date':str(day),'target_minutes':target_minutes,'confirmed':False},'date')
+    upsert(conn,db.allocations,{'date':canonical_day,'snapshot':snapshot},'date')
+    upsert(conn,db.reports,{'date':canonical_day,'target_minutes':target_minutes,'confirmed':False},'date')
+    if binding:
+        multiday.update_binding_target(conn, binding, target_minutes)
     response={'allocated':len(allocation),'added_manual_ids':added,'fixed_minutes':human_fixed,'preserved_minutes':preserved_minutes,
               'total_minutes':sum(t['confirmed_minutes'] for t in final_tasks),'warnings':warnings,'allocation':snapshot,
               'applied':apply_now,'pending':not apply_now}
@@ -217,16 +224,19 @@ def estimate(conn, day, request=None):
 
 def apply(conn, day):
     """Write a previously previewed allocation after confirming it is still current."""
+    from . import multiday
     from .service import get_settings,invalidate,list_tasks,now,save_task,upsert
-    snapshot=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==str(day))).scalar_one_or_none()
+    binding = multiday.get_active_binding(conn, day)
+    canonical_day = binding['anchor_date'] if binding else str(day)
+    snapshot=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==canonical_day)).scalar_one_or_none()
     if not snapshot:
         raise ValueError('没有可应用的工时建议，请先生成')
     if not snapshot.get('pending'):
         raise ValueError('该工时建议已应用，无需重复应用')
     settings=get_settings(conn)
-    tasks=list_tasks(conn,day)
-    stored_target=conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date==str(day))).scalar_one_or_none()
-    effective_target=stored_target or snapshot.get('target_minutes') or settings.target_minutes
+    tasks=list_tasks(conn,canonical_day)
+    stored_target=conn.execute(select(db.reports.c.target_minutes).where(db.reports.c.date==canonical_day)).scalar_one_or_none()
+    effective_target=(binding.get('target_minutes') if binding else None) or stored_target or snapshot.get('target_minutes') or settings.target_minutes
     if state_hash(tasks,settings,effective_target)!=snapshot.get('state_hash'):
         raise ValueError('工作项、工时或分析设置已变化，请重新分配；本次未写入任何记录')
     selected_ids=set(snapshot.get('selected_ids') or [t['id'] for t in tasks if not t['time_locked']])
@@ -236,11 +246,11 @@ def apply(conn, day):
             continue
         reason=item.get('reason','')
         conn.execute(update(db.worklogs).where(db.worklogs.c.task_id==item['id']).values(confirmed_minutes=item.get('allocated_minutes',0),suggested_minutes=item.get('estimated_minutes'),time_locked=False,time_source='ai_estimate',time_reason=reason,is_confirmed=False))
-    invalidate(conn,day)
-    final=list_tasks(conn,day)
+    invalidate(conn,canonical_day)
+    final=list_tasks(conn,canonical_day)
     snapshot={**snapshot,'pending':False,'applied_at':now(),'total_minutes':sum(t['confirmed_minutes'] for t in final),
               'state_hash':state_hash(final,settings,effective_target)}
-    upsert(conn,db.allocations,{'date':str(day),'snapshot':snapshot},'date')
+    upsert(conn,db.allocations,{'date':canonical_day,'snapshot':snapshot},'date')
     return {'allocated':len(selected_ids),'added_manual_ids':added,'fixed_minutes':snapshot.get('fixed_minutes',0),
             'preserved_minutes':snapshot.get('preserved_minutes',0),'total_minutes':snapshot['total_minutes'],
             'warnings':snapshot.get('warnings',[]),'allocation':snapshot,'applied':True,'pending':False}

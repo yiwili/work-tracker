@@ -7746,6 +7746,109 @@ code {
   white-space: nowrap;
 }
 
+.multiday-binding-banner {
+  margin: 10px 20px 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(0, 113, 227, 0.08), rgba(16, 185, 129, 0.06));
+  border: 1px solid rgba(0, 113, 227, 0.24);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.multiday-binding-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: #1e3a8a;
+  flex: 1 1 320px;
+}
+
+.multiday-binding-copy svg {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--apple-blue, #0071e3);
+}
+
+.multiday-binding-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.multiday-binding-copy span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.multiday-unbind-btn {
+  height: 30px;
+  padding: 0 11px !important;
+  font-size: 12.5px !important;
+  color: #b91c1c !important;
+  border-color: rgba(185, 28, 28, 0.3) !important;
+  background: #ffffff !important;
+}
+
+.multiday-unbind-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08) !important;
+}
+
+.multiday-bound-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--apple-blue, #0071e3);
+  background: rgba(0, 113, 227, 0.09);
+  border: 1px solid rgba(0, 113, 227, 0.24);
+  white-space: nowrap;
+}
+
+.multiday-bound-pill-unbind {
+  margin-left: 2px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(185, 28, 28, 0.25);
+  background: #ffffff;
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.multiday-bound-pill-unbind:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.multiday-list-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--apple-blue, #0071e3);
+  background: rgba(0, 113, 227, 0.1);
+  vertical-align: middle;
+}
+
+.task-date-tag {
+  background: rgba(15, 23, 42, 0.06) !important;
+  color: #334155 !important;
+}
+
 
 
 /* =========================================================

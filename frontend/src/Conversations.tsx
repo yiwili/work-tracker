@@ -11,8 +11,10 @@ import {
   ScanLine,
   FolderGit2,
   RotateCcw,
+  LockKeyhole,
+  Unlink,
 } from "lucide-react";
-import type { ConversationOverview, Settings } from "./types";
+import type { ConversationOverview, MultiDayBinding, Settings } from "./types";
 import { api } from "./api";
 import { sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
@@ -47,6 +49,7 @@ export function Conversations({
   overview,
   settings,
   currentDay,
+  binding,
   busy,
   collecting,
   analyzing,
@@ -54,6 +57,8 @@ export function Conversations({
   legacyCount,
   onAnalyze,
   onCollect,
+  onBind,
+  onUnbind,
   onOpenCollectDetails,
   onMultiDayChange,
   onSettings,
@@ -64,6 +69,7 @@ export function Conversations({
   overview: ConversationOverview;
   settings: Settings;
   currentDay?: string;
+  binding?: MultiDayBinding | null;
   busy: boolean;
   collecting?: boolean;
   analyzing: boolean;
@@ -71,6 +77,8 @@ export function Conversations({
   legacyCount: number;
   onAnalyze: (options?: AnalyzeOptions) => void;
   onCollect?: (options?: CollectOptions) => Promise<boolean | void> | void;
+  onBind?: (options: { startDate: string; endDate: string; targetMinutes?: number }) => Promise<void> | void;
+  onUnbind?: (bindingId?: string) => Promise<void> | void;
   onOpenCollectDetails?: (options?: { startDate?: string; endDate?: string }) => void;
   onMultiDayChange?: (state: { enabled: boolean; startDate: string; endDate: string }) => void;
   onSettings: () => void;
@@ -78,27 +86,53 @@ export function Conversations({
   onView: (source: string, session: string) => void;
   onViewPending: () => void;
 }) {
+  const isBound = Boolean(binding?.active);
   const [sourceTab, setSourceTab] = useState<"ready" | "all">("ready");
   const effectiveDay = currentDay || overview.date || new Date().toISOString().slice(0, 10);
-  const [showMultiDay, setShowMultiDay] = useState(false);
+  const [showMultiDay, setShowMultiDay] = useState(() => Boolean(binding?.active));
   const [startDate, setStartDate] = useState(() => {
+    if (binding?.active) return binding.start_date;
     const d = new Date(effectiveDay + "T12:00:00");
     d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
   });
-  const [endDate, setEndDate] = useState(effectiveDay);
-  const [customHours, setCustomHours] = useState<number | null>(null);
+  const [endDate, setEndDate] = useState(() =>
+    binding?.active ? binding.end_date : effectiveDay,
+  );
+  const [customHours, setCustomHours] = useState<number | null>(() =>
+    binding?.active && binding.target_minutes
+      ? Number((binding.target_minutes / 60).toFixed(2))
+      : null,
+  );
   const [autoCollectBeforeAnalyze, setAutoCollectBeforeAnalyze] = useState(true);
   const [multiOverview, setMultiOverview] = useState<ConversationOverview | null>(null);
   const [loadingRange, setLoadingRange] = useState(false);
 
   useEffect(() => {
+    if (binding?.active) {
+      setShowMultiDay(true);
+      setStartDate(binding.start_date);
+      setEndDate(binding.end_date);
+      setCustomHours(
+        binding.target_minutes
+          ? Number((binding.target_minutes / 60).toFixed(2))
+          : null,
+      );
+      return;
+    }
     setEndDate(effectiveDay);
     const d = new Date(effectiveDay + "T12:00:00");
     d.setDate(d.getDate() - 1);
     setStartDate(d.toISOString().slice(0, 10));
     setCustomHours(null);
-  }, [effectiveDay]);
+  }, [
+    effectiveDay,
+    binding?.id,
+    binding?.active,
+    binding?.start_date,
+    binding?.end_date,
+    binding?.target_minutes,
+  ]);
 
   useEffect(() => {
     onMultiDayChange?.({
@@ -246,13 +280,17 @@ export function Conversations({
           )}
           <button
             type="button"
-            className={`outline multiday-toggle-btn ${showMultiDay ? "active" : ""}`}
+            className={`outline multiday-toggle-btn ${showMultiDay || isBound ? "active" : ""}`}
             disabled={busy || overview.running || analyzing}
             onClick={() => setShowMultiDay(!showMultiDay)}
-            title="自选统计跨度，支持跨天一键采集并将多日工作合并统计到今天"
+            title="自选统计跨度，支持跨天一键采集并将多日工作合并统计"
           >
             <CalendarRange size={15} />
-            {showMultiDay ? `跨天合并 (${diffDays}天)` : "多天合并"}
+            {isBound
+              ? `已绑定 (${diffDays}天)`
+              : showMultiDay
+                ? `跨天合并 (${diffDays}天)`
+                : "多天合并"}
           </button>
           {!showMultiDay && (
             <button
@@ -261,13 +299,23 @@ export function Conversations({
                 busy ||
                 overview.running ||
                 !settings.llm_enabled ||
-                overview.user_messages + overview.assistant_messages === 0
+                (activeOverview.user_messages + activeOverview.assistant_messages === 0)
               }
-              onClick={() => onAnalyze()}
+              onClick={() =>
+                isBound && binding
+                  ? onAnalyze({
+                      startDate: binding.start_date,
+                      endDate: binding.end_date,
+                      targetMinutes: targetHours * 60,
+                    })
+                  : onAnalyze()
+              }
               title={
                 messages === 0
                   ? "AI 归纳需要当天的对话记录；只有 Git 提交时请手工添加事项"
-                  : undefined
+                  : isBound && binding
+                    ? `当前已绑定 ${binding.start_date} ~ ${binding.end_date}，继续在绑定区间重新生成`
+                    : undefined
               }
             >
               {analyzing || overview.running ? (
@@ -277,11 +325,39 @@ export function Conversations({
               )}
               {analyzing || overview.running
                 ? "AI 正在分析…"
-                : "AI 分析全天对话"}
+                : isBound
+                  ? `AI 重新生成 (${diffDays}天)`
+                  : "AI 分析全天对话"}
             </button>
           )}
         </div>
       </div>
+      {isBound && binding && (
+        <div className="multiday-binding-banner" role="status">
+          <div className="multiday-binding-copy">
+            <LockKeyhole size={15} />
+            <div>
+              <strong>
+                多天工作项已绑定：{binding.start_date} ~ {binding.end_date}（共 {diffDays} 天 · 锚定 {binding.anchor_date.slice(5)}）
+              </strong>
+              <span>
+                切换区间内任意日期均展示合并后的全部工作项（含多天 AI 项、多天人工补录与今日已完成待办）；再次 AI 生成将继续作用于这 {diffDays} 天，直到手动解绑。
+              </span>
+            </div>
+          </div>
+          {onUnbind && (
+            <button
+              type="button"
+              className="outline multiday-unbind-btn"
+              disabled={busy || analyzing || collecting}
+              onClick={() => void onUnbind(binding.id)}
+            >
+              <Unlink size={14} />
+              手动解绑
+            </button>
+          )}
+        </div>
+      )}
       {showMultiDay && (
         <div className="multi-day-workbench">
           <div className="multi-day-controls-row">
@@ -293,7 +369,8 @@ export function Conversations({
                 type="date"
                 value={startDate}
                 max={endDate}
-                disabled={busy || analyzing}
+                disabled={busy || analyzing || isBound}
+                title={isBound ? "已形成多天绑定，如需更改区间请先手动解绑" : undefined}
                 onChange={(e) => {
                   if (e.target.value) {
                     setStartDate(e.target.value);
@@ -308,7 +385,8 @@ export function Conversations({
                 type="date"
                 value={endDate}
                 min={startDate}
-                disabled={busy || analyzing}
+                disabled={busy || analyzing || isBound}
+                title={isBound ? "已形成多天绑定，如需更改区间请先手动解绑" : undefined}
                 onChange={(e) => {
                   if (e.target.value) {
                     setEndDate(e.target.value);
@@ -319,24 +397,24 @@ export function Conversations({
               <div className="multi-day-presets" role="group" aria-label="快捷日期范围">
                 <button
                   type="button"
-                  className={`preset-pill ${diffDays === 2 && endDate === effectiveDay ? "active" : ""}`}
-                  disabled={busy || analyzing}
+                  className={`preset-pill ${diffDays === 2 && endDate === (binding?.anchor_date || effectiveDay) ? "active" : ""}`}
+                  disabled={busy || analyzing || isBound}
                   onClick={() => applyPreset("2d")}
                 >
                   近 2 天
                 </button>
                 <button
                   type="button"
-                  className={`preset-pill ${diffDays === 3 && endDate === effectiveDay ? "active" : ""}`}
-                  disabled={busy || analyzing}
+                  className={`preset-pill ${diffDays === 3 && endDate === (binding?.anchor_date || effectiveDay) ? "active" : ""}`}
+                  disabled={busy || analyzing || isBound}
                   onClick={() => applyPreset("3d")}
                 >
                   近 3 天
                 </button>
                 <button
                   type="button"
-                  className={`preset-pill ${diffDays === 5 && endDate === effectiveDay ? "active" : ""}`}
-                  disabled={busy || analyzing}
+                  className={`preset-pill ${diffDays === 5 && endDate === (binding?.anchor_date || effectiveDay) ? "active" : ""}`}
+                  disabled={busy || analyzing || isBound}
                   onClick={() => applyPreset("5d")}
                 >
                   近 5 天
@@ -344,7 +422,7 @@ export function Conversations({
                 <button
                   type="button"
                   className="preset-pill"
-                  disabled={busy || analyzing}
+                  disabled={busy || analyzing || isBound}
                   onClick={() => applyPreset("week")}
                 >
                   本周
@@ -379,7 +457,7 @@ export function Conversations({
                 </button>
               )}
               <span className="multi-day-target-badge">
-                归入 {effectiveDay.slice(5)} 日报
+                归入 {(binding?.anchor_date || effectiveDay).slice(5)} 日报
               </span>
             </div>
           </div>
@@ -466,6 +544,24 @@ export function Conversations({
                   {collecting ? "采集中…" : "采集区间"}
                 </button>
               )}
+              {!isBound && onBind && (
+                <button
+                  type="button"
+                  className="outline"
+                  disabled={busy || collecting || analyzing || overview.running || diffDays < 2}
+                  onClick={() =>
+                    void onBind({
+                      startDate,
+                      endDate,
+                      targetMinutes: targetHours * 60,
+                    })
+                  }
+                  title="立即锁定绑定所选多天，合并显示多天人工补录与已完成待办"
+                >
+                  <LockKeyhole size={14} />
+                  锁定绑定区间
+                </button>
+              )}
               <button
                 type="button"
                 className="primary"
@@ -499,7 +595,9 @@ export function Conversations({
                 )}
                 {analyzing || overview.running
                   ? "正在合并分析…"
-                  : `AI 合并分析 (${targetHours}h)`}
+                  : isBound
+                    ? `AI 重新生成绑定区间 (${targetHours}h)`
+                    : `AI 合并分析 (${targetHours}h)`}
               </button>
             </div>
           </div>
@@ -675,7 +773,7 @@ export function Conversations({
                   <span className="live-dot" />
                   {gitEvents} 提交
                 </>
-              ) : showMultiDay ? (
+              ) : showMultiDay || isBound ? (
                 "区间无提交"
               ) : (
                 "今日无提交"
@@ -688,7 +786,7 @@ export function Conversations({
       <div className="conversation-total apple-metrics-bar">
         <Activity size={17} />
         <span>
-          {showMultiDay
+          {showMultiDay || isBound
             ? `跨天 ${startDate.slice(5)} ~ ${endDate.slice(5)}：`
             : "本次范围："}
           <strong>{activeOverview.session_count} 个会话</strong> ·
@@ -760,7 +858,7 @@ export function Conversations({
                   {names[s.source]}
                 </strong>
                 <span>
-                  {showMultiDay
+                  {showMultiDay || isBound
                     ? new Date(s.first_at).toLocaleString("zh-CN", {
                         timeZone: settings.timezone,
                         month: "2-digit",

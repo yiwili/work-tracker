@@ -55,8 +55,11 @@ def save_settings(conn, settings):
 
 
 def invalidate(conn, day):
-    conn.execute(update(db.reports).where(db.reports.c.date == str(day)).values(confirmed=False, confirmed_at=None))
-    ids = select(db.tasks.c.id).where(db.tasks.c.date == str(day))
+    from . import multiday
+    binding = multiday.get_active_binding(conn, day)
+    target_dates = sorted(set(multiday.bound_dates(binding) + [str(day), binding['anchor_date']])) if binding else [str(day)]
+    conn.execute(update(db.reports).where(db.reports.c.date.in_(target_dates)).values(confirmed=False, confirmed_at=None))
+    ids = select(db.tasks.c.id).where(db.tasks.c.date.in_(target_dates))
     conn.execute(update(db.worklogs).where(db.worklogs.c.task_id.in_(ids)).values(is_confirmed=False))
 
 
@@ -289,19 +292,37 @@ def list_todos(conn):
     return [dict(r) for r in rows]
 
 
-def list_tasks(conn, day):
+def list_tasks_in_range(conn, start_day, end_day):
+    s_str, e_str = str(start_day), str(end_day)
+    if e_str < s_str:
+        s_str, e_str = e_str, s_str
+    cond = (
+        and_(db.tasks.c.date == s_str, db.tasks.c.deleted == False)
+        if s_str == e_str
+        else and_(db.tasks.c.date >= s_str, db.tasks.c.date <= e_str, db.tasks.c.deleted == False)
+    )
+    order_cols = (db.tasks.c.id,) if s_str == e_str else (db.tasks.c.date, db.tasks.c.id)
     rows = conn.execute(select(db.tasks, db.worklogs.c.suggested_minutes, db.worklogs.c.confirmed_minutes, db.worklogs.c.time_locked, db.worklogs.c.time_source, db.worklogs.c.time_reason)
-                        .join(db.worklogs).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == False))
-                        .order_by(db.tasks.c.id)).mappings().all()
+                        .join(db.worklogs).where(cond)
+                        .order_by(*order_cols)).mappings().all()
     output = []
+    gap = get_settings(conn).activity_gap_minutes
+    from .activity_time import profile
     for row in rows:
         task = dict(row)
         task['evidence'] = [dict(e) for e in conn.execute(select(db.events).join(db.evidence, db.evidence.c.event_id == db.events.c.id)
                            .where(db.evidence.c.task_id == row['id']).order_by(db.events.c.occurred_at)).mappings()]
-        from .activity_time import profile
-        task['timing']=profile(task['evidence'],gap_minutes=get_settings(conn).activity_gap_minutes)
+        task['timing'] = profile(task['evidence'], gap_minutes=gap)
         output.append(task)
     return output
+
+
+def list_tasks(conn, day):
+    from . import multiday
+    binding = multiday.get_active_binding(conn, day)
+    if binding:
+        return list_tasks_in_range(conn, binding['start_date'], binding['end_date'])
+    return list_tasks_in_range(conn, day, day)
 
 
 def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
@@ -433,14 +454,18 @@ def delete_task(conn, task_id):
 
 
 def merge_tasks(conn, ids):
+    from . import multiday
     if len(set(ids)) != len(ids):
         raise ValueError("请选择不同任务")
     selected = [get_task(conn, task_id) for task_id in ids]
+    binding = None
     if len({item['date'] for item in selected}) != 1:
-        raise ValueError("只能合并同一天的任务")
+        binding = multiday.same_binding_group(conn, [item['date'] for item in selected])
+        if not binding:
+            raise ValueError("只能合并同一天的任务")
     if len({item['project'] for item in selected}) != 1:
         raise ValueError("跨项目任务请分别保留")
-    day = selected[0]['date']
+    day = binding['anchor_date'] if binding else selected[0]['date']
     logs = list(conn.execute(select(db.worklogs).where(db.worklogs.c.task_id.in_(ids))).mappings())
     minutes = sum(item['confirmed_minutes'] for item in logs)
     if minutes > 1440:
@@ -476,10 +501,13 @@ def split_task(conn, task_id, parts):
 
 
 def report(conn, day):
+    from . import multiday
     settings = get_settings(conn)
+    binding = multiday.get_active_binding(conn, day)
+    canonical_day = binding['anchor_date'] if binding else str(day)
     tasks = list_tasks(conn, day)
     total = sum(t['confirmed_minutes'] for t in tasks)
-    stored = conn.execute(select(db.reports).where(db.reports.c.date == str(day))).mappings().first()
+    stored = conn.execute(select(db.reports).where(db.reports.c.date == canonical_day)).mappings().first()
     warnings = []
     review_items = []
     observed = {}
@@ -562,10 +590,14 @@ def report(conn, day):
             "reason": suggestion["reason"],
         })
     from .daily_analysis import overview
-    conversations = overview(conn, day, settings)
+    conversations = (
+        overview(conn, binding['start_date'], settings, end_day=binding['end_date'], report_day=canonical_day)
+        if binding
+        else overview(conn, day, settings)
+    )
     analysis_snap = conversations.get('analysis') or {}
-    s_day = analysis_snap.get('start_date') or day
-    e_day = analysis_snap.get('end_date') or day
+    s_day = analysis_snap.get('start_date') or (binding['start_date'] if binding else day)
+    e_day = analysis_snap.get('end_date') or (binding['end_date'] if binding else day)
     for aw in (analysis_snap.get('warnings') or []):
         if aw not in warnings:
             warnings.append(aw)
@@ -585,17 +617,21 @@ def report(conn, day):
     from .activity_time import profile
     for task in tasks:
         task['timing']=profile(task['evidence'],timeline,settings.activity_gap_minutes)
-    effective_target = stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes
+    effective_target = (
+        binding['target_minutes']
+        if (binding and binding.get('target_minutes'))
+        else (stored['target_minutes'] if (stored and stored.get('target_minutes')) else settings.target_minutes)
+    )
     from .time_allocation import state_hash
-    allocation=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==str(day))).scalar_one_or_none()
+    allocation=conn.execute(select(db.allocations.c.snapshot).where(db.allocations.c.date==canonical_day)).scalar_one_or_none()
     if allocation:
         allocation={**allocation,'stale':allocation['state_hash']!=state_hash(tasks,settings,effective_target)}
 
     from . import similarity
-    similarity_status = similarity.get_similarity_status(conn, day, tasks)
+    similarity_status = similarity.get_similarity_status(conn, canonical_day, tasks)
 
     legacy_count = sum(t['origin'] == 'auto' and not t['edited'] and not t['confirmed_minutes'] and not (t['fingerprint'] or '').startswith('daily-v2:') for t in tasks)
-    return {"date": str(day), "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
+    return {"date": str(day), "canonical_date": canonical_day, "binding": binding, "tasks": tasks, "conversations": conversations, "time_allocation":allocation, "legacy_count": legacy_count, "total_minutes": total, "target_minutes": effective_target,
             "remaining_minutes": effective_target-total, "confirmed": bool(stored and stored['confirmed'] and total == effective_target),
             "confirmed_at": stored['confirmed_at'] if stored else None, "warnings": warnings,
             "review_items": review_items,
@@ -605,21 +641,30 @@ def report(conn, day):
 
 
 def set_report_target(conn, day, target_minutes):
-    upsert(conn, db.reports, {"date": str(day), "target_minutes": target_minutes, "confirmed": False}, "date")
+    from . import multiday
+    binding = multiday.get_active_binding(conn, day)
+    canonical = binding['anchor_date'] if binding else str(day)
+    upsert(conn, db.reports, {"date": canonical, "target_minutes": target_minutes, "confirmed": False}, "date")
+    if binding:
+        multiday.update_binding_target(conn, binding, target_minutes)
     return report(conn, day)
 
 
 def confirm(conn, day):
+    from . import multiday
+    canonical = multiday.canonical_day(conn, day)
     value = report(conn, day)
     if value['total_minutes'] != value['target_minutes']:
         raise ValueError(f"确认失败：当前 {value['total_minutes']} 分钟，目标 {value['target_minutes']} 分钟")
-    upsert(conn, db.reports, {"date": str(day), "target_minutes": value['target_minutes'], "confirmed": True, "confirmed_at": now()}, "date")
+    upsert(conn, db.reports, {"date": canonical, "target_minutes": value['target_minutes'], "confirmed": True, "confirmed_at": now()}, "date")
     ids = [t['id'] for t in value['tasks']]
     conn.execute(update(db.worklogs).where(db.worklogs.c.task_id.in_(ids)).values(is_confirmed=True))
     return report(conn, day)
 
 
 def export_markdown(conn, day):
+    from . import multiday
+    canonical = multiday.canonical_day(conn, day)
     value = report(conn, day)
     def esc(text):
         return str(text).replace('\\', '\\\\').replace('|', '\\|').replace('\r', '').replace('\n', '<br>').replace('<script', '&lt;script')
@@ -639,5 +684,5 @@ def export_markdown(conn, day):
         lines.append('')
     if value['warnings']:
         lines += ['## 待审核提示', '', *['- ' + esc(w) for w in value['warnings']]]
-    upsert(conn, db.reports, {"date": str(day), "target_minutes": value['target_minutes'], "confirmed": value['confirmed'], "confirmed_at": value['confirmed_at'], "exported_at": now()}, "date")
+    upsert(conn, db.reports, {"date": canonical, "target_minutes": value['target_minutes'], "confirmed": value['confirmed'], "confirmed_at": value['confirmed_at'], "exported_at": now()}, "date")
     return '\n'.join(lines)
