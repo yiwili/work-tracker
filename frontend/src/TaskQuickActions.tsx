@@ -490,12 +490,39 @@ function HoursRegisterModal({
   ) => Promise<void>;
 }) {
   const [confirmed, setConfirmed] = useState<number>(task.confirmed_minutes || 0);
+  const [confirmedInput, setConfirmedInput] = useState<string>(() =>
+    hours(task.confirmed_minutes || 0),
+  );
   const [suggested, setSuggested] = useState<number | null>(task.suggested_minutes);
+  const [suggestedInput, setSuggestedInput] = useState<string>(() =>
+    task.suggested_minutes != null ? hours(task.suggested_minutes) : "",
+  );
   const [locked, setLocked] = useState<boolean>(
     task.time_locked || Boolean(task.confirmed_minutes),
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  const applyConfirmedMinutes = (nextMins: number) => {
+    const clamped = Math.min(1440, Math.max(0, Math.round(nextMins)));
+    const hText = hours(clamped);
+    setConfirmed(clamped);
+    setConfirmedInput(hText);
+    setSuggested(clamped);
+    setSuggestedInput(hText);
+    setLocked(clamped > 0);
+  };
+
+  const applySuggestedMinutes = (nextMins: number | null) => {
+    if (nextMins == null) {
+      setSuggested(null);
+      setSuggestedInput("");
+      return;
+    }
+    const clamped = Math.min(1440, Math.max(0, Math.round(nextMins)));
+    setSuggested(clamped);
+    setSuggestedInput(hours(clamped));
+  };
 
   const presets = [
     { label: "0.5h", minutes: 30 },
@@ -508,9 +535,27 @@ function HoursRegisterModal({
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    const cNum = Number(confirmedInput.trim());
+    if (confirmedInput.trim() === "" || !Number.isFinite(cNum) || cNum < 0 || cNum > 24) {
+      setError("完成工时请输入 0 至 24 之间的小时数");
+      return;
+    }
+    const sRaw = suggestedInput.trim();
+    let finalSuggested: number | null = suggested;
+    if (sRaw === "") {
+      finalSuggested = null;
+    } else {
+      const sNum = Number(sRaw);
+      if (!Number.isFinite(sNum) || sNum < 0 || sNum > 24) {
+        setError("预计工时请输入 0 至 24 之间的小时数");
+        return;
+      }
+      finalSuggested = Math.min(1440, Math.max(0, Math.round(sNum * 60)));
+    }
+    const finalConfirmed = Math.min(1440, Math.max(0, Math.round(cNum * 60)));
     setSaving(true);
     try {
-      await onSave(confirmed, suggested, locked);
+      await onSave(finalConfirmed, finalSuggested, locked);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -545,114 +590,55 @@ function HoursRegisterModal({
 
         <form onSubmit={handleSave} className="hours-register-form">
           <div className="hours-tip-box">
-            对齐 Gitee 企业版项目管理：登记工作项的<strong>预计工时</strong>（预估耗时）与
-            <strong>具体的完成工时</strong>（实际已投入工时）。
-          </div>
-
-          {/* 预计工时 */}
-          <div className="hours-input-group">
-            <div className="hours-group-header">
-              <label htmlFor="suggested-minutes-input">
-                <strong>预计工时</strong>
-                <span className="hours-sub-label">（Gitee 预估工时）</span>
-              </label>
-              <div className="hours-converted">
-                = {hours(suggested ?? 0)} <small>h</small>
-              </div>
-            </div>
-            <div className="minute-input">
-              <button
-                type="button"
-                aria-label="减少预计工时"
-                onClick={() =>
-                  setSuggested((prev) => Math.max(0, (prev || 0) - step))
-                }
-              >
-                −
-              </button>
-              <input
-                id="suggested-minutes-input"
-                type="number"
-                min="0"
-                max="1440"
-                step="1"
-                placeholder="未设置"
-                value={suggested == null ? "" : suggested}
-                onChange={(e) => {
-                  const val = e.target.value.trim();
-                  setSuggested(val === "" ? null : Math.max(0, Number(val)));
-                }}
-              />
-              <span className="unit-label">分钟</span>
-              <button
-                type="button"
-                aria-label="增加预计工时"
-                onClick={() =>
-                  setSuggested((prev) => Math.min(1440, (prev || 0) + step))
-                }
-              >
-                +
-              </button>
-            </div>
-            <div className="hours-quick-chips">
-              <span className="chips-label">快捷：</span>
-              {presets.map((p) => (
-                <button
-                  key={p.minutes}
-                  type="button"
-                  className={`chip ${suggested === p.minutes ? "active" : ""}`}
-                  onClick={() => setSuggested(p.minutes)}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={`chip reset ${suggested == null ? "active" : ""}`}
-                onClick={() => setSuggested(null)}
-              >
-                清空
-              </button>
-            </div>
+            按<strong>小时</strong>登记工时：设置<strong>完成工时</strong>时会自动将
+            <strong>预计工时</strong>同步为相同小时数，也可按需单独调整预计工时。
           </div>
 
           {/* 具体的完成工时 */}
           <div className="hours-input-group">
             <div className="hours-group-header">
-              <label htmlFor="confirmed-minutes-input">
+              <label htmlFor="confirmed-hours-input">
                 <strong>完成工时</strong>
-                <span className="hours-sub-label">（具体的完成工时）</span>
+                <span className="hours-sub-label">（设置后自动同步预计工时）</span>
               </label>
               <div className="hours-converted">
-                = {hours(confirmed)} <small>h</small>
+                = {confirmed} <small>分钟</small>
               </div>
             </div>
             <div className="minute-input">
               <button
                 type="button"
                 aria-label="减少完成工时"
-                onClick={() => setConfirmed((prev) => Math.max(0, prev - step))}
+                onClick={() => applyConfirmedMinutes(confirmed - step)}
               >
                 −
               </button>
               <input
-                id="confirmed-minutes-input"
+                id="confirmed-hours-input"
                 type="number"
                 min="0"
-                max="1440"
-                step="1"
+                max="24"
+                step="any"
                 required
-                value={confirmed}
+                value={confirmedInput}
                 onChange={(e) => {
-                  setConfirmed(Math.max(0, Number(e.target.value)));
-                  setLocked(true);
+                  const raw = e.target.value;
+                  setConfirmedInput(raw);
+                  if (raw.trim() === "") return;
+                  const num = Number(raw);
+                  if (!Number.isFinite(num) || num < 0 || num > 24) return;
+                  const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
+                  setConfirmed(mins);
+                  setSuggested(mins);
+                  setSuggestedInput(hours(mins));
+                  setLocked(mins > 0);
                 }}
               />
-              <span className="unit-label">分钟</span>
+              <span className="unit-label">小时</span>
               <button
                 type="button"
                 aria-label="增加完成工时"
-                onClick={() => setConfirmed((prev) => Math.min(1440, prev + step))}
+                onClick={() => applyConfirmedMinutes(confirmed + step)}
               >
                 +
               </button>
@@ -664,10 +650,7 @@ function HoursRegisterModal({
                   type="button"
                   className="chip match-suggested"
                   title="完成工时设置为与预计工时相同"
-                  onClick={() => {
-                    setConfirmed(suggested);
-                    setLocked(true);
-                  }}
+                  onClick={() => applyConfirmedMinutes(suggested)}
                 >
                   同预计 ({hours(suggested)}h)
                 </button>
@@ -677,10 +660,7 @@ function HoursRegisterModal({
                   key={p.minutes}
                   type="button"
                   className={`chip ${confirmed === p.minutes ? "active" : ""}`}
-                  onClick={() => {
-                    setConfirmed(p.minutes);
-                    setLocked(true);
-                  }}
+                  onClick={() => applyConfirmedMinutes(p.minutes)}
                 >
                   {p.label}
                 </button>
@@ -688,9 +668,85 @@ function HoursRegisterModal({
               <button
                 type="button"
                 className={`chip reset ${confirmed === 0 ? "active" : ""}`}
-                onClick={() => setConfirmed(0)}
+                onClick={() => applyConfirmedMinutes(0)}
               >
                 0h
+              </button>
+            </div>
+          </div>
+
+          {/* 预计工时 */}
+          <div className="hours-input-group">
+            <div className="hours-group-header">
+              <label htmlFor="suggested-hours-input">
+                <strong>预计工时</strong>
+                <span className="hours-sub-label">（Gitee 预估工时，默认随完成工时同步）</span>
+              </label>
+              <div className="hours-converted">
+                {suggested != null ? (
+                  <>
+                    = {suggested} <small>分钟</small>
+                  </>
+                ) : (
+                  <small>未设置</small>
+                )}
+              </div>
+            </div>
+            <div className="minute-input">
+              <button
+                type="button"
+                aria-label="减少预计工时"
+                onClick={() => applySuggestedMinutes((suggested ?? 0) - step)}
+              >
+                −
+              </button>
+              <input
+                id="suggested-hours-input"
+                type="number"
+                min="0"
+                max="24"
+                step="any"
+                placeholder="未设置"
+                value={suggestedInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setSuggestedInput(raw);
+                  if (raw.trim() === "") {
+                    setSuggested(null);
+                    return;
+                  }
+                  const num = Number(raw);
+                  if (!Number.isFinite(num) || num < 0 || num > 24) return;
+                  setSuggested(Math.min(1440, Math.max(0, Math.round(num * 60))));
+                }}
+              />
+              <span className="unit-label">小时</span>
+              <button
+                type="button"
+                aria-label="增加预计工时"
+                onClick={() => applySuggestedMinutes((suggested ?? 0) + step)}
+              >
+                +
+              </button>
+            </div>
+            <div className="hours-quick-chips">
+              <span className="chips-label">快捷：</span>
+              {presets.map((p) => (
+                <button
+                  key={p.minutes}
+                  type="button"
+                  className={`chip ${suggested === p.minutes ? "active" : ""}`}
+                  onClick={() => applySuggestedMinutes(p.minutes)}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={`chip reset ${suggested == null ? "active" : ""}`}
+                onClick={() => applySuggestedMinutes(null)}
+              >
+                清空
               </button>
             </div>
           </div>

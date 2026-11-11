@@ -24,7 +24,8 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .click();
   let dialog = page.getByRole("dialog");
   await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
-  await dialog.getByLabel("确认工时分钟 1").fill("360");
+  await dialog.getByLabel("完成工时小时 1").fill("6");
+  await expect(dialog.getByLabel("预计工时小时 1")).toHaveValue("6");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
   await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
@@ -35,7 +36,8 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .getByLabel("详细工作内容")
     .fill("沟通接口变更，确认联调时间和待办事项。");
   await dialog.getByLabel("工作分类").fill("客户沟通");
-  await dialog.getByLabel("确认工时分钟 1").fill("120");
+  await dialog.getByLabel("完成工时小时 1").fill("2");
+  await expect(dialog.getByLabel("预计工时小时 1")).toHaveValue("2");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(
@@ -99,12 +101,12 @@ test("mobile empty layout, split, merge, evidence and reanalysis preserve review
   ).toBeTruthy();
   await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
   await page.getByLabel("任务标题").fill("评审需求并整理方案");
-  await page.getByLabel("确认工时分钟 1").fill("120");
+  await page.getByLabel("完成工时小时 1").fill("2");
   await page.getByRole("button", { name: "保存记录" }).click();
   await page.getByLabel("拆分 评审需求并整理方案").click();
   let dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel("确认工时分钟 1")).toHaveValue("60");
-  await expect(dialog.getByLabel("确认工时分钟 2")).toHaveValue("60");
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("1");
+  await expect(dialog.getByLabel("完成工时小时 2")).toHaveValue("1");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
   await page.getByLabel("选择全部任务").check();
@@ -258,7 +260,7 @@ test("AI time allocation preserves pinned communication and applies AI time", as
   await page.goto("/?date=2026-10-22");
   await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
   await page.getByLabel("任务标题").fill("客户需求沟通");
-  await page.getByLabel("确认工时分钟 1").fill("60");
+  await page.getByLabel("完成工时小时 1").fill("1");
   await expect(page.getByLabel("固定此项工时，AI分配时保留")).toBeChecked();
   await page.getByRole("button", { name: "保存记录" }).click();
   await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
@@ -286,12 +288,12 @@ test("AI time allocation preserves pinned communication and applies AI time", as
   });
   await expect(meeting.getByText("固定工时", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "客户需求沟通", exact: true }).click();
-  await expect(page.getByLabel("确认工时分钟 1")).toHaveValue("60");
+  await expect(page.getByLabel("完成工时小时 1")).toHaveValue("1");
   await page.getByLabel("关闭编辑").click();
   await page
     .getByRole("button", { name: "优化档案查询功能", exact: true })
     .click();
-  await expect(page.getByLabel("确认工时分钟 1")).toHaveValue("420");
+  await expect(page.getByLabel("完成工时小时 1")).toHaveValue("7");
   await expect(page.getByLabel("固定此项工时，AI分配时保留")).not.toBeChecked();
   await page.getByLabel("关闭编辑").click();
   await expect(
@@ -570,16 +572,16 @@ test("enterprise title mappings persist and confirmed publishing skips existing 
   ).toBeTruthy();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "每日日报", exact: true }).click();
-  for (const [title, minutes] of [
-    ["【上海工程】修复附件提取问题", "90"],
-    ["【2026】新增附件批量打印", "120"],
+  for (const [title, hoursStr] of [
+    ["【上海工程】修复附件提取问题", "1.5"],
+    ["【2026】新增附件批量打印", "2"],
   ]) {
     await page
       .getByRole("button", { name: "添加人工事项", exact: true })
       .click();
     await page.getByLabel("任务标题").fill(title);
     await page.getByLabel("详细工作内容").fill("整理业务需求并验证功能。");
-    await page.getByLabel("确认工时分钟 1").fill(minutes);
+    await page.getByLabel("完成工时小时 1").fill(hoursStr);
     await page.getByRole("button", { name: "保存记录", exact: true }).click();
   }
   await page.getByRole("button", { name: "提交到 Gitee", exact: true }).click();

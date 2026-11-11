@@ -129,6 +129,8 @@ type Draft = {
   status: string;
   confirmed_minutes: number;
   suggested_minutes?: number | null;
+  confirmedHoursText?: string;
+  suggestedHoursText?: string;
   time_locked: boolean;
   started_at: string;
   ended_at: string;
@@ -142,6 +144,8 @@ const fromTask = (t?: Task, day = ""): Draft => ({
   status: t?.status || "requested",
   confirmed_minutes: t?.confirmed_minutes || 0,
   suggested_minutes: t?.suggested_minutes ?? null,
+  confirmedHoursText: hours(t?.confirmed_minutes || 0),
+  suggestedHoursText: t?.suggested_minutes != null ? hours(t.suggested_minutes) : "",
   time_locked: t?.time_locked || false,
   started_at: t?.started_at ? toLocal(t.started_at) : "",
   ended_at: t?.ended_at ? toLocal(t.ended_at) : "",
@@ -153,8 +157,9 @@ function toLocal(iso: string) {
     .slice(0, 16);
 }
 function payload(d: Draft) {
+  const { confirmedHoursText: _c, suggestedHoursText: _s, ...rest } = d;
   return {
-    ...d,
+    ...rest,
     project: d.project || "未归属项目",
     suggested_minutes: typeof d.suggested_minutes === "number" ? d.suggested_minutes : null,
     started_at: d.started_at ? new Date(d.started_at).toISOString() : null,
@@ -2155,22 +2160,31 @@ function TaskEditor({
   onSave: (parts: Draft[]) => Promise<void>;
 }) {
   const isNew = !editor.task && !editor.split;
-  const [parts, setParts] = useState<Draft[]>(() =>
-    editor.split
-      ? [
-          {
-            ...fromTask(editor.task, day),
-            title: editor.task!.title + "（一）",
-            confirmed_minutes: Math.floor(editor.task!.confirmed_minutes / 2),
-          },
-          {
-            ...fromTask(editor.task, day),
-            title: editor.task!.title + "（二）",
-            confirmed_minutes: Math.ceil(editor.task!.confirmed_minutes / 2),
-          },
-        ]
-      : [fromTask(editor.task, day)],
-  );
+  const [parts, setParts] = useState<Draft[]>(() => {
+    if (!editor.split) return [fromTask(editor.task, day)];
+    const origConfirmed = editor.task!.confirmed_minutes || 0;
+    const half1 = Math.floor(origConfirmed / 2);
+    const half2 = Math.ceil(origConfirmed / 2);
+    const hasSuggested = editor.task!.suggested_minutes != null || origConfirmed > 0;
+    return [
+      {
+        ...fromTask(editor.task, day),
+        title: editor.task!.title + "（一）",
+        confirmed_minutes: half1,
+        confirmedHoursText: hours(half1),
+        suggested_minutes: hasSuggested ? half1 : null,
+        suggestedHoursText: hasSuggested ? hours(half1) : "",
+      },
+      {
+        ...fromTask(editor.task, day),
+        title: editor.task!.title + "（二）",
+        confirmed_minutes: half2,
+        confirmedHoursText: hours(half2),
+        suggested_minutes: hasSuggested ? half2 : null,
+        suggestedHoursText: hasSuggested ? hours(half2) : "",
+      },
+    ];
+  });
   const [error, setError] = useState(""),
     [saving, setSaving] = useState(false),
     [projects, setProjects] = useState<string[]>([]),
@@ -2251,11 +2265,29 @@ function TaskEditor({
             );
           }
         }
+        const extra: Partial<Draft> = {};
+        if (key === "confirmed_minutes") {
+          const mins = Math.min(1440, Math.max(0, Math.round(Number(value) || 0)));
+          extra.confirmed_minutes = mins;
+          extra.confirmedHoursText = hours(mins);
+          extra.suggested_minutes = mins;
+          extra.suggestedHoursText = hours(mins);
+          extra.time_locked = mins > 0;
+        } else if (key === "suggested_minutes") {
+          if (value === null || value === undefined || value === "") {
+            extra.suggested_minutes = null;
+            extra.suggestedHoursText = "";
+          } else {
+            const mins = Math.min(1440, Math.max(0, Math.round(Number(value) || 0)));
+            extra.suggested_minutes = mins;
+            extra.suggestedHoursText = hours(mins);
+          }
+        }
         return {
           ...p,
           [key]: value,
           ...(key === "project" ? { title: nextTitle } : {}),
-          ...(key === "confirmed_minutes" ? { time_locked: true } : {}),
+          ...extra,
           // 待办设为已完成时，工作日期自动选为当天
           ...(key === "status" && value === "delivered" && p.status === "requested"
             ? { date: todayStr }
@@ -2277,6 +2309,9 @@ function TaskEditor({
             category: t.category || "任务",
             status: t.status || "requested",
             confirmed_minutes: t.confirmed_minutes,
+            confirmedHoursText: hours(t.confirmed_minutes || 0),
+            suggested_minutes: t.confirmed_minutes > 0 ? t.confirmed_minutes : null,
+            suggestedHoursText: t.confirmed_minutes > 0 ? hours(t.confirmed_minutes) : "",
             time_locked: t.time_locked,
           }
         : base,
@@ -2560,7 +2595,76 @@ function TaskEditor({
               {!hidden.has("confirmed_minutes") && (
                 <>
                   <label>
-                    预计工时（Gitee 预估工时，分钟）
+                    完成工时（小时，自动同步预计工时）
+                    <div className="minute-input">
+                      <button
+                        type="button"
+                        aria-label={"减少工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "confirmed_minutes",
+                            Math.max(0, p.confirmed_minutes - step),
+                          )
+                        }
+                      >
+                        −
+                      </button>
+                      <input
+                        aria-label={"完成工时小时 " + (i + 1)}
+                        type="number"
+                        required
+                        min="0"
+                        max="24"
+                        step="any"
+                        value={
+                          p.confirmedHoursText !== undefined
+                            ? p.confirmedHoursText
+                            : hours(p.confirmed_minutes)
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setParts((prev) =>
+                            prev.map((item, j) => {
+                              if (j !== i) return item;
+                              if (raw.trim() === "") {
+                                return { ...item, confirmedHoursText: raw };
+                              }
+                              const num = Number(raw);
+                              if (!Number.isFinite(num) || num < 0 || num > 24) {
+                                return { ...item, confirmedHoursText: raw };
+                              }
+                              const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
+                              return {
+                                ...item,
+                                confirmed_minutes: mins,
+                                confirmedHoursText: raw,
+                                suggested_minutes: mins,
+                                suggestedHoursText: hours(mins),
+                                time_locked: mins > 0,
+                              };
+                            }),
+                          );
+                        }}
+                      />
+                      <button
+                        type="button"
+                        aria-label={"增加工时 " + (i + 1)}
+                        onClick={() =>
+                          change(
+                            i,
+                            "confirmed_minutes",
+                            Math.min(1440, p.confirmed_minutes + step),
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                      <span>= {p.confirmed_minutes} 分钟</span>
+                    </div>
+                  </label>
+                  <label>
+                    预计工时（Gitee 预估工时，小时）
                     <div className="minute-input">
                       <button
                         type="button"
@@ -2576,19 +2680,42 @@ function TaskEditor({
                         −
                       </button>
                       <input
-                        aria-label={"预计工时分钟 " + (i + 1)}
+                        aria-label={"预计工时小时 " + (i + 1)}
                         type="number"
                         min="0"
-                        max="1440"
-                        step="1"
+                        max="24"
+                        step="any"
                         placeholder="未设置"
-                        value={p.suggested_minutes == null ? "" : p.suggested_minutes}
+                        value={
+                          p.suggestedHoursText !== undefined
+                            ? p.suggestedHoursText
+                            : p.suggested_minutes == null
+                              ? ""
+                              : hours(p.suggested_minutes)
+                        }
                         onChange={(e) => {
-                          const val = e.target.value.trim();
-                          change(
-                            i,
-                            "suggested_minutes",
-                            val === "" ? null : Math.max(0, Number(val)),
+                          const raw = e.target.value;
+                          setParts((prev) =>
+                            prev.map((item, j) => {
+                              if (j !== i) return item;
+                              if (raw.trim() === "") {
+                                return {
+                                  ...item,
+                                  suggested_minutes: null,
+                                  suggestedHoursText: "",
+                                };
+                              }
+                              const num = Number(raw);
+                              if (!Number.isFinite(num) || num < 0 || num > 24) {
+                                return { ...item, suggestedHoursText: raw };
+                              }
+                              const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
+                              return {
+                                ...item,
+                                suggested_minutes: mins,
+                                suggestedHoursText: raw,
+                              };
+                            }),
                           );
                         }}
                       />
@@ -2605,51 +2732,11 @@ function TaskEditor({
                       >
                         +
                       </button>
-                      <span>= {hours(p.suggested_minutes ?? 0)} h</span>
-                    </div>
-                  </label>
-                  <label>
-                    完成工时（具体的完成工时，分钟）
-                    <div className="minute-input">
-                      <button
-                        type="button"
-                        aria-label={"减少工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "confirmed_minutes",
-                            Math.max(0, p.confirmed_minutes - step),
-                          )
-                        }
-                      >
-                        −
-                      </button>
-                      <input
-                        aria-label={"确认工时分钟 " + (i + 1)}
-                        type="number"
-                        required
-                        min="0"
-                        max="1440"
-                        step="1"
-                        value={p.confirmed_minutes}
-                        onChange={(e) =>
-                          change(i, "confirmed_minutes", Number(e.target.value))
-                        }
-                      />
-                      <button
-                        type="button"
-                        aria-label={"增加工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "confirmed_minutes",
-                            Math.min(1440, p.confirmed_minutes + step),
-                          )
-                        }
-                      >
-                        +
-                      </button>
-                      <span>= {hours(p.confirmed_minutes)} h</span>
+                      <span>
+                        {p.suggested_minutes != null
+                          ? `= ${p.suggested_minutes} 分钟`
+                          : "未设置"}
+                      </span>
                     </div>
                   </label>
                 </>
