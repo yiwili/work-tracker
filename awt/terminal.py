@@ -256,11 +256,14 @@ class Terminal:
             targets.append({'task_id':item['task_id'],'program_id':program_id,'issue_type_id':issue_type})
         if not targets:self.console.print('没有需要创建的工作项。');return
         self.table('将创建的Gitee企业工作项',['标题','项目','预估小时'],[(i['title'],names[t['program_id']],f"{i['minutes']/60:g}") for t in targets for i in preview['items'] if i['task_id']==t['task_id']])
-        self.console.print('只发送上述预览内容，工时写入预估工时；不会向任何Gitee代码仓库提交。')
+        if preview.get('workload_configured'):
+            self.console.print('预计工时与登记工时使用同一时长。')
+        else:
+            self.console.print('工时登记令牌尚未配置，本次只写预计工时。')
         if not self.confirm(f"确认在企业 #{preview['enterprise_id']} 创建上述 {len(targets)} 条工作项？",False):
             self.console.print('已取消，没有发送创建请求。');return
         result=self.post('/gitee/enterprise/publish',{'batch_id':preview['batch_id'],'confirmed':True,'targets':targets})
-        self.table('创建结果',['本地工作项','状态','链接/反馈'],[(i['task_id'],i['status'],i['url'] or i['error']) for i in result['items']])
+        self.table('创建结果',['本地工作项','状态','链接/反馈'],[(i['task_id'],i['status'],' · '.join(filter(None, (i['url'], i['error'])))) for i in result['items']])
 
     def change_date(self):
         value=self.ask('工作日期（YYYY-MM-DD）',self.day);date.fromisoformat(value);self.day=value

@@ -343,6 +343,7 @@ def test_match_program_other_blank_and_shanghai_prefers_non_2026_and_default_tas
 
 def test_configurable_assignee_and_completed_state_on_publish_and_markdown(client, monkeypatch):
     c, engine = client
+    monkeypatch.setenv('GITEE_ENTERPRISE_WORKLOAD_TOKEN', 'workload-test-token')
     monkeypatch.setattr(
         ge,
         '_paged',
@@ -402,6 +403,9 @@ def test_configurable_assignee_and_completed_state_on_publish_and_markdown(clien
     t_create = task(c, '【上海工程】新建已完成与负责人测试', 90)
     t_replace = task(c, '【上海工程】替换更新已完成与负责人测试', 90)
     p = preview(c, [t_create, t_replace])
+    assert p['workload_configured'] is True
+    assert '预计工时：1.5h' in p['items'][0]['description']
+    assert '待人工核对' not in p['items'][0]['description']
     assert p['assignee'] == {
         'id': 501,
         'name': '张三',
@@ -416,9 +420,19 @@ def test_configurable_assignee_and_completed_state_on_publish_and_markdown(clien
             return {'id': 701, 'ident': 'I701', 'issue_url': 'https://gitee.com/ent/issue/701'}
         if tool == 'update_enterprise_issue':
             return {'id': int(arguments['issue_id']), 'issue_url': f"https://gitee.com/ent/issue/{arguments['issue_id']}"}
+        if tool == 'get_enterprise_issue_detail':
+            issue_id = int(arguments['issue_id'])
+            return {'id': issue_id, 'registered_duration': 0 if issue_id == 701 else 1.5}
         raise AssertionError(f'Unexpected tool {tool}')
 
     monkeypatch.setattr(ge, '_tool', mock_tool)
+    registrations = []
+
+    def register(url, *, headers, json, timeout, trust_env):
+        registrations.append((url, headers, json))
+        return ge.httpx.Response(201)
+
+    monkeypatch.setattr(ge.httpx, 'post', register)
     pub_res = c.post(
         '/api/gitee/enterprise/publish',
         json={
@@ -435,18 +449,26 @@ def test_configurable_assignee_and_completed_state_on_publish_and_markdown(clien
     assert pub['created'] == 2
     assert pub['replaced'] == 1
     assert all(item['remote_state'] == '已完成' for item in pub['items'])
+    assert all(not item['error'] for item in pub['items'])
+    assert registrations == [(
+        'https://api.gitee.com/enterprises/7/workloads/batch_create',
+        {'Authorization': 'Bearer workload-test-token'},
+        {'workloads': [{'issue_id': 701, 'registered_at': '2026-10-24',
+                        'owner_id': 501, 'duration': 1.5, 'left_duration': 0}]},
+    )]
 
     # New create + follow-up update to Done state, and direct update for replaced issue
-    assert [c_name for c_name, _ in calls] == [
+    writes = [(tool, arguments) for tool, arguments in calls if tool != 'get_enterprise_issue_detail']
+    assert [c_name for c_name, _ in writes] == [
         'create_enterprise_issue',
         'update_enterprise_issue',
         'update_enterprise_issue',
     ]
-    create_args = calls[0][1]
+    create_args = writes[0][1]
     assert create_args['assignee_id'] == 501
-    state_update_args = calls[1][1]
+    state_update_args = writes[1][1]
     assert state_update_args == {'enterprise_id': 7, 'issue_id': '701', 'issue_state_id': 88}
-    replace_args = calls[2][1]
+    replace_args = writes[2][1]
     assert replace_args['assignee_id'] == 501
     assert replace_args['issue_state_id'] == 88
     assert replace_args['duration'] == 90

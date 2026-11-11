@@ -40,10 +40,13 @@ export function EnterpriseSettings({
     [prefixes, setPrefixes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
+  const [workloadToken, setWorkloadToken] = useState("");
+  const [workloadConfigured, setWorkloadConfigured] = useState(false);
   useEffect(() => {
     enterpriseApi("status", undefined, "GET")
       .then((s) => {
         setConfigured(s.configured);
+        setWorkloadConfigured(Boolean(s.workload_configured));
         setPrograms(s.programs);
         setMembers(Array.isArray(s.members) ? s.members : []);
         setPrefixes(s.common_prefixes);
@@ -98,6 +101,37 @@ export function EnterpriseSettings({
           }
         />
       </label>
+      <label>
+        工时登记令牌
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={workloadToken}
+          onChange={(e) => setWorkloadToken(e.target.value)}
+          placeholder={workloadConfigured ? "已配置" : "填写有工时登记权限的企业 OpenAPI 令牌"}
+        />
+      </label>
+      <div className="actions">
+        <button type="button" className="outline" disabled={busy || !workloadToken.trim()}
+          onClick={() => run(async () => {
+            await enterpriseApi("workload-token", { api_key: workloadToken });
+            setWorkloadToken("");
+            setWorkloadConfigured(true);
+            setMessage("已保存工时登记令牌。");
+          })}>
+          保存工时登记令牌
+        </button>
+        {workloadConfigured && (
+          <button type="button" className="outline" disabled={busy}
+            onClick={() => run(async () => {
+              const r = await enterpriseApi("workload-token", undefined, "DELETE");
+              setWorkloadConfigured(Boolean(r.configured));
+              setMessage(r.configured ? "当前使用环境变量中的工时登记令牌。" : "已移除工时登记令牌。");
+            })}>
+            移除工时登记令牌
+          </button>
+        )}
+      </div>
       <div className="actions">
         <button
           type="button"

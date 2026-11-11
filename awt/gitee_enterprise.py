@@ -1,15 +1,16 @@
 """Gitee Enterprise: explicit preview, project matching and guarded creation.
 
-Gitee only accepts MCP enterprise tokens from the official mcp-gitee-ent
-client, so all calls are relayed through it (see gitee_mcp).
-Only titles, reviewed descriptions, date and estimated minutes leave the app.
+Work item calls use the official mcp-gitee-ent client. Workload registration
+uses the Enterprise OpenAPI with a separate credential.
 """
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from threading import Lock
 from urllib.parse import urlparse
 from uuid import uuid4
+import httpx
 from sqlalchemy import select, and_, update
 from . import db, git_tools, gitee, gitee_mcp
 from .collectors import stable
@@ -17,6 +18,8 @@ from .privacy import redact
 
 publish_lock = Lock()
 _orig_mcp_call = gitee_mcp.call
+WORKLOAD_CREDENTIAL = 'gitee-enterprise-workload'
+WORKLOAD_UNCERTAIN = '工时登记结果待核对'
 
 
 class EnterpriseError(ValueError):
@@ -27,6 +30,57 @@ class EnterpriseError(ValueError):
 
 def token():
     return gitee.token('gitee-enterprise')
+
+
+def workload_token():
+    return _clean_credential(gitee.token(WORKLOAD_CREDENTIAL))
+
+
+def _register_workload(enterprise_id, issue_id, date, minutes, assignee_id,
+                       publish_key, workload_key, prior_error):
+    unresolved = prior_error if prior_error.startswith(WORKLOAD_UNCERTAIN) else ''
+    if not workload_key:
+        return unresolved or '未登记工时：请在 Gitee 企业版配置中保存工时登记令牌'
+    try:
+        detail = _tool('get_enterprise_issue_detail', {
+            'enterprise_id': enterprise_id, 'issue_id': str(issue_id),
+        }, credential=publish_key)
+        if not isinstance(detail, dict) or detail.get('id') != issue_id:
+            return unresolved or '未登记工时：无法核实远端工作项'
+        registered = Decimal(str(detail['registered_duration']))
+    except (EnterpriseError, KeyError, InvalidOperation):
+        return unresolved or '未登记工时：无法读取远端已登记工时'
+
+    hours = round(Decimal(minutes) / 60, 2)
+    if registered.is_finite() and registered == hours:
+        return ''
+    if unresolved:
+        return unresolved
+    if not registered.is_finite() or registered != 0:
+        return '请在 Gitee 核对登记工时：该工作项已有与预计工时不同的登记记录'
+    if assignee_id is None:
+        assignee = detail.get('assignee')
+        assignee_id = detail.get('assignee_id') or (assignee.get('id') if isinstance(assignee, dict) else None)
+    if type(assignee_id) is not int or assignee_id <= 0:
+        return '未登记工时：请先设置工作项负责人'
+
+    try:
+        response = httpx.post(
+            f'{gitee_mcp.API}/{enterprise_id}/workloads/batch_create',
+            headers={'Authorization': f'Bearer {workload_key}'},
+            json={'workloads': [{
+                'issue_id': issue_id, 'registered_at': date, 'owner_id': assignee_id,
+                'duration': float(hours), 'left_duration': 0,
+            }]},
+            timeout=30, trust_env=False,
+        )
+    except httpx.RequestError:
+        return f'{WORKLOAD_UNCERTAIN}：请在 Gitee 查看该工作项的工时明细'
+    if response.status_code == 201:
+        return ''
+    if response.status_code in (400, 401, 403, 404, 422):
+        return f'未登记工时：Gitee 返回 HTTP {response.status_code}，请核对登记令牌、权限和负责人'
+    return f'{WORKLOAD_UNCERTAIN}：Gitee 返回 HTTP {response.status_code}，请查看工时明细'
 
 
 def _friendly(text):
@@ -232,7 +286,7 @@ def _issue_minutes(issue: dict) -> int:
         if minutes > 0:
             return minutes
     desc = str(issue.get('description') or issue.get('details') or '')
-    m = re.search(r'预估工时[：:]\s*(\d+(?:\.\d+)?)h', desc)
+    m = re.search(r'预[估计]工时[：:]\s*(\d+(?:\.\d+)?)h', desc)
     if m:
         try:
             return int(round(float(m.group(1)) * 60))
@@ -1102,7 +1156,7 @@ def status(conn):
             common.append(project)
     cached=conn.execute(select(db.integrations.c.value).where(db.integrations.c.id==f'gitee-enterprise-programs:{settings.gitee_enterprise.enterprise_id}')).scalar() or {}
     cached_members=conn.execute(select(db.integrations.c.value).where(db.integrations.c.id==f'gitee-enterprise-members:{settings.gitee_enterprise.enterprise_id}')).scalar() or {}
-    return {'configured':bool(token()),'config':settings.gitee_enterprise.model_dump(mode='json'),'common_prefixes':common[:30],'programs':cached.get('items',[]),'members':cached_members.get('items',[])}
+    return {'configured':bool(token()),'workload_configured':bool(workload_token()),'config':settings.gitee_enterprise.model_dump(mode='json'),'common_prefixes':common[:30],'programs':cached.get('items',[]),'members':cached_members.get('items',[])}
 
 
 def cache_members(engine, enterprise_id: int) -> list[dict]:
@@ -1343,7 +1397,7 @@ def preview(engine,payload,cloud_client=None):
 
     for task in tasks:
         program_id,reason=match_program(task,catalog,config.rules)
-        description=f"工作日期：{task['date']}\n预估工时：{task['confirmed_minutes']/60:g}h（待人工核对）"
+        description=f"工作日期：{task['date']}\n预计工时：{task['confirmed_minutes']/60:g}h"
         if config.include_details and task['details']:
             description+='\n\n'+redact(task['details'],settings.redact_patterns)
         marker=stable('awt-work-item',config.enterprise_id,task['id'])
@@ -1351,7 +1405,9 @@ def preview(engine,payload,cloud_client=None):
         items.append({'task_id':task['id'],'title':redact(task['title'],settings.redact_patterns),'description':description,
                       'minutes':task['confirmed_minutes'],'prefix':prefix(task),'program_id':program_id,'match_reason':reason,
                       'matched_issue':matched_issues.get(task['id'])})
+    workload_key = workload_token()
     snapshot={'date':str(payload.date),'created_at':now(),'enterprise_id':config.enterprise_id,'account':stable(token()),
+              'workload_account':stable(workload_key),
               'tasks':tasks,'config':config.model_dump(mode='json'),'programs':catalog,'items':items}
     batch_id=uuid4().hex
     with engine.begin() as conn:
@@ -1371,7 +1427,7 @@ def preview(engine,payload,cloud_client=None):
         else None
     )
     return {'batch_id':batch_id,'date':str(payload.date),'enterprise_id':config.enterprise_id,'programs':catalog,
-            'assignee':assignee_summary,
+            'assignee':assignee_summary,'workload_configured':bool(workload_key),
             'remote_day_issues':remote_day_issues,
             'items':[{**i,'existing':links.get(i['task_id'])} for i in items]}
 
@@ -1416,6 +1472,7 @@ def publish(engine,payload,cloud_client=None):
                 raise EnterpriseError(f'发布前云端同步失败: {exc}') from None
 
         publish_key=token()
+        workload_key=workload_token()
         with engine.connect() as conn:
             snapshot=conn.execute(select(db.gitee_batches.c.snapshot).where(db.gitee_batches.c.id==payload.batch_id)).scalar()
             if not snapshot:
@@ -1424,6 +1481,8 @@ def publish(engine,payload,cloud_client=None):
                 raise ValueError('预览已过期，请重新预览后提交')
             if stable(publish_key)!=snapshot['account'] or get_settings(conn).gitee_enterprise.model_dump(mode='json')!=snapshot['config']:
                 raise ValueError('企业凭据或映射设置已变更，请重新预览')
+            if stable(workload_key) != snapshot.get('workload_account'):
+                raise ValueError('工时登记配置或预览格式已变更，请重新预览')
             if task_snapshot(conn,snapshot['date'],[t['id'] for t in snapshot['tasks']])!=snapshot['tasks']:
                 raise ValueError('预览后工作内容或工时已修改，请重新预览后提交')
 
@@ -1606,6 +1665,10 @@ def publish(engine,payload,cloud_client=None):
                         remote_state_label = '已完成'
                 except EnterpriseError as exc:
                     record.update(status='uncertain' if exc.uncertain else 'failed',error=str(exc))
+            should_register = record['status'] == 'created' and item['minutes'] > 0
+            prior_workload_error = (prior.get('error') or '') if prior and prior.get('issue_id') == record['issue_id'] else ''
+            if should_register and workload_key:
+                record['error'] = f'{WORKLOAD_UNCERTAIN}：请在 Gitee 查看该工作项的工时明细'
             record['updated_at']=now()
             with engine.begin() as conn:
                 upsert(conn,db.gitee_links,record,'id')
@@ -1628,6 +1691,16 @@ def publish(engine,payload,cloud_client=None):
                             }
                         ],
                     )
+
+            if should_register:
+                workload_error = _register_workload(
+                    enterprise_id, int(record['issue_id']), snapshot['date'], item['minutes'],
+                    assignee_id, publish_key, workload_key, prior_workload_error,
+                )
+                if workload_error != record['error']:
+                    record.update(error=workload_error, updated_at=now())
+                    with engine.begin() as conn:
+                        upsert(conn, db.gitee_links, record, 'id')
 
             if is_unified and c_client and req_id:
                 try:

@@ -380,6 +380,16 @@ def create_app(engine=None):
         (db.data_dir()/'gitee-enterprise-credential.json').unlink(missing_ok=True)
         return {'configured':bool(gitee_enterprise.token())}
 
+    @app.post('/api/gitee/enterprise/workload-token')
+    def enterprise_workload_token(payload:ModelKeyInput):
+        gitee.save_token(payload.api_key.get_secret_value(), gitee_enterprise.WORKLOAD_CREDENTIAL)
+        return {'configured':True}
+
+    @app.delete('/api/gitee/enterprise/workload-token')
+    def delete_enterprise_workload_token():
+        (db.data_dir()/f'{gitee_enterprise.WORKLOAD_CREDENTIAL}-credential.json').unlink(missing_ok=True)
+        return {'configured':bool(gitee_enterprise.workload_token())}
+
     @app.get('/api/manual-options')
     def manual_options(refresh: bool = False):
         ent_token_configured = bool(gitee_enterprise.token())

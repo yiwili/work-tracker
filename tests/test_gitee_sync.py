@@ -10,7 +10,7 @@ from awt.app import create_app
 def sync_client(tmp_path, monkeypatch):
     monkeypatch.setenv("AWT_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(ge, "token", lambda: "ent-token-123")
-    monkeypatch.setattr(gitee, "token", lambda: "v5-token-456")
+    monkeypatch.setattr(gitee, "token", lambda service="gitee": "v5-token-456" if service == "gitee" else "")
 
     engine = db.make_engine(tmp_path / "sync.db")
     with TestClient(create_app(engine)) as c:

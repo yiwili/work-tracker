@@ -41,6 +41,7 @@ type Item = {
 type Preview = {
   batch_id: string;
   enterprise_id: number;
+  workload_configured?: boolean;
   assignee?: {
     id?: number | null;
     name?: string;
@@ -309,6 +310,9 @@ export function GiteePublishModal({
               {preview.assignee?.name || "未配置（可在企业设置中指定）"} ·
               推送状态：已完成
             </p>
+            {preview.workload_configured === false && (
+              <p className="muted">工时登记令牌尚未配置，本次只写预计工时。可在 Gitee 企业版配置中保存令牌。</p>
+            )}
             {preview.remote_day_issues &&
               preview.remote_day_issues.length > 0 && (
                 <details className="gitee-remote-existing-panel" open>

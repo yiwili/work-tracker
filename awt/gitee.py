@@ -40,6 +40,8 @@ def token(service='gitee'):
             raise ValueError('Gitee本机凭据无法读取，请重新保存Token') from None
     if service == 'cloud-session':
         return ''
+    if service == 'gitee-enterprise-workload':
+        return os.environ.get('GITEE_ENTERPRISE_WORKLOAD_TOKEN', '')
     if service=='gitee':
         ent_path=db.data_dir()/'gitee-enterprise-credential.json'
         if ent_path.exists():
