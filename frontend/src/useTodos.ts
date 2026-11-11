@@ -55,7 +55,7 @@ export function formatTitleWithPrefix(
   const proj = (project || "").trim();
   let pfx = "";
 
-  if (proj && proj !== "未归属项目" && proj !== "None") {
+  if (proj && proj !== "未归属项目" && proj !== "空" && proj !== "None") {
     pfx = projectPrefixes[proj] || "";
     if (!pfx) {
       for (const [k, v] of Object.entries(projectPrefixes)) {
@@ -68,13 +68,7 @@ export function formatTitleWithPrefix(
   }
 
   if (!pfx) {
-    if (!proj || proj === "未归属项目") {
-      pfx = defaultPrefix || "其他";
-    } else {
-      const parts = proj.split("/");
-      const clean = parts[parts.length - 1].trim();
-      pfx = clean.slice(0, 6) || defaultPrefix || "其他";
-    }
+    pfx = defaultPrefix || "其他";
   }
 
   let cleanContent = trimmed;

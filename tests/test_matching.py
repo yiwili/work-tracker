@@ -530,6 +530,12 @@ def test_format_task_title_with_prefix(tmp_path, monkeypatch):
         res7 = format_task_title_with_prefix(conn, "整理部门月度汇报", "未归属项目", settings)
         assert res7 == "【其他】整理部门月度汇报"
 
+        res8 = format_task_title_with_prefix(conn, "调试未知仓库脚本", "completely-unknown-repo", settings)
+        assert res8 == "【其他】调试未知仓库脚本"
+
+        res9 = format_task_title_with_prefix(conn, "协助处理临时事务", "空", settings)
+        assert res9 == "【其他】协助处理临时事务"
+
     engine.dispose()
 
 

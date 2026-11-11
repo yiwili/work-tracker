@@ -304,3 +304,37 @@ def test_manual_options_recovers_from_cached_integrations(tmp_path, monkeypatch)
         assert data['enterprise_id'] == 88
         assert data['projects'] == ['离线缓存项目']
     engine.dispose()
+
+
+def test_match_program_other_blank_and_shanghai_prefers_non_2026_and_default_task_type(client, monkeypatch):
+    catalog_with_blank = CATALOG + [
+        {'id': 44, 'name': '上海工程2026归档', 'ident': 'SH2026', 'status': 0},
+        {'id': 99, 'name': '空', 'ident': '空', 'status': 0},
+    ]
+    assert ge.match_program({'title': '【其他】整理周报', 'project': '空'}, catalog_with_blank, [])[0] == 99
+    assert ge.match_program({'title': '无匹配项目测试', 'project': '完全未知项目'}, catalog_with_blank, [])[0] == 99
+    assert ge.match_program({'title': '【上海工程】修复达梦报错', 'project': 'archive-system-2026'}, catalog_with_blank, [])[0] == 11
+
+    c, _ = client
+    tid = task(c, '【其他】通用排查工作', 60)
+    monkeypatch.setattr(ge, 'programs', lambda enterprise_id: catalog_with_blank)
+    p = preview(c, [tid])
+    assert p['items'][0]['program_id'] == 99
+
+    posted = []
+    def mock_tool(tool, arguments, credential=None, uncertain=False):
+        posted.append((tool, arguments))
+        return {'id': 555, 'ident': '555'}
+    monkeypatch.setattr(ge, '_tool', mock_tool)
+    pub = c.post(
+        '/api/gitee/enterprise/publish',
+        json={
+            'batch_id': p['batch_id'],
+            'confirmed': True,
+            'targets': [{'task_id': tid, 'program_id': 99}],
+        },
+    )
+    pub.raise_for_status()
+    assert posted[0][0] == 'create_enterprise_issue'
+    assert posted[0][1]['issue_type_id'] == 9
+    assert 'category' not in posted[0][1]

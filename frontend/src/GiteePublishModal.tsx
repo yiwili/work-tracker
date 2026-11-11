@@ -116,8 +116,10 @@ export function GiteePublishModal({
         ),
       );
       setResults({});
-      setChosenTypes({});
       setTypes({});
+      const findTaskTypeId = (list?: IssueType[]) =>
+        list?.find((t) => t.name.trim() === "任务" || t.category === "task")
+          ?.id || 0;
       const typeLists = await Promise.all(
         [
           ...new Set(
@@ -135,7 +137,19 @@ export function GiteePublishModal({
             ] as const,
         ),
       );
-      setTypes(Object.fromEntries(typeLists));
+      const nextTypes = Object.fromEntries(typeLists) as Record<
+        number,
+        IssueType[]
+      >;
+      setTypes(nextTypes);
+      setChosenTypes(
+        Object.fromEntries(
+          p.items.map((i) => [
+            i.task_id,
+            i.program_id ? findTaskTypeId(nextTypes[i.program_id]) : 0,
+          ]),
+        ),
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -158,7 +172,13 @@ export function GiteePublishModal({
 
   const changeProject = async (id: string, program: number) => {
     setTargets((v) => ({ ...v, [id]: program }));
-    setChosenTypes((v) => ({ ...v, [id]: 0 }));
+    const pickTaskType = (list?: IssueType[]) =>
+      list?.find((t) => t.name.trim() === "任务" || t.category === "task")
+        ?.id || 0;
+    setChosenTypes((v) => ({
+      ...v,
+      [id]: program && types[program] ? pickTaskType(types[program]) : 0,
+    }));
     setAck(false);
     if (program && preview && !types[program]) {
       setBusy(true);
@@ -169,6 +189,7 @@ export function GiteePublishModal({
           "GET",
         );
         setTypes((v) => ({ ...v, [program]: values }));
+        setChosenTypes((v) => ({ ...v, [id]: pickTaskType(values) }));
       } catch (e) {
         setError((e as Error).message);
       } finally {

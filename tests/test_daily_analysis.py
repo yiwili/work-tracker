@@ -565,3 +565,104 @@ def test_overview_filters_undetected_sources_and_marks_detected(app_client, tmp_
         assert 'codex' in res['selected_sources']
         assert 'gemini' not in res['selected_sources']
         assert 'deepseek_harness' not in res['selected_sources']
+
+
+def test_ai_task_fixed_template_shanghai_mapping_and_blank_other_fallback(app_client, monkeypatch):
+    client, engine = app_client
+    catalog = [
+        {'id': 11, 'name': '上海工程技术大学档案系统', 'ident': 'SHGC', 'status': 0},
+        {'id': 22, 'name': '2026档案系统', 'ident': '2026', 'status': 0},
+        {'id': 99, 'name': '空', 'ident': '空', 'status': 0},
+    ]
+    with engine.begin() as conn:
+        service.upsert(
+            conn,
+            db.integrations,
+            {'id': 'gitee-enterprise-programs:7', 'value': {'items': catalog}},
+            'id',
+        )
+        conn.execute(
+            insert(db.events),
+            [
+                {
+                    'id': 'ev-sh',
+                    'source': 'codex',
+                    'session_id': 's1',
+                    'occurred_at': '2026-10-24T01:00:00+00:00',
+                    'kind': 'user_prompt',
+                    'summary': '修复上海工程达梦环境约束报错',
+                    'cwd': '/repo/archive-system-2026',
+                    'project': 'archive-system-2026',
+                    'raw_ref': 'local',
+                    'metadata': {},
+                },
+                {
+                    'id': 'ev-misc',
+                    'source': 'codex',
+                    'session_id': 's2',
+                    'occurred_at': '2026-10-24T02:00:00+00:00',
+                    'kind': 'user_prompt',
+                    'summary': '整理常用命令备忘',
+                    'cwd': '/repo/archive-system-2026',
+                    'project': 'archive-system-2026',
+                    'raw_ref': 'local',
+                    'metadata': {},
+                },
+            ],
+        )
+
+    s = client.get('/api/settings').json()
+    s['gitee_enterprise'] = {
+        'enterprise_id': 7,
+        'include_details': True,
+        'rules': [
+            {'pattern': '上海工程', 'mode': 'prefix', 'program_id': 11},
+            {'pattern': '2026', 'mode': 'prefix', 'program_id': 22},
+        ],
+    }
+    client.put('/api/settings', json=s).raise_for_status()
+
+    from awt import prompts
+    assert '不要在 JSON 中输出 category' in prompts.default('task_writer')
+
+    seen_hints = []
+
+    def complete(settings, system, text, **kwargs):
+        payload = json.loads(text)
+        seen_hints.append(payload.get('project_hints'))
+        return json.dumps(
+            {
+                'summary': '完成问题排查与记录整理',
+                'tasks': [
+                    {
+                        'title': '【上海工程】修复达梦环境约束报错',
+                        'details': '在 archive-system-2026 目录下修复上海工程问题',
+                        'project': 'archive-system-2026',
+                        'refs': ['e1'],
+                    },
+                    {
+                        'title': '整理常用命令备忘',
+                        'details': '未指定明确归属项目',
+                        'project': '',
+                        'refs': ['e2'],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(model_provider, 'complete', scope_model(complete))
+    r = client.post('/api/analyze?date=2026-10-24', json={})
+    r.raise_for_status()
+    assert seen_hints and seen_hints[0]['default_prefix'] == '其他'
+    assert seen_hints[0]['default_project'] == '空'
+
+    tasks = client.get('/api/tasks?date=2026-10-24').json()
+    by_title = {t['title']: t for t in tasks}
+    assert '【上海工程】修复达梦环境约束报错' in by_title
+    assert by_title['【上海工程】修复达梦环境约束报错']['project'] == '上海工程技术大学档案系统'
+    assert by_title['【上海工程】修复达梦环境约束报错']['category'] == '任务'
+
+    assert '【其他】整理常用命令备忘' in by_title
+    assert by_title['【其他】整理常用命令备忘']['project'] == '空'
+    assert by_title['【其他】整理常用命令备忘']['category'] == '任务'

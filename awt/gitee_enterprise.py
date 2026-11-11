@@ -701,6 +701,15 @@ def prefix(task):
     return match.group(1).strip() if match else task.get('project','').strip()
 
 
+def _blank_program(catalog):
+    for r in catalog:
+        name = str(r.get('name') or '').strip()
+        ident = str(r.get('ident') or '').strip()
+        if name == '空' or ident == '空':
+            return r['id']
+    return None
+
+
 def match_program(task, catalog, rules):
     key=prefix(task);available={r['id'] for r in catalog};matches=[]
     for rule in rules:
@@ -717,13 +726,24 @@ def match_program(task, catalog, rules):
             return next(iter(ids)),'已保存的标题/项目前缀映射'
         return None,'映射冲突或目标项目不可用，请手动选择'
     word=normalized(key)
-    if not word:
+    blank_id=_blank_program(catalog)
+    if not word or word in ('其他','其它','未归属项目','空','none','null'):
+        if blank_id is not None:
+            return blank_id,'默认匹配企业「空」项目'
         return None,'没有项目前缀，请手动选择'
     exact=[r for r in catalog if word in (normalized(r['name']),normalized(r['ident']))]
     candidates=exact or ([r for r in catalog if word in normalized(r['name']) or word in normalized(r['ident'])] if len(word)>=2 else [])
+    if '上海工程' in key and len(candidates)>1:
+        non_2026=[r for r in candidates if '2026' not in normalized(r['name'])]
+        if non_2026:
+            candidates=non_2026
     if len(candidates)==1:
         return candidates[0]['id'],'根据项目前缀唯一匹配'
-    return None,'匹配到多个项目，请选择' if candidates else '未匹配到项目，请选择或预设映射'
+    if not candidates:
+        if blank_id is not None:
+            return blank_id,'未匹配到指定项目，默认归入企业「空」项目'
+        return None,'未匹配到项目，请选择或预设映射'
+    return None,'匹配到多个项目，请选择'
 
 
 def task_snapshot(conn,day,ids=None):
@@ -1094,8 +1114,20 @@ def publish(engine,payload,cloud_client=None):
                 action_taken = 'created'
                 body={'title':item['title'],'description':item['description'],'program_id':target.program_id,
                       'duration':item['minutes'],'plan_started_at':snapshot['date']+'T00:00:00','category':'task'}
-                if target.issue_type_id is not None:
-                    body['issue_type_id']=target.issue_type_id
+                resolved_type_id = target.issue_type_id
+                if resolved_type_id is None:
+                    prog_types = types.get(target.program_id, [])
+                    task_type = next(
+                        (
+                            t for t in prog_types
+                            if str(t.get('name') or '').strip() == '任务' or t.get('category') == 'task'
+                        ),
+                        None,
+                    )
+                    if task_type is not None:
+                        resolved_type_id = task_type['id']
+                if resolved_type_id is not None:
+                    body['issue_type_id']=resolved_type_id
                     body.pop('category',None)
                 try:
                     value=_tool('create_enterprise_issue',{'enterprise_id':enterprise_id,**body},credential=publish_key,uncertain=True)

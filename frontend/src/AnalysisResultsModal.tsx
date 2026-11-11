@@ -65,7 +65,7 @@ export function AnalysisResultsModal({
           title: row.title,
           details: row.details,
           project: row.project,
-          category: row.category,
+          category: "任务",
         })),
       });
       const imported = new Set(result.imported || []);
@@ -193,15 +193,12 @@ export function AnalysisResultsModal({
                         />
                       </label>
                       <label>
-                        分类
+                        工作项类型（固定模板）
                         <input
-                          value={row.category}
-                          disabled={saving}
-                          onChange={(e) =>
-                            change(row.fingerprint, {
-                              category: e.target.value,
-                            })
-                          }
+                          value="任务"
+                          readOnly
+                          disabled
+                          title="AI 生成的工作项固定为「任务」模板类型"
                         />
                       </label>
                     </div>

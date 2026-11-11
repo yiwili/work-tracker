@@ -16,7 +16,7 @@ from .git_tools import _as_date, excluded
 from .models import CONVERSATION_SOURCES, SOURCE_FAMILIES
 from .privacy import redact
 
-from . import activity_time, prompts
+from . import activity_time, matching, prompts
 from .work_scope import filter_work, POLICY_VERSION
 
 
@@ -229,13 +229,215 @@ def parse_result(text, valid_refs):
                 raise ValueError()
             if not isinstance(task.get('refs'), list) or not task['refs'] or any(not isinstance(r, str) or r not in valid_refs for r in task['refs']):
                 raise ValueError()
-            if not isinstance(task.get('project', ''), str) or not isinstance(task.get('category', '其他'), str):
+            if task.get('project') is None:
+                task['project'] = ''
+            if task.get('category') is None:
+                task['category'] = '任务'
+            if not isinstance(task.get('project', ''), str) or not isinstance(task.get('category', '任务'), str):
                 raise ValueError()
+        if value.get('summary') is None:
+            value['summary'] = ''
         if not isinstance(value.get('summary', ''), str):
             raise ValueError()
         return value
     except (ValueError, TypeError, KeyError):
         raise model_provider.ModelError('AI 返回格式或证据引用无效，未替换原任务；请重新分析或更换模型') from None
+
+
+_UNASSIGNED_PROJECTS = {"", "未归属项目", "空", "其他", "其它", "None", "none", "null"}
+
+
+def _load_enterprise_catalog(conn, settings) -> list[dict]:
+    ent_id = getattr(getattr(settings, "gitee_enterprise", None), "enterprise_id", 0) or 0
+    if not ent_id:
+        return []
+    cached = conn.execute(
+        select(db.integrations.c.value).where(db.integrations.c.id == f"gitee-enterprise-programs:{ent_id}")
+    ).scalar() or {}
+    items = cached.get("items", []) if isinstance(cached, dict) else []
+    return [p for p in items if isinstance(p, dict)]
+
+
+def _has_blank_program(catalog: list[dict], settings) -> bool:
+    for r in catalog:
+        if str(r.get("name") or "").strip() == "空" or str(r.get("ident") or "").strip() == "空":
+            return True
+    return any(str(p or "").strip() == "空" for p in (getattr(settings, "project_options", []) or []))
+
+
+def _default_unassigned_project(catalog: list[dict], settings) -> str:
+    return "空" if _has_blank_program(catalog, settings) else "未归属项目"
+
+
+def _find_shanghai_program_name(catalog: list[dict], settings) -> str:
+    rules = getattr(getattr(settings, "gitee_enterprise", None), "rules", []) or []
+    by_id = {r.get("id"): str(r.get("name") or "").strip() for r in catalog if r.get("id") and r.get("name")}
+    for rule in rules:
+        pat = str(getattr(rule, "pattern", "") or "").strip()
+        if "上海工程" in pat:
+            mapped = by_id.get(getattr(rule, "program_id", None), "")
+            if mapped and "2026" not in mapped:
+                return mapped
+    for r in catalog:
+        name = str(r.get("name") or "").strip()
+        ident = str(r.get("ident") or "").strip()
+        if ("上海工程" in name or "上海工程" in ident) and "2026" not in name:
+            return name
+    for opt in (getattr(settings, "project_options", []) or []):
+        opt_str = str(opt or "").strip()
+        if "上海工程" in opt_str and "2026" not in opt_str:
+            return opt_str
+    return "上海工程"
+
+
+def _match_enterprise_program_for_key(key: str, catalog: list[dict], settings) -> str:
+    if not key or key in _UNASSIGNED_PROJECTS:
+        return ""
+    norm_key = re.sub(r"[\W_]+", "", key.casefold())
+    if not norm_key:
+        return ""
+    rules = getattr(getattr(settings, "gitee_enterprise", None), "rules", []) or []
+    by_id = {r.get("id"): str(r.get("name") or "").strip() for r in catalog if r.get("id") and r.get("name")}
+    for rule in rules:
+        pat = str(getattr(rule, "pattern", "") or "").strip()
+        if not pat:
+            continue
+        norm_pat = re.sub(r"[\W_]+", "", pat.casefold())
+        if norm_pat and (norm_key == norm_pat or norm_key.startswith(norm_pat)):
+            mapped = by_id.get(getattr(rule, "program_id", None), "")
+            if mapped:
+                return mapped
+    exact = [
+        str(r.get("name") or "").strip()
+        for r in catalog
+        if norm_key in (
+            re.sub(r"[\W_]+", "", str(r.get("name") or "").casefold()),
+            re.sub(r"[\W_]+", "", str(r.get("ident") or "").casefold()),
+        )
+        and str(r.get("name") or "").strip()
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(norm_key) >= 2:
+        cands = [
+            str(r.get("name") or "").strip()
+            for r in catalog
+            if (
+                norm_key in re.sub(r"[\W_]+", "", str(r.get("name") or "").casefold())
+                or norm_key in re.sub(r"[\W_]+", "", str(r.get("ident") or "").casefold())
+            )
+            and str(r.get("name") or "").strip()
+        ]
+        if len(cands) == 1:
+            return cands[0]
+    return ""
+
+
+def _prepend_bracket_prefix(raw_title: str, pfx: str, bracket_style: str = "【】") -> str:
+    clean_pfx = (pfx or "其他").strip() or "其他"
+    open_b = bracket_style[0] if len(bracket_style) == 2 else "【"
+    close_b = bracket_style[1] if len(bracket_style) == 2 else "】"
+    content = (raw_title or "").strip()
+    if content.startswith(clean_pfx):
+        content = content[len(clean_pfx):].lstrip(" :：-_—·")
+    return f"{open_b}{clean_pfx}{close_b}{content}"
+
+
+def _resolve_ai_task_project_and_title(
+    raw_title: str,
+    ai_project: str,
+    supporting: dict,
+    settings,
+    catalog: list[dict],
+    meta: dict,
+    *,
+    allow_event_fallback: bool = True,
+) -> tuple[str, str]:
+    from . import matching
+
+    title = redact((raw_title or "").strip(), settings.redact_patterns)[:500]
+    ai_proj = str(ai_project or "").strip()
+    bracket_style = meta.get("bracket_style") or "【】"
+    has_pfx = matching.has_bracket_prefix(title)
+    title_pfx = matching.extract_prefix_and_content({"title": title})[0] if has_pfx else ""
+
+    ev_projects = {str(e.get("project") or "").strip() for e in supporting.values() if e.get("project")} if supporting else set()
+    ev_project = ""
+    if supporting:
+        ev_project = next(
+            (str(e.get("project") or "").strip() for e in supporting.values() if e.get("kind") == "user_prompt" and e.get("project")),
+            next((str(p) for p in sorted(ev_projects) if p), ""),
+        )
+
+    # 【上海工程】强关联企业中的上海工程项目，不能被仓库目录 2026 / archive-system-2026 覆盖。
+    if "上海工程" in title_pfx or "上海工程" in ai_proj or (not has_pfx and "上海工程" in title):
+        resolved_proj = _find_shanghai_program_name(catalog, settings)
+        resolved_title = title if has_pfx else _prepend_bracket_prefix(title, "上海工程", bracket_style)
+        return resolved_title, resolved_proj
+
+    # 显式【其他】或无项目归属：匹配企业中的「空」项目（无企业配置时保留「未归属项目」）。
+    if title_pfx in ("其他", "其它") or ai_proj in ("其他", "其它", "空"):
+        resolved_proj = _default_unassigned_project(catalog, settings)
+        resolved_title = title if has_pfx else _prepend_bracket_prefix(title, "其他", bracket_style)
+        return resolved_title, resolved_proj
+
+    proj_prefixes = meta.get("project_prefixes") or {}
+    known_opts = set(getattr(settings, "project_options", []) or [])
+
+    if has_pfx:
+        matched_ent = _match_enterprise_program_for_key(title_pfx, catalog, settings) or _match_enterprise_program_for_key(ai_proj, catalog, settings)
+        if matched_ent:
+            return title, matched_ent
+        if ai_proj and ai_proj not in _UNASSIGNED_PROJECTS:
+            if ai_proj in ev_projects or ai_proj in proj_prefixes or ai_proj in known_opts or not catalog:
+                return title, ai_proj
+        if allow_event_fallback and ev_project and ev_project not in _UNASSIGNED_PROJECTS:
+            if not catalog:
+                return title, ev_project
+            ev_ent = _match_enterprise_program_for_key(ev_project, catalog, settings)
+            ev_pfx = proj_prefixes.get(ev_project, "")
+            if title_pfx and (title_pfx == ev_pfx or title_pfx in ev_project or ev_project in title_pfx):
+                return title, ev_ent or ev_project
+            return title, _default_unassigned_project(catalog, settings)
+        if ai_proj and ai_proj not in _UNASSIGNED_PROJECTS:
+            return title, ai_proj
+        return title, _default_unassigned_project(catalog, settings)
+
+    # 无方括号前缀时优先匹配企业项目 / 已配置映射，找不到匹配前缀或无项目时默认使用【其他】+「空」
+    matched_ent = _match_enterprise_program_for_key(ai_proj, catalog, settings)
+    if matched_ent:
+        matched_pfx = proj_prefixes.get(matched_ent, "") or proj_prefixes.get(ai_proj, "")
+        resolved_t = _prepend_bracket_prefix(title, matched_pfx, bracket_style) if (matched_pfx and matched_pfx not in ("其他", "其它")) else title
+        return resolved_t, matched_ent
+    if ai_proj and ai_proj not in _UNASSIGNED_PROJECTS:
+        if not catalog:
+            return (title, ai_proj) if (not allow_event_fallback or not ev_projects or ai_proj in ev_projects) else (title, ev_project or ai_proj)
+        proj_pfx = proj_prefixes.get(ai_proj, "")
+        if proj_pfx and proj_pfx not in ("其他", "其它"):
+            mapped_from_pfx = _match_enterprise_program_for_key(proj_pfx, catalog, settings)
+            return _prepend_bracket_prefix(title, proj_pfx, bracket_style), mapped_from_pfx or ai_proj
+    if not catalog and allow_event_fallback and ev_project and ev_project not in _UNASSIGNED_PROJECTS:
+        return title, ev_project
+    return _prepend_bracket_prefix(title, "其他", bracket_style), _default_unassigned_project(catalog, settings)
+
+
+def _build_project_hints(catalog: list[dict], meta: dict, settings) -> dict | None:
+    program_names = [str(r.get("name") or "").strip() for r in catalog if r.get("name")]
+    rules = getattr(getattr(settings, "gitee_enterprise", None), "rules", []) or []
+    if not program_names and not rules:
+        return None
+    hints: dict[str, object] = {"default_prefix": "其他"}
+    if _has_blank_program(catalog, settings):
+        hints["default_project"] = "空"
+    if program_names:
+        hints["enterprise_programs"] = program_names[:40]
+    shanghai = _find_shanghai_program_name(catalog, settings)
+    if shanghai and (
+        any("上海工程" in n for n in program_names)
+        or any("上海工程" in getattr(r, "pattern", "") for r in rules)
+    ):
+        hints["strong_mappings"] = [{"prefix": "上海工程", "program": shanghai}]
+    return hints
 
 
 def pending_item(task, supporting, previously_deleted):
@@ -245,7 +447,7 @@ def pending_item(task, supporting, previously_deleted):
             'previously_deleted': previously_deleted, 'evidence_ids': sorted(supporting)}
 
 
-def infer_day(records, refs, settings, reviewed, day):
+def infer_day(records, refs, settings, reviewed, day, project_hints=None):
     from .analysis_progress import emit
     # Every stored conversation message is included. Large days use contiguous chronological batches,
     # followed by a final all-day semantic consolidation; no per-message task generation.
@@ -262,6 +464,8 @@ def infer_day(records, refs, settings, reviewed, day):
         chunks.append(current)
     system=prompts.prompt(settings,'task_writer')
     common = {'date': str(day), 'timezone': settings.timezone, 'reviewed': reviewed, 'style_examples':settings.title_examples}
+    if project_hints:
+        common['project_hints'] = project_hints
     if len(chunks) == 1:
         emit(f'归纳工作项：第 1/1 批，{len(records)} 条记录')
         text = model_provider.complete(settings, system, json.dumps({**common, 'conversations': chunks[0]}, ensure_ascii=False),purpose='task_writer')
@@ -295,7 +499,7 @@ def analyze(conn, day, start_day=None, end_day=None, target_minutes=None):
 
 
 def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minutes=None):
-    from .service import category, get_settings, invalidate, list_tasks, now, state_for, upsert
+    from .service import get_settings, invalidate, list_tasks, now, state_for, upsert
     settings = get_settings(conn)
     s_day = start_day or day
     e_day = end_day or day
@@ -317,8 +521,11 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     records, work_refs, scope, filter_requests = filter_work(records,refs,segments,settings)
     refs=work_refs
     date_label = f"{s_day} 至 {e_day}" if str(s_day) != str(e_day) else str(day)
+    initial_catalog = _load_enterprise_catalog(conn, settings)
+    initial_meta = matching.get_prefix_metadata(conn, settings)
+    project_hints = _build_project_hints(initial_catalog, initial_meta, settings)
     if records:
-        result, requests = infer_day(records, refs, settings, reviewed, date_label)
+        result, requests = infer_day(records, refs, settings, reviewed, date_label, project_hints=project_hints)
     else:
         result, requests = {'summary':'所选日期范围内没有可自动计入的实际工作；私人、无关及不足时长的知识梳理已排除。','tasks':[]},0
     requests+=filter_requests
@@ -330,6 +537,8 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     current_rows = day_rows(conn, s_day, current_settings, end_day=e_day)
     if input_hash(current_rows, current_settings) != input_hash(rows, settings):
         raise model_provider.ModelError('分析期间对话或来源范围发生变化，原任务已保留；请重新分析')
+    current_catalog = _load_enterprise_catalog(conn, current_settings)
+    current_meta = matching.get_prefix_metadata(conn, current_settings)
     active_tasks = list_tasks(conn, day)
     report_confirmed = conn.execute(select(db.reports.c.confirmed).where(db.reports.c.date == str(day))).scalar_one_or_none()
     protected = [t for t in active_tasks if report_confirmed or t['origin'] == 'manual' or t['edited'] or (t['confirmed_minutes'] > 0 and t['time_source'] != 'ai_estimate')]
@@ -382,20 +591,21 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
                 f"【{ev_date_label} · AI 分析候选】已跳过第 #{cand_idx} 条历史曾删除且只有对话描述的弱证据候选：{task['title']}"
             )
             continue
-        projects = {e['project'] for e in supporting.values()}
-        project = task.get('project') if task.get('project') in projects else next((e['project'] for e in supporting.values() if e['kind'] == 'user_prompt'), sorted(projects)[0])
-        signature = stable(project, task['title'].strip())
+        resolved_title, project = _resolve_ai_task_project_and_title(
+            task['title'], task.get('project', ''), supporting, current_settings, current_catalog, current_meta
+        )
+        signature = stable(project, resolved_title)
         if signature in used:
             continue
         used.add(signature)
-        fingerprint = 'daily-v2:' + stable(str(day), sorted(supporting), task['title'].strip())
+        fingerprint = 'daily-v2:' + stable(str(day), sorted(supporting), resolved_title)
         previous = conn.execute(select(db.tasks).where(db.tasks.c.fingerprint == fingerprint)).mappings().first()
         if previous and previous['edited'] and not previous['deleted']:
             continue
         generated.append(({'id': previous['id'] if previous else uuid4().hex, 'date': str(day),
-                           'title': redact(task['title'].strip(), settings.redact_patterns),
+                           'title': resolved_title,
                            'details': _format_task_details(task['details'], settings), 'project': project,
-                           'category': redact(task.get('category') or category(task['title']), settings.redact_patterns)[:100],
+                           'category': '任务',
                            'status': state_for(list(supporting.values())), 'origin': 'auto',
                            'confidence': '全天 AI 分析 · 曾被删除' if is_previously_deleted else '全天 AI 分析 · 待审核',
                            'evidence_level': '已有行为证据' if has_behavior else '只有对话描述',
@@ -461,6 +671,8 @@ def import_pending(conn, day, selections):
     protected_ids = {e['id'] for t in protected for e in t['evidence']}
     deleted = list(conn.execute(select(db.tasks).where(and_(db.tasks.c.date == str(day), db.tasks.c.deleted == True, db.tasks.c.edited == True))).mappings())
     deleted_ids = {r for t in deleted for r in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == t['id'])).scalars()}
+    catalog = _load_enterprise_catalog(conn, settings)
+    meta = matching.get_prefix_metadata(conn, settings)
     generated, warnings = [], []
     for selection in selections:
         candidate = pending[selection.fingerprint]
@@ -475,16 +687,18 @@ def import_pending(conn, day, selections):
         if not candidate.get('previously_deleted') and set(rows) & deleted_ids:
             warnings.append(f"已跳过与分析后删除的任务重叠的候选：{candidate['title']}")
             continue
-        title = selection.title if selection.title is not None else candidate['title']
+        raw_title = selection.title if selection.title is not None else candidate['title']
         details = selection.details if selection.details is not None else candidate['details']
-        project = selection.project if selection.project is not None else candidate['project']
-        category_name = selection.category if selection.category is not None else candidate['category']
+        raw_project = selection.project if selection.project is not None else candidate['project']
+        title, project = _resolve_ai_task_project_and_title(
+            raw_title, raw_project, rows, settings, catalog, meta, allow_event_fallback=False
+        )
         status = selection.status or candidate['status']
         # fingerprint 全局唯一：曾删除候选恢复时复用原行（同一工作的既有记录），其余候选新建。
         existing = conn.execute(select(db.tasks.c.id).where(db.tasks.c.fingerprint == candidate['fingerprint'])).scalar_one_or_none()
-        generated.append(({'id': existing or uuid4().hex, 'date': str(day), 'title': redact(title.strip(), settings.redact_patterns)[:500],
-                           'details': _format_task_details(details, settings), 'project': project or '未归属项目',
-                           'category': redact(category_name, settings.redact_patterns)[:100], 'status': status,
+        generated.append(({'id': existing or uuid4().hex, 'date': str(day), 'title': title,
+                           'details': _format_task_details(details, settings), 'project': project or _default_unassigned_project(catalog, settings),
+                           'category': '任务', 'status': status,
                            'origin': 'auto', 'confidence': '全天 AI 分析 · 待审核',
                            'evidence_level': candidate.get('evidence_level', '已有行为证据'),
                            'fingerprint': candidate['fingerprint'], 'edited': False, 'deleted': False, 'is_todo': False, 'started_at': None, 'ended_at': None},

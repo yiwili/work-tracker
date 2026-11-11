@@ -30,11 +30,12 @@ def has_bracket_prefix(title: str | None) -> bool:
     return bool(match and match.group(2).strip())
 
 
-_metadata_cache: dict[str, Any] = {"data": None, "timestamp": 0.0}
+_metadata_cache: dict[str, Any] = {"data": None, "key": None, "timestamp": 0.0}
 
 
 def clear_prefix_cache() -> None:
     _metadata_cache["data"] = None
+    _metadata_cache["key"] = None
     _metadata_cache["timestamp"] = 0.0
 
 
@@ -46,7 +47,21 @@ def get_prefix_metadata(conn, settings=None) -> dict[str, Any]:
     """
     import time
     now = time.time()
-    if _metadata_cache["data"] is not None and (now - _metadata_cache["timestamp"] < 30.0):
+    ent_cfg = getattr(settings, "gitee_enterprise", None) if settings else None
+    ent_id = getattr(ent_cfg, "enterprise_id", 0) or 0 if ent_cfg else 0
+    rules = getattr(ent_cfg, "rules", []) or [] if ent_cfg else []
+    cache_key = (
+        str(getattr(getattr(conn, "engine", None), "url", "")),
+        ent_id,
+        tuple((getattr(r, "pattern", ""), getattr(r, "mode", ""), getattr(r, "program_id", 0)) for r in rules),
+        tuple(getattr(settings, "title_examples", []) or []) if settings else (),
+        tuple(getattr(settings, "project_options", []) or []) if settings else (),
+    )
+    if (
+        _metadata_cache["data"] is not None
+        and _metadata_cache.get("key") == cache_key
+        and (now - _metadata_cache["timestamp"] < 30.0)
+    ):
         return _metadata_cache["data"]
 
     from . import db
@@ -63,7 +78,7 @@ def get_prefix_metadata(conn, settings=None) -> dict[str, Any]:
         b_pair = b_open + b_close
         bracket_counts[b_pair] = bracket_counts.get(b_pair, 0) + 1
         all_prefixes[pfx] = all_prefixes.get(pfx, 0) + 1
-        if proj and proj.strip() and proj.strip() not in ("未归属项目", "None", "none", "null"):
+        if proj and proj.strip() and proj.strip() not in ("未归属项目", "空", "None", "none", "null"):
             p = proj.strip()
             p_dict = project_prefix_counts.setdefault(p, {})
             p_dict[pfx] = p_dict.get(pfx, 0) + 1
@@ -110,17 +125,48 @@ def get_prefix_metadata(conn, settings=None) -> dict[str, Any]:
             if short and short not in project_prefixes:
                 project_prefixes[short] = best_pfx
 
-    if settings and getattr(settings, "gitee_enterprise", None):
-        rules = getattr(settings.gitee_enterprise, "rules", []) or []
+    cached_programs: list[dict[str, Any]] = []
+    if ent_id:
+        try:
+            cached = conn.execute(
+                select(db.integrations.c.value).where(db.integrations.c.id == f"gitee-enterprise-programs:{ent_id}")
+            ).scalar() or {}
+            if isinstance(cached, dict):
+                cached_programs = [p for p in (cached.get("items") or []) if isinstance(p, dict)]
+        except Exception:
+            cached_programs = []
+    prog_by_id = {
+        p.get("id"): str(p.get("name") or "").strip()
+        for p in cached_programs
+        if p.get("id") and p.get("name")
+    }
+
+    if ent_cfg:
         for r in rules:
-            pat = getattr(r, "pattern", "") or ""
+            pat = (getattr(r, "pattern", "") or "").strip()
             mode = getattr(r, "mode", "") or ""
+            pid = getattr(r, "program_id", None)
             if pat and mode in ("prefix", "exact"):
                 if pat not in project_prefixes:
                     project_prefixes[pat] = pat
+                prog_name = prog_by_id.get(pid, "")
+                if prog_name and mode == "prefix" and prog_name not in project_prefixes:
+                    project_prefixes[prog_name] = pat
 
-    general_candidates = ["其他", "其它", "常规", "通用", "综合", "日常", "General", "Misc", "Other"]
-    default_pfx = next((p for p in general_candidates if p in all_prefixes), "其他")
+    for p in cached_programs:
+        pname = str(p.get("name") or "").strip()
+        if pname and "上海工程" in pname and "2026" not in pname:
+            project_prefixes.setdefault(pname, "上海工程")
+    if settings:
+        for opt in getattr(settings, "project_options", []) or []:
+            opt_name = str(opt or "").strip()
+            if opt_name and "上海工程" in opt_name and "2026" not in opt_name:
+                project_prefixes.setdefault(opt_name, "上海工程")
+    project_prefixes.setdefault("上海工程", "上海工程")
+    project_prefixes["空"] = "其他"
+    project_prefixes["未归属项目"] = "其他"
+
+    default_pfx = "其他"
 
     result = {
         "bracket_style": top_bracket,
@@ -129,6 +175,7 @@ def get_prefix_metadata(conn, settings=None) -> dict[str, Any]:
         "known_prefixes": sorted(all_prefixes.keys(), key=lambda k: -all_prefixes[k])[:50],
     }
     _metadata_cache["data"] = result
+    _metadata_cache["key"] = cache_key
     _metadata_cache["timestamp"] = now
     return result
 
@@ -144,7 +191,7 @@ def infer_prefix_via_ai(settings, title: str, project: str, known_prefixes: list
     prompt_text = (
         "你负责为用户手动添加的工作事项/待办推断最合适的单个项目前缀（2-6个字符）。\n"
         "规则：\n"
-        "1. 必须根据关联项目推断；若关联项目为空，结合事项内容推断；若为通用/日常事务，返回历史中使用的通用前缀（如“其他”）。\n"
+        "1. 必须根据关联项目推断；若关联项目为空、未归属、找不到匹配前缀或为通用事务，统一返回默认前缀“其他”。\n"
         "2. 参考历史风格示例的命名习惯与缩写偏好。\n"
         "3. 严格返回 JSON 格式：{\"prefix\":\"项目简称\"}，只需返回前缀文本，不要包含括号。\n"
     )
@@ -201,7 +248,7 @@ def format_task_title_with_prefix(
     proj = (project or "").strip()
     pfx = ""
 
-    if proj and proj not in ("未归属项目", "None", "none", "null"):
+    if proj and proj not in ("未归属项目", "空", "None", "none", "null"):
         pfx = project_prefixes.get(proj, "")
         if not pfx:
             for k, v in project_prefixes.items():
@@ -219,11 +266,7 @@ def format_task_title_with_prefix(
         pfx = infer_prefix_via_ai(settings, raw, proj, meta.get("known_prefixes", [])) or ""
 
     if not pfx:
-        if not proj or proj in ("未归属项目", "None", "none", "null"):
-            pfx = default_pfx
-        else:
-            clean = proj.split("/")[-1].strip()
-            pfx = clean[:6] if clean else default_pfx
+        pfx = default_pfx
 
     clean_content = raw
     if clean_content.startswith(pfx):
