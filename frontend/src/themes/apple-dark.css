@@ -387,6 +387,50 @@
   color: var(--apple-text-primary);
 }
 
+:root[data-theme='apple-dark'] .minute-input button,
+:root[data-theme='apple-dark'] .minute-input input {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .hours-tip-box {
+  background: rgba(41, 151, 255, 0.12);
+  border-color: rgba(41, 151, 255, 0.28);
+  color: #93c5fd;
+}
+
+:root[data-theme='apple-dark'] .hours-input-group {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme='apple-dark'] .hours-group-header label,
+:root[data-theme='apple-dark'] .hours-lock-label {
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .hours-quick-chips .chip {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .hours-quick-chips .chip:hover {
+  background: var(--apple-control-hover);
+}
+
+:root[data-theme='apple-dark'] .hours-quick-chips .chip.active {
+  background: var(--apple-blue);
+  border-color: var(--apple-blue);
+  color: #ffffff;
+}
+
+:root[data-theme='apple-dark'] .hours-quick-chips .chip.reset {
+  background: transparent;
+  color: var(--apple-text-secondary);
+}
+
 :root[data-theme='apple-dark'] .quick-dropdown-panel {
   background: var(--apple-card);
   border-color: var(--apple-border-strong);

@@ -397,8 +397,18 @@ export function StatusQuickSelect({
 }
 
 // -------------------------------------------------------------
-// 3. 工时登记（Gitee 预计工时与具体的完成工时）
+// 3. 工时登记（完成工时即预计工时）
 // -------------------------------------------------------------
+export const HOUR_TEMPLATES = [
+  { label: "0.5h", minutes: 30 },
+  { label: "1h", minutes: 60 },
+  { label: "1.5h", minutes: 90 },
+  { label: "2h", minutes: 120 },
+  { label: "3h", minutes: 180 },
+  { label: "4h", minutes: 240 },
+  { label: "8h", minutes: 480 },
+] as const;
+
 export function HoursQuickRegister({
   task,
   step = 15,
@@ -427,7 +437,7 @@ export function HoursQuickRegister({
         <button
           type="button"
           className="quick-hours-entry-btn"
-          title="点击登记 Gitee 预计工时与完成工时"
+          title="点击登记完成工时（即预计工时）"
           onClick={() => setModalOpen(true)}
         >
           <Clock3 size={13} />
@@ -445,14 +455,6 @@ export function HoursQuickRegister({
           <strong title={task.time_reason}>
             {hours(task.confirmed_minutes)} <small>h</small>
           </strong>
-        </div>
-        <div className="quick-hours-suggested">
-          <span className="hours-kind-label">预计</span>
-          <span>
-            {task.suggested_minutes != null
-              ? `${hours(task.suggested_minutes)} h`
-              : "未设置"}
-          </span>
         </div>
       </div>
 
@@ -493,10 +495,6 @@ function HoursRegisterModal({
   const [confirmedInput, setConfirmedInput] = useState<string>(() =>
     hours(task.confirmed_minutes || 0),
   );
-  const [suggested, setSuggested] = useState<number | null>(task.suggested_minutes);
-  const [suggestedInput, setSuggestedInput] = useState<string>(() =>
-    task.suggested_minutes != null ? hours(task.suggested_minutes) : "",
-  );
   const [locked, setLocked] = useState<boolean>(
     task.time_locked || Boolean(task.confirmed_minutes),
   );
@@ -505,32 +503,10 @@ function HoursRegisterModal({
 
   const applyConfirmedMinutes = (nextMins: number) => {
     const clamped = Math.min(1440, Math.max(0, Math.round(nextMins)));
-    const hText = hours(clamped);
     setConfirmed(clamped);
-    setConfirmedInput(hText);
-    setSuggested(clamped);
-    setSuggestedInput(hText);
+    setConfirmedInput(hours(clamped));
     setLocked(clamped > 0);
   };
-
-  const applySuggestedMinutes = (nextMins: number | null) => {
-    if (nextMins == null) {
-      setSuggested(null);
-      setSuggestedInput("");
-      return;
-    }
-    const clamped = Math.min(1440, Math.max(0, Math.round(nextMins)));
-    setSuggested(clamped);
-    setSuggestedInput(hours(clamped));
-  };
-
-  const presets = [
-    { label: "0.5h", minutes: 30 },
-    { label: "1h", minutes: 60 },
-    { label: "2h", minutes: 120 },
-    { label: "4h", minutes: 240 },
-    { label: "8h", minutes: 480 },
-  ];
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -540,19 +516,8 @@ function HoursRegisterModal({
       setError("完成工时请输入 0 至 24 之间的小时数");
       return;
     }
-    const sRaw = suggestedInput.trim();
-    let finalSuggested: number | null = suggested;
-    if (sRaw === "") {
-      finalSuggested = null;
-    } else {
-      const sNum = Number(sRaw);
-      if (!Number.isFinite(sNum) || sNum < 0 || sNum > 24) {
-        setError("预计工时请输入 0 至 24 之间的小时数");
-        return;
-      }
-      finalSuggested = Math.min(1440, Math.max(0, Math.round(sNum * 60)));
-    }
     const finalConfirmed = Math.min(1440, Math.max(0, Math.round(cNum * 60)));
+    const finalSuggested = finalConfirmed > 0 ? finalConfirmed : null;
     setSaving(true);
     try {
       await onSave(finalConfirmed, finalSuggested, locked);
@@ -590,16 +555,15 @@ function HoursRegisterModal({
 
         <form onSubmit={handleSave} className="hours-register-form">
           <div className="hours-tip-box">
-            按<strong>小时</strong>登记工时：设置<strong>完成工时</strong>时会自动将
-            <strong>预计工时</strong>同步为相同小时数，也可按需单独调整预计工时。
+            按<strong>小时</strong>登记<strong>完成工时</strong>，保存后与 Gitee 工时自动保持一致。
           </div>
 
-          {/* 具体的完成工时 */}
+          {/* 完成工时 */}
           <div className="hours-input-group">
             <div className="hours-group-header">
               <label htmlFor="confirmed-hours-input">
                 <strong>完成工时</strong>
-                <span className="hours-sub-label">（设置后自动同步预计工时）</span>
+                <span className="hours-sub-label">（单位：小时）</span>
               </label>
               <div className="hours-converted">
                 = {confirmed} <small>分钟</small>
@@ -629,8 +593,6 @@ function HoursRegisterModal({
                   if (!Number.isFinite(num) || num < 0 || num > 24) return;
                   const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
                   setConfirmed(mins);
-                  setSuggested(mins);
-                  setSuggestedInput(hours(mins));
                   setLocked(mins > 0);
                 }}
               />
@@ -643,19 +605,9 @@ function HoursRegisterModal({
                 +
               </button>
             </div>
-            <div className="hours-quick-chips">
-              <span className="chips-label">快捷：</span>
-              {suggested != null && suggested > 0 && (
-                <button
-                  type="button"
-                  className="chip match-suggested"
-                  title="完成工时设置为与预计工时相同"
-                  onClick={() => applyConfirmedMinutes(suggested)}
-                >
-                  同预计 ({hours(suggested)}h)
-                </button>
-              )}
-              {presets.map((p) => (
+            <div className="hours-quick-chips" role="group" aria-label="工时模板">
+              <span className="chips-label">工时模板：</span>
+              {HOUR_TEMPLATES.map((p) => (
                 <button
                   key={p.minutes}
                   type="button"
@@ -671,82 +623,6 @@ function HoursRegisterModal({
                 onClick={() => applyConfirmedMinutes(0)}
               >
                 0h
-              </button>
-            </div>
-          </div>
-
-          {/* 预计工时 */}
-          <div className="hours-input-group">
-            <div className="hours-group-header">
-              <label htmlFor="suggested-hours-input">
-                <strong>预计工时</strong>
-                <span className="hours-sub-label">（Gitee 预估工时，默认随完成工时同步）</span>
-              </label>
-              <div className="hours-converted">
-                {suggested != null ? (
-                  <>
-                    = {suggested} <small>分钟</small>
-                  </>
-                ) : (
-                  <small>未设置</small>
-                )}
-              </div>
-            </div>
-            <div className="minute-input">
-              <button
-                type="button"
-                aria-label="减少预计工时"
-                onClick={() => applySuggestedMinutes((suggested ?? 0) - step)}
-              >
-                −
-              </button>
-              <input
-                id="suggested-hours-input"
-                type="number"
-                min="0"
-                max="24"
-                step="any"
-                placeholder="未设置"
-                value={suggestedInput}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setSuggestedInput(raw);
-                  if (raw.trim() === "") {
-                    setSuggested(null);
-                    return;
-                  }
-                  const num = Number(raw);
-                  if (!Number.isFinite(num) || num < 0 || num > 24) return;
-                  setSuggested(Math.min(1440, Math.max(0, Math.round(num * 60))));
-                }}
-              />
-              <span className="unit-label">小时</span>
-              <button
-                type="button"
-                aria-label="增加预计工时"
-                onClick={() => applySuggestedMinutes((suggested ?? 0) + step)}
-              >
-                +
-              </button>
-            </div>
-            <div className="hours-quick-chips">
-              <span className="chips-label">快捷：</span>
-              {presets.map((p) => (
-                <button
-                  key={p.minutes}
-                  type="button"
-                  className={`chip ${suggested === p.minutes ? "active" : ""}`}
-                  onClick={() => applySuggestedMinutes(p.minutes)}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={`chip reset ${suggested == null ? "active" : ""}`}
-                onClick={() => applySuggestedMinutes(null)}
-              >
-                清空
               </button>
             </div>
           </div>

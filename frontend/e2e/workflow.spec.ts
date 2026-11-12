@@ -24,22 +24,36 @@ test("collect → analyze → edit → manual activity → 480 min confirmation 
     .click();
   let dialog = page.getByRole("dialog");
   await expect(page.getByLabel("AI 思考与输出")).toContainText("AI 分析已完成");
+  await expect(dialog.getByLabel(/预计工时/)).toHaveCount(0);
+  await dialog
+    .getByRole("group", { name: "工时模板 1" })
+    .getByRole("button", { name: "1.5h", exact: true })
+    .click();
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("1.5");
   await dialog.getByLabel("完成工时小时 1").fill("6");
-  await expect(dialog.getByLabel("预计工时小时 1")).toHaveValue("6");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
   await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
   dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel(/预计工时/)).toHaveCount(0);
   await dialog.getByLabel("任务标题").fill("与客户确认接口联调方案");
   await dialog.getByLabel("所属项目").fill("客户 A");
   await dialog
     .getByLabel("详细工作内容")
     .fill("沟通接口变更，确认联调时间和待办事项。");
   await dialog.getByLabel("工作分类").selectOption("任务");
-  await dialog.getByLabel("完成工时小时 1").fill("2");
-  await expect(dialog.getByLabel("预计工时小时 1")).toHaveValue("2");
+  await dialog
+    .getByRole("group", { name: "工时模板 1" })
+    .getByRole("button", { name: "2h", exact: true })
+    .click();
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("2");
   await dialog.getByRole("button", { name: "保存记录" }).click();
   await expect(dialog).not.toBeVisible();
+  const dayTasks = await (await page.request.get("/api/tasks?date=2026-10-24")).json();
+  expect(dayTasks.length).toBe(2);
+  for (const item of dayTasks) {
+    expect(item.suggested_minutes).toBe(item.confirmed_minutes);
+  }
   await expect(
     page.getByRole("button", { name: "推送至 Gitee", exact: true }),
   ).toBeEnabled();
@@ -1010,5 +1024,93 @@ test("clear all AI tasks excludes conversations and session controls can exclude
   ).toHaveCount(0);
   await expect(manualTaskBtn).toBeVisible();
   await expect(clearBtn).toHaveText("清空全部 AI 项（1）");
+  expect(errors).toEqual([]);
+});
+
+test("hour template chips unify completed and estimated hours across editor and quick modal", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/?date=2026-10-14");
+
+  await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
+  let dialog = page.getByRole("dialog", { name: "添加人工事项" });
+  await expect(dialog.getByLabel(/预计工时/)).toHaveCount(0);
+  await dialog.getByLabel("任务标题").fill("对齐工时模板与预估工时");
+
+  const editorChips = dialog.getByRole("group", { name: "工时模板 1" });
+  for (const label of ["0.5h", "1h", "1.5h", "2h", "3h", "4h", "8h", "0h"]) {
+    await expect(
+      editorChips.getByRole("button", { name: label, exact: true }),
+    ).toBeVisible();
+  }
+  await editorChips.getByRole("button", { name: "1.5h", exact: true }).click();
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("1.5");
+  await expect(dialog).toContainText("= 90 分钟");
+  await expect(dialog.getByLabel("固定此项工时，AI分配时保留")).toBeChecked();
+  await dialog.getByRole("button", { name: "保存记录", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  const row = page.locator("tbody tr", { hasText: "对齐工时模板与预估工时" });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("1.5 h");
+  await expect(row).not.toContainText("预计");
+
+  await row.getByRole("button", { name: "工时登记", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "工时登记" });
+  await expect(dialog.getByLabel(/预计工时/)).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /同预计/ })).toHaveCount(0);
+
+  const modalChips = dialog.getByRole("group", { name: "工时模板" });
+  for (const label of ["0.5h", "1h", "1.5h", "2h", "3h", "4h", "8h", "0h"]) {
+    await expect(
+      modalChips.getByRole("button", { name: label, exact: true }),
+    ).toBeVisible();
+  }
+  await modalChips.getByRole("button", { name: "0.5h", exact: true }).click();
+  await expect(dialog.locator("#confirmed-hours-input")).toHaveValue("0.5");
+  await expect(dialog).toContainText("= 30 分钟");
+  await modalChips.getByRole("button", { name: "3h", exact: true }).click();
+  await expect(dialog.locator("#confirmed-hours-input")).toHaveValue("3");
+  await expect(dialog).toContainText("= 180 分钟");
+  await expect(
+    dialog.getByLabel("固定此项工时，后续 AI 分配与重新计算时保留不被覆盖"),
+  ).toBeChecked();
+  await dialog.getByRole("button", { name: "保存工时", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await expect(row).toContainText("3 h");
+  const tasks = await (await page.request.get("/api/tasks?date=2026-10-14")).json();
+  expect(tasks).toHaveLength(1);
+  expect(tasks[0].confirmed_minutes).toBe(180);
+  expect(tasks[0].suggested_minutes).toBe(180);
+  expect(tasks[0].time_locked).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "添加人工事项", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "添加人工事项" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  const mobileChips = dialog.getByRole("group", { name: "工时模板 1" });
+  await mobileChips.getByRole("button", { name: "1.5h", exact: true }).click();
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("1.5");
+  await mobileChips.getByRole("button", { name: "0h", exact: true }).click();
+  await expect(dialog.getByLabel("完成工时小时 1")).toHaveValue("0");
+  await expect(dialog).toContainText("= 0 分钟");
+  await expect(dialog.getByLabel("固定此项工时，AI分配时保留")).not.toBeChecked();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+
+  await row.getByRole("button", { name: "工时登记", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "工时登记" });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
   expect(errors).toEqual([]);
 });

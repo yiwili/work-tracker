@@ -58,7 +58,7 @@ import { AnalysisResultsModal } from "./AnalysisResultsModal";
 import { DeletedRecoveryModal } from "./DeletedRecoveryModal";
 import { JobToast, type JobToastState } from "./JobToast";
 import { UsageStats } from "./UsageStats";
-import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister } from "./TaskQuickActions";
+import { ProjectQuickSelect, StatusQuickSelect, HoursQuickRegister, HOUR_TEMPLATES } from "./TaskQuickActions";
 import { useTodos, hasBracketPrefix, formatTitleWithPrefix } from "./useTodos";
 import { TodoSideDock } from "./TodoWidgets";
 import { useTheme, ThemeLibrarySection } from "./themes";
@@ -132,27 +132,28 @@ type Draft = {
   confirmed_minutes: number;
   suggested_minutes?: number | null;
   confirmedHoursText?: string;
-  suggestedHoursText?: string;
   time_locked: boolean;
   started_at: string;
   ended_at: string;
 };
-const fromTask = (t?: Task, day = ""): Draft => ({
-  date: t?.date || day,
-  title: t?.title || "",
-  details: t?.details || "",
-  project: t?.project || "",
-  category: t?.category || "任务",
-  status: t?.status || "delivered",
-  is_todo: t ? Boolean(t.is_todo) : false,
-  confirmed_minutes: t?.confirmed_minutes || 0,
-  suggested_minutes: t?.suggested_minutes ?? null,
-  confirmedHoursText: hours(t?.confirmed_minutes || 0),
-  suggestedHoursText: t?.suggested_minutes != null ? hours(t.suggested_minutes) : "",
-  time_locked: t?.time_locked || false,
-  started_at: t?.started_at ? toLocal(t.started_at) : "",
-  ended_at: t?.ended_at ? toLocal(t.ended_at) : "",
-});
+const fromTask = (t?: Task, day = ""): Draft => {
+  const confirmed = t?.confirmed_minutes || 0;
+  return {
+    date: t?.date || day,
+    title: t?.title || "",
+    details: t?.details || "",
+    project: t?.project || "",
+    category: t?.category || "任务",
+    status: t?.status || "delivered",
+    is_todo: t ? Boolean(t.is_todo) : false,
+    confirmed_minutes: confirmed,
+    suggested_minutes: confirmed > 0 ? confirmed : null,
+    confirmedHoursText: hours(confirmed),
+    time_locked: t?.time_locked || false,
+    started_at: t?.started_at ? toLocal(t.started_at) : "",
+    ended_at: t?.ended_at ? toLocal(t.ended_at) : "",
+  };
+};
 function toLocal(iso: string) {
   const d = new Date(iso);
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
@@ -160,11 +161,13 @@ function toLocal(iso: string) {
     .slice(0, 16);
 }
 function payload(d: Draft) {
-  const { confirmedHoursText: _c, suggestedHoursText: _s, ...rest } = d;
+  const { confirmedHoursText: _c, ...rest } = d;
+  const mins = Math.min(1440, Math.max(0, Math.round(d.confirmed_minutes || 0)));
   return {
     ...rest,
     project: d.project || "未归属项目",
-    suggested_minutes: typeof d.suggested_minutes === "number" ? d.suggested_minutes : null,
+    confirmed_minutes: mins,
+    suggested_minutes: mins > 0 ? mins : null,
     started_at: d.started_at ? new Date(d.started_at).toISOString() : null,
     ended_at: d.ended_at ? new Date(d.ended_at).toISOString() : null,
   };
@@ -2338,23 +2341,20 @@ function TaskEditor({
     const origConfirmed = editor.task!.confirmed_minutes || 0;
     const half1 = Math.floor(origConfirmed / 2);
     const half2 = Math.ceil(origConfirmed / 2);
-    const hasSuggested = editor.task!.suggested_minutes != null || origConfirmed > 0;
     return [
       {
         ...fromTask(editor.task, day),
         title: editor.task!.title + "（一）",
         confirmed_minutes: half1,
         confirmedHoursText: hours(half1),
-        suggested_minutes: hasSuggested ? half1 : null,
-        suggestedHoursText: hasSuggested ? hours(half1) : "",
+        suggested_minutes: half1 > 0 ? half1 : null,
       },
       {
         ...fromTask(editor.task, day),
         title: editor.task!.title + "（二）",
         confirmed_minutes: half2,
         confirmedHoursText: hours(half2),
-        suggested_minutes: hasSuggested ? half2 : null,
-        suggestedHoursText: hasSuggested ? hours(half2) : "",
+        suggested_minutes: half2 > 0 ? half2 : null,
       },
     ];
   });
@@ -2477,18 +2477,8 @@ function TaskEditor({
           const mins = Math.min(1440, Math.max(0, Math.round(Number(value) || 0)));
           extra.confirmed_minutes = mins;
           extra.confirmedHoursText = hours(mins);
-          extra.suggested_minutes = mins;
-          extra.suggestedHoursText = hours(mins);
+          extra.suggested_minutes = mins > 0 ? mins : null;
           extra.time_locked = mins > 0;
-        } else if (key === "suggested_minutes") {
-          if (value === null || value === undefined || value === "") {
-            extra.suggested_minutes = null;
-            extra.suggestedHoursText = "";
-          } else {
-            const mins = Math.min(1440, Math.max(0, Math.round(Number(value) || 0)));
-            extra.suggested_minutes = mins;
-            extra.suggestedHoursText = hours(mins);
-          }
         }
         return {
           ...p,
@@ -2519,7 +2509,6 @@ function TaskEditor({
             confirmed_minutes: t.confirmed_minutes,
             confirmedHoursText: hours(t.confirmed_minutes || 0),
             suggested_minutes: t.confirmed_minutes > 0 ? t.confirmed_minutes : null,
-            suggestedHoursText: t.confirmed_minutes > 0 ? hours(t.confirmed_minutes) : "",
             time_locked: t.time_locked,
           }
         : base,
@@ -2827,165 +2816,113 @@ function TaskEditor({
                   </select>
                 </label>
               )}
-              {!hidden.has("confirmed_minutes") && (
-                <>
-                  <label>
-                    完成工时（小时，自动同步预计工时）
-                    <div className="minute-input">
-                      <button
-                        type="button"
-                        aria-label={"减少工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "confirmed_minutes",
-                            Math.max(0, p.confirmed_minutes - step),
-                          )
-                        }
-                      >
-                        −
-                      </button>
-                      <input
-                        aria-label={"完成工时小时 " + (i + 1)}
-                        type="number"
-                        required
-                        min="0"
-                        max="24"
-                        step="any"
-                        value={
-                          p.confirmedHoursText !== undefined
-                            ? p.confirmedHoursText
-                            : hours(p.confirmed_minutes)
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          setParts((prev) =>
-                            prev.map((item, j) => {
-                              if (j !== i) return item;
-                              if (raw.trim() === "") {
-                                return { ...item, confirmedHoursText: raw };
-                              }
-                              const num = Number(raw);
-                              if (!Number.isFinite(num) || num < 0 || num > 24) {
-                                return { ...item, confirmedHoursText: raw };
-                              }
-                              const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
-                              return {
-                                ...item,
-                                confirmed_minutes: mins,
-                                confirmedHoursText: raw,
-                                suggested_minutes: mins,
-                                suggestedHoursText: hours(mins),
-                                time_locked: mins > 0,
-                              };
-                            }),
-                          );
-                        }}
-                      />
-                      <button
-                        type="button"
-                        aria-label={"增加工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "confirmed_minutes",
-                            Math.min(1440, p.confirmed_minutes + step),
-                          )
-                        }
-                      >
-                        +
-                      </button>
-                      <span>= {p.confirmed_minutes} 分钟</span>
-                    </div>
-                  </label>
-                  <label>
-                    预计工时（Gitee 预估工时，小时）
-                    <div className="minute-input">
-                      <button
-                        type="button"
-                        aria-label={"减少预计工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "suggested_minutes",
-                            Math.max(0, (p.suggested_minutes || 0) - step),
-                          )
-                        }
-                      >
-                        −
-                      </button>
-                      <input
-                        aria-label={"预计工时小时 " + (i + 1)}
-                        type="number"
-                        min="0"
-                        max="24"
-                        step="any"
-                        placeholder="未设置"
-                        value={
-                          p.suggestedHoursText !== undefined
-                            ? p.suggestedHoursText
-                            : p.suggested_minutes == null
-                              ? ""
-                              : hours(p.suggested_minutes)
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          setParts((prev) =>
-                            prev.map((item, j) => {
-                              if (j !== i) return item;
-                              if (raw.trim() === "") {
-                                return {
-                                  ...item,
-                                  suggested_minutes: null,
-                                  suggestedHoursText: "",
-                                };
-                              }
-                              const num = Number(raw);
-                              if (!Number.isFinite(num) || num < 0 || num > 24) {
-                                return { ...item, suggestedHoursText: raw };
-                              }
-                              const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
-                              return {
-                                ...item,
-                                suggested_minutes: mins,
-                                suggestedHoursText: raw,
-                              };
-                            }),
-                          );
-                        }}
-                      />
-                      <button
-                        type="button"
-                        aria-label={"增加预计工时 " + (i + 1)}
-                        onClick={() =>
-                          change(
-                            i,
-                            "suggested_minutes",
-                            Math.min(1440, (p.suggested_minutes || 0) + step),
-                          )
-                        }
-                      >
-                        +
-                      </button>
-                      <span>
-                        {p.suggested_minutes != null
-                          ? `= ${p.suggested_minutes} 分钟`
-                          : "未设置"}
-                      </span>
-                    </div>
-                  </label>
-                </>
-              )}
+              <label>
+                工作日期
+                <input
+                  required
+                  type="date"
+                  value={p.date}
+                  onChange={(e) => change(i, "date", e.target.value)}
+                />
+              </label>
             </div>
-            <label>
-              工作日期
-              <input
-                required
-                type="date"
-                value={p.date}
-                onChange={(e) => change(i, "date", e.target.value)}
-              />
-            </label>
+            {!hidden.has("confirmed_minutes") && (
+              <div className="editor-hours-field">
+                <label htmlFor={"editor-confirmed-hours-" + i}>
+                  完成工时（小时）
+                </label>
+                <div className="minute-input">
+                  <button
+                    type="button"
+                    aria-label={"减少工时 " + (i + 1)}
+                    onClick={() =>
+                      change(
+                        i,
+                        "confirmed_minutes",
+                        Math.max(0, p.confirmed_minutes - step),
+                      )
+                    }
+                  >
+                    −
+                  </button>
+                  <input
+                    id={"editor-confirmed-hours-" + i}
+                    aria-label={"完成工时小时 " + (i + 1)}
+                    type="number"
+                    required
+                    min="0"
+                    max="24"
+                    step="any"
+                    value={
+                      p.confirmedHoursText !== undefined
+                        ? p.confirmedHoursText
+                        : hours(p.confirmed_minutes)
+                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setParts((prev) =>
+                        prev.map((item, j) => {
+                          if (j !== i) return item;
+                          if (raw.trim() === "") {
+                            return { ...item, confirmedHoursText: raw };
+                          }
+                          const num = Number(raw);
+                          if (!Number.isFinite(num) || num < 0 || num > 24) {
+                            return { ...item, confirmedHoursText: raw };
+                          }
+                          const mins = Math.min(1440, Math.max(0, Math.round(num * 60)));
+                          return {
+                            ...item,
+                            confirmed_minutes: mins,
+                            confirmedHoursText: raw,
+                            suggested_minutes: mins > 0 ? mins : null,
+                            time_locked: mins > 0,
+                          };
+                        }),
+                      );
+                    }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={"增加工时 " + (i + 1)}
+                    onClick={() =>
+                      change(
+                        i,
+                        "confirmed_minutes",
+                        Math.min(1440, p.confirmed_minutes + step),
+                      )
+                    }
+                  >
+                    +
+                  </button>
+                  <span>= {p.confirmed_minutes} 分钟</span>
+                </div>
+                <div
+                  className="hours-quick-chips"
+                  role="group"
+                  aria-label={"工时模板 " + (i + 1)}
+                >
+                  <span className="chips-label">工时模板：</span>
+                  {HOUR_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.minutes}
+                      type="button"
+                      className={`chip ${p.confirmed_minutes === tpl.minutes ? "active" : ""}`}
+                      onClick={() => change(i, "confirmed_minutes", tpl.minutes)}
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`chip reset ${p.confirmed_minutes === 0 ? "active" : ""}`}
+                    onClick={() => change(i, "confirmed_minutes", 0)}
+                  >
+                    0h
+                  </button>
+                </div>
+              </div>
+            )}
             <label className="check-label">
               <input
                 type="checkbox"

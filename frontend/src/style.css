@@ -3910,6 +3910,22 @@ textarea {
   white-space: nowrap;
 }
 
+.editor-hours-field {
+  margin: 14px 0;
+}
+
+.editor-hours-field > label {
+  margin: 0 0 6px;
+}
+
+.editor-hours-field .minute-input {
+  margin-top: 0;
+}
+
+.editor-hours-field .hours-quick-chips {
+  margin-top: 8px;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -7768,14 +7784,6 @@ body.todo-bubble-resizing {
   color: #6b7280;
 }
 
-.quick-hours-suggested {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: #6b7280;
-}
-
 .hours-kind-label {
   font-size: 11px;
   padding: 0 4px;
@@ -7876,7 +7884,7 @@ body.todo-bubble-resizing {
   background: #ffffff;
   border: 1px solid #d1d5db;
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-size: 12px;
   color: #374151;
   cursor: pointer;
@@ -7893,17 +7901,6 @@ body.todo-bubble-resizing {
   border-color: #2563eb;
   color: #ffffff;
   font-weight: 500;
-}
-
-.hours-quick-chips .chip.match-suggested {
-  border-color: #2563eb;
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.06);
-  font-weight: 500;
-}
-
-.hours-quick-chips .chip.match-suggested:hover {
-  background: rgba(37, 99, 235, 0.15);
 }
 
 .hours-quick-chips .chip.reset {
