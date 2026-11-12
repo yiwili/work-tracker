@@ -1,0 +1,9 @@
+{
+  "$schema": "../../frontend/node_modules/@tauri-apps/cli/schema.json",
+  "identifier": "default",
+  "description": "Default desktop capabilities for AI Work Tracker main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

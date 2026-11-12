@@ -28,6 +28,30 @@ cd ..
 
 更新前端后双击 `build.cmd`，或运行 `.\build.ps1` 重新构建；正在运行的服务会直接读取 `frontend\dist` 中的新文件。依赖缺失或需要重装时使用 `.\build.ps1 -Install`。后端代码改动仍需重启服务。
 
+## 桌面端打包（Tauri v2 一键构建）
+
+项目支持打包为独立的 Windows 原生桌面应用（内置 PyInstaller 打包的 Python 后台，终端用户无需安装 Python；关闭主窗口最小化到系统托盘持续运行，托盘菜单支持显示窗口、打开数据目录和彻底退出，并具备单实例防重复启动；数据默认保存在 `%LOCALAPPDATA%\AIWorkTracker`）。
+
+构建环境要求（Windows）：Python 3.12+、Node.js 20.19+、Rust（`rustup`）、Visual Studio 2022 C++ Build Tools（含 Windows 10/11 SDK 与 VCTools）。
+
+Windows 双击 `build-desktop.cmd`，或在仓库根目录执行：
+
+```powershell
+# 首次构建（自动检查并安装 .[test,desktop] 与前端 Tauri 依赖）
+.\build-desktop.ps1 -Setup
+
+# 日常一键打包（构建前端 + 打包 PyInstaller 后台 + 冒烟校验 + 生成 Tauri 安装包与便携版）
+.\build-desktop.ps1
+
+# 打包同时运行全部 pytest 自动化测试
+.\build-desktop.ps1 -RunTests
+```
+
+后续开发者或 AI 助手协同打包桌面端时，请统一使用 `build-desktop.cmd` 或 `.\build-desktop.ps1`。构建完成后会在 `dist-desktop\` 下输出：
+
+- `dist-desktop\*setup.exe`：Windows NSIS 安装包（默认当前用户目录安装，支持简体中文向导）。
+- `dist-desktop\portable\ai-work-tracker.exe`：免安装绿色便携目录。
+
 ## 使用
 
 1. 设置页检查采集路径。所有 Agent 都会列出，勾选要采集的来源；国内版和国际版分开配置。默认读取 Claude Code（`~/.claude/projects`）、Codex（`~/.codex/sessions`、`~/.codex/archived_sessions`）、WorkBuddy 国内版（`~/.workbuddy/projects`）与国际版（`~/.workbuddy-ai/projects`）、DeepSeek Harness（`~/.dsh/sessions`）、Qoder 国内版（`~/.qoder-cn/projects`）与国际版（`~/.qoder/projects`）、Trae 国内版（`~/.trae-cn/memory/projects`）与国际版（`~/.trae/memory/projects`）；可填写多个目录或指定 JSONL / `.jsonl.zstd` 文件。未检测到的来源展开后填写路径并重新检测。在“Git 仓库”中选择项目上级目录后点击“扫描目录”，自动列出最多三层内的仓库并默认加入采集，可按仓库填写项目显示名、移除或单独指定提交作者。先配置敏感目录排除规则。

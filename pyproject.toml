@@ -11,6 +11,7 @@ dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "sqlalchemy>=2.0,<2.1",
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
+desktop = ["pyinstaller>=6.10,<7"]
 
 [project.scripts]
 awt = "awt.cli:cli"

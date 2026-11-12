@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "tauri": "tauri"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.51.0",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

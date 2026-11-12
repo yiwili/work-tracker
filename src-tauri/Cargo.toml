@@ -1,0 +1,19 @@
+[package]
+name = "ai-work-tracker-desktop"
+version = "0.1.0"
+description = "拾时 · 本地优先 AI 工作记录与每日工时管理"
+authors = ["AI Work Tracker"]
+edition = "2021"
+
+[lib]
+name = "ai_work_tracker_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

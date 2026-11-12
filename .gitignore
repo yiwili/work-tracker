@@ -34,3 +34,9 @@ Thumbs.db
 /.agents/mcp_config.json
 /.mcp.json
 
+# Tauri & desktop packaging build artifacts
+src-tauri/target/
+src-tauri/resources/sidecar/
+dist-desktop/
+packaging/*.log
+

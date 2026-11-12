@@ -23,6 +23,8 @@ Implementation boundaries:
 
 Preserve manual entries, pinned minutes, reviewed titles, delete decisions, original logs and repositories. Network model waits must not hold a SQLite writer lock. Re-read current state before applying AI output so concurrent human edits are not overwritten. Run focused pytest cases and the affected browser workflow when changing these boundaries.
 
+Desktop packaging & builds (Tauri v2 + PyInstaller sidecar): always use `build-desktop.cmd` or `.\build-desktop.ps1` (pass `-RunTests` for full backend verification, `-Setup` when dependencies need initialization, or `-SkipSidecar` when iterating only on frontend/Rust shell) instead of running ad-hoc `pyinstaller` or `cargo tauri build` commands manually. Never commit build artifacts (`src-tauri/target/`, `src-tauri/resources/sidecar/`, `dist-desktop/`, `build/`).
+
 Commit each feature separately using standard Conventional Commit messages (for example `feat: ...`, `fix: ...`); do not copy the user's Gitee double-tag commit naming. Before a user-authorized push, verify the destination host is GitHub. GitHub push authorization does not authorize pushes to any Gitee repository or automatic company work-item creation.
 
 <!-- aoci:begin -->
