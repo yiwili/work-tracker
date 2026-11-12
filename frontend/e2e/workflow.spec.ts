@@ -1114,3 +1114,120 @@ test("hour template chips unify completed and estimated hours across editor and 
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   expect(errors).toEqual([]);
 });
+
+test("scheduled auto-generate settings persist, validate dirty state, show header pill and execute run-now cleanly", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const original = await (await page.request.get("/api/settings")).json();
+  try {
+    await page.goto("/?date=2026-10-13");
+    await expect(page.locator(".auto-gen-header-pill")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "系统设置", exact: true }).click();
+    await page.getByRole("tab", { name: "操作设置", exact: true }).click();
+
+    const enableCheckbox = page.getByLabel("启用定时自动生成工作项", {
+      exact: true,
+    });
+    await expect(enableCheckbox).not.toBeChecked();
+    await expect(page.locator(".auto-gen-head-pill")).toHaveText("未启用");
+
+    await enableCheckbox.check();
+    await expect(page.locator(".auto-gen-unsaved-note")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "立即执行一次", exact: true }),
+    ).toBeDisabled();
+
+    // Configure daily fixed times
+    await page
+      .locator(".auto-gen-presets")
+      .getByRole("button", { name: "09:30", exact: true })
+      .click();
+    await page.getByLabel("新增每日执行时间", { exact: true }).fill("21:15");
+    await page.getByRole("button", { name: "添加时间", exact: true }).click();
+
+    const timesList = page.getByRole("list", { name: "已配置的每日执行时间" });
+    await expect(timesList).toContainText("09:30");
+    await expect(timesList).toContainText("18:00");
+    await expect(timesList).toContainText("21:15");
+
+    await page.getByRole("button", { name: "移除时间 09:30" }).click();
+    await expect(timesList).not.toContainText("09:30");
+
+    // Switch to fixed interval mode and enable weekdays-only guard
+    await page.getByRole("radio", { name: "按固定间隔", exact: true }).click();
+    await page
+      .locator(".auto-gen-presets")
+      .getByRole("button", { name: "2 小时", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("执行间隔（分钟）", { exact: true }),
+    ).toHaveValue("120");
+    await page
+      .getByLabel("仅在工作日执行（周一至周五）", { exact: true })
+      .check();
+
+    // Verify mobile layout has zero horizontal overflow on settings pane
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBeTruthy();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(
+      page
+        .getByRole("status", { name: "设置保存反馈" })
+        .filter({ hasText: "设置已保存" }),
+    ).toBeVisible();
+    await expect(page.locator(".auto-gen-unsaved-note")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "立即执行一次", exact: true }),
+    ).toBeEnabled();
+
+    // Reload and verify persisted header pill navigation back to operation settings
+    await page.reload();
+    const headerPill = page.locator(".auto-gen-header-pill");
+    await expect(headerPill).toBeVisible();
+    await expect(headerPill).toContainText("定时 每 120 分钟");
+    await headerPill.click();
+
+    await expect(
+      page.getByRole("tab", { name: "操作设置", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(enableCheckbox).toBeChecked();
+    await expect(
+      page.getByRole("radio", { name: "按固定间隔", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+    await expect(
+      page.getByLabel("执行间隔（分钟）", { exact: true }),
+    ).toHaveValue("120");
+    await expect(
+      page.getByLabel("仅在工作日执行（周一至周五）", { exact: true }),
+    ).toBeChecked();
+
+    // Trigger manual immediate execution and inspect live status card update
+    await page.getByRole("button", { name: "立即执行一次", exact: true }).click();
+    const statusCard = page.getByLabel("定时自动生成运行状态");
+    await expect(statusCard).toContainText("最近已跳过");
+    await expect(statusCard).toContainText("当天暂无可分析的工作对话记录，已跳过");
+
+    // Disable again via UI and confirm pill disappears on daily view
+    await enableCheckbox.uncheck();
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(
+      page
+        .getByRole("status", { name: "设置保存反馈" })
+        .filter({ hasText: "设置已保存" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "每日日报", exact: true }).click();
+    await expect(page.locator(".auto-gen-header-pill")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await page.request.put("/api/settings", { data: original });
+  }
+});

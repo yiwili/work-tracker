@@ -154,7 +154,7 @@
 }
 
 :root[data-theme='apple-dark'] .outline,
-:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main):not(.todo-drop) {
+:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main):not(.todo-drop):not(.auto-gen-chip):not(.auto-gen-time-remove):not(.auto-gen-header-pill) {
   background: var(--apple-control-bg);
   border-color: var(--apple-border-strong);
   color: var(--apple-text-primary);
@@ -598,4 +598,56 @@
   background: rgba(41, 151, 255, 0.14);
   border-color: rgba(41, 151, 255, 0.26);
   color: #64b5f6;
+}
+
+/* Scheduled Auto-Generate Settings in Dark Theme */
+:root[data-theme="apple-dark"] .auto-gen-config-panel,
+:root[data-theme="apple-dark"] .auto-gen-status-card {
+  background: var(--apple-card-subtle);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-status-meta-grid > div {
+  background: var(--apple-card);
+  border-color: var(--apple-border);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-chip {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-secondary);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-chip:hover {
+  background: var(--apple-control-hover);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-chip.active {
+  background: var(--apple-blue);
+  border-color: var(--apple-blue);
+  color: #ffffff;
+}
+
+:root[data-theme="apple-dark"] .auto-gen-add-row input[type="time"] {
+  background: var(--apple-control-bg);
+  border-color: var(--apple-border-strong);
+  color: var(--apple-text-primary);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-header-pill {
+  background: var(--apple-blue-tint);
+  border-color: var(--apple-blue-border);
+  color: var(--apple-blue);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-header-pill.paused {
+  background: var(--apple-orange-tint);
+  border-color: var(--apple-orange-border);
+  color: var(--apple-orange-text);
+}
+
+:root[data-theme="apple-dark"] .auto-gen-time-remove {
+  background: rgba(41, 151, 255, 0.22);
+  color: #93c5fd;
 }

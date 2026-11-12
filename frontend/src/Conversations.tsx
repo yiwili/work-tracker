@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Ban,
   Check,
+  Clock3,
   LoaderCircle,
   Plus,
   Settings2,
@@ -63,6 +64,7 @@ export function Conversations({
   onOpenCollectDetails,
   onMultiDayChange,
   onSettings,
+  onScheduleSettings,
   onSources,
   onView,
   onViewPending,
@@ -85,6 +87,7 @@ export function Conversations({
   onOpenCollectDetails?: (options?: { startDate?: string; endDate?: string }) => void;
   onMultiDayChange?: (state: { enabled: boolean; startDate: string; endDate: string }) => void;
   onSettings: () => void;
+  onScheduleSettings?: () => void;
   onSources: (sources: string[]) => void;
   onView: (source: string, session: string) => void;
   onViewPending: () => void;
@@ -306,6 +309,25 @@ export function Conversations({
           <span className="source-summary-pill">
             {detectedAgents.length} 已连接 · {activeAgentCount} 参与分析
           </span>
+          {settings.auto_generate?.enabled && (
+            <button
+              type="button"
+              className={`auto-gen-header-pill ${settings.llm_enabled ? "active" : "paused"}`}
+              onClick={() => (onScheduleSettings ? onScheduleSettings() : onSettings())}
+              title={
+                settings.llm_enabled
+                  ? "定时自动生成工作项已开启，点击调整定时配置"
+                  : "定时配置已启用，但模型分析未开启；点击前往调整"
+              }
+            >
+              <Clock3 size={12} />
+              {settings.llm_enabled
+                ? settings.auto_generate.mode === "daily_times"
+                  ? `定时 ${(settings.auto_generate.daily_times || []).join(" / ") || "每日"}`
+                  : `定时 每 ${settings.auto_generate.interval_minutes} 分钟`
+                : "定时待开启模型"}
+            </button>
+          )}
         </div>
         <div className="conversation-actions">
           {(!settings.auto_import_analysis || pendingCount > 0) && (

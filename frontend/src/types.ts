@@ -222,6 +222,41 @@ export type GiteeMatchDecision = {
   action: "match" | "create" | "ignore";
   target_task_id?: string | null;
 };
+export type AutoGenerateConfig = {
+  enabled: boolean;
+  mode: "daily_times" | "interval";
+  daily_times: string[];
+  interval_minutes: number;
+  weekdays_only: boolean;
+  collect_before_analyze: boolean;
+  skip_if_unchanged: boolean;
+  skip_if_confirmed: boolean;
+};
+
+export type AutoGenerateStatus = AutoGenerateConfig & {
+  llm_enabled: boolean;
+  auto_import_analysis: boolean;
+  timezone: string;
+  running: boolean;
+  target_date: string;
+  binding?: MultiDayBinding | null;
+  next_run_at: string | null;
+  last_attempt_at: string | null;
+  last_run_at: string | null;
+  last_status: "idle" | "running" | "success" | "skipped" | "error" | "interrupted" | string;
+  last_reason: string;
+  last_error: string;
+  last_date: string;
+  last_slot: string;
+  last_summary?: {
+    created?: number;
+    archived?: number;
+    pending?: number;
+    auto_imported?: boolean;
+    new_events?: number;
+  } | null;
+};
+
 export type GiteeMember = {
   id: number;
   user_id?: number;
@@ -281,6 +316,7 @@ export type Settings = {
   ccswitch_config_path: string;
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;
+  auto_generate?: AutoGenerateConfig;
   task_details_mode?: "standard" | "concise" | "none";
   theme_id?: string;
   analysis_sources: string[];

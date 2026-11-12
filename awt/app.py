@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity, multiday, exclusions
-from . import usage, cloud_sync, history_upload
+from . import auto_schedule, usage, cloud_sync, history_upload
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
@@ -30,6 +30,16 @@ from .models import GiteeEnterpriseConfig,GiteePreviewInput,GiteePublishInput,Gi
 def create_app(engine=None):
     engine = engine or db.make_engine()
     usage.bind(engine)
+    analysis_locks = {}
+    collect_states = {}
+    analysis_runs = {}
+    allocation_runs = {}
+    runtime = auto_schedule.AnalysisRuntime(
+        analysis_locks=analysis_locks,
+        collect_states=collect_states,
+        analysis_runs=analysis_runs,
+        allocation_runs=allocation_runs,
+    )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -43,7 +53,16 @@ def create_app(engine=None):
                     # A transient background failure must not stop future runs.
                     pass
                 await asyncio.sleep(60)
+        async def auto_gen_poll():
+            while True:
+                try:
+                    await asyncio.to_thread(auto_schedule.scheduled_generate, engine, runtime)
+                except Exception:
+                    # A transient background failure must not stop future runs.
+                    pass
+                await asyncio.sleep(20)
         worker=asyncio.create_task(poll())
+        auto_gen_worker=asyncio.create_task(auto_gen_poll())
         scheduler = cloud_sync.SyncScheduler(engine)
         scheduler.start()
         app.state.cloud_scheduler = scheduler
@@ -52,16 +71,23 @@ def create_app(engine=None):
         finally:
             scheduler.stop()
             worker.cancel()
+            auto_gen_worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
+            with suppress(asyncio.CancelledError):
+                await auto_gen_worker
 
     app = FastAPI(title="AI Work Tracker", version="0.1.0", lifespan=lifespan)
     desktop_config.configure_desktop_cors(app)
     app.state.engine = engine
-    analysis_locks = {}
-    collect_states = {}
-    analysis_runs = {}
-    allocation_runs = {}
+    app.state.runtime = runtime
+
+    def trigger_cloud_sync():
+        scheduler = getattr(app.state, 'cloud_scheduler', None)
+        if scheduler is not None:
+            scheduler.trigger_now()
+
+    runtime.on_tasks_changed = trigger_cloud_sync
 
     @contextmanager
     def transaction():
@@ -694,6 +720,18 @@ def create_app(engine=None):
         finally:
             lock.release()
 
+    @app.get('/api/auto-generate/status')
+    def auto_generate_status():
+        return auto_schedule.get_status(engine, runtime)
+
+    @app.post('/api/auto-generate/run-now')
+    def auto_generate_run_now():
+        try:
+            result = auto_schedule.execute_auto_generate(engine, runtime, force=True, respect_unchanged=False)
+        except auto_schedule.BusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {**(result or {}), 'status': auto_schedule.get_status(engine, runtime)}
+
     @app.post('/api/analysis/import')
     def import_analysis(payload: AnalysisImportInput):
         lock_day = _canonical_day(payload.date)
@@ -726,11 +764,6 @@ def create_app(engine=None):
     def repositories():
         with engine.connect() as conn:
             return [dict(r) for r in conn.execute(select(db.repositories)).mappings()]
-
-    def trigger_cloud_sync():
-        scheduler = getattr(app.state, 'cloud_scheduler', None)
-        if scheduler is not None:
-            scheduler.trigger_now()
 
     @app.get('/api/todos')
     def todos():

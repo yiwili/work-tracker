@@ -1,3 +1,4 @@
+import re
 from datetime import date as Date, datetime
 from pathlib import Path
 from typing import Literal
@@ -238,6 +239,40 @@ TaskStatus = Literal["requested", "attempted", "changed", "verified", "delivered
 WORK_TYPES = ("需求", "任务", "缺陷")
 
 
+class AutoGenerateConfig(BaseModel):
+    """定时自动生成工作项配置：默认关闭，避免未授权后台调用 AI 模型。"""
+    enabled: bool = False
+    mode: Literal['daily_times', 'interval'] = 'daily_times'
+    daily_times: list[str] = Field(default_factory=lambda: ['18:00'], max_length=12)
+    interval_minutes: int = Field(default=60, ge=15, le=720, strict=True)
+    weekdays_only: bool = False
+    collect_before_analyze: bool = True
+    skip_if_unchanged: bool = True
+    skip_if_confirmed: bool = True
+
+    @field_validator('daily_times')
+    @classmethod
+    def valid_daily_times(cls, values):
+        normalized: list[str] = []
+        for raw in values:
+            if not isinstance(raw, str):
+                raise ValueError('定时时间格式无效，请使用 24 小时制 HH:MM（例如 18:00）')
+            m = re.fullmatch(r'\s*(\d{1,2}):(\d{2})\s*', raw)
+            if not m:
+                raise ValueError('定时时间格式无效，请使用 24 小时制 HH:MM（例如 18:00）')
+            hh, mm = int(m.group(1)), int(m.group(2))
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                raise ValueError('定时时间超出范围，请使用 00:00 ~ 23:59')
+            normalized.append(f'{hh:02d}:{mm:02d}')
+        return sorted(set(normalized))
+
+    @model_validator(mode='after')
+    def require_times_when_enabled(self):
+        if self.enabled and self.mode == 'daily_times' and not self.daily_times:
+            raise ValueError('开启按每日固定时间自动生成时，请至少设置一个执行时间（例如 18:00）')
+        return self
+
+
 class ManualTemplate(BaseModel):
     """人工事项模板：固定字段在快捷创建时不再展示。"""
     id: str = Field(min_length=1, max_length=64)
@@ -284,6 +319,8 @@ class Settings(BaseModel):
     auto_import_analysis: bool = False
     # 默认沿用原有行为：估算完成后直接写入工作项；关闭后先生成待应用预览。
     auto_apply_allocation: bool = True
+    # 定时自动生成工作项默认关闭，用户开启后在后台按计划采集并归纳当天工作。
+    auto_generate: AutoGenerateConfig = Field(default_factory=AutoGenerateConfig)
     task_details_mode: Literal['standard', 'concise', 'none'] = 'standard'
     theme_id: str = Field(default='apple-hig', max_length=64)
     analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
@@ -305,6 +342,8 @@ class Settings(BaseModel):
         if not isinstance(data, dict):
             return data
         data = dict(data)
+        if data.get('auto_generate') is None:
+            data.pop('auto_generate', None)
         for legacy, (cn_key, intl_key) in SOURCE_FAMILIES.items():
             if legacy not in data:
                 continue
