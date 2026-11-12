@@ -9,7 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { GitAuthor, GitIdentity, Settings } from "./types";
-import { api } from "./api";
+import { api, apiUrl } from "./api";
 
 type Repo = { root: string; name: string; relative: string };
 type ScanResult = {
@@ -100,7 +100,7 @@ export function GitSettings({
   const repoRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
-    fetch("/api/git/global-identity")
+    fetch(apiUrl("/git/global-identity"))
       .then((r) => (r.ok ? r.json() : null))
       .then(setGlobalIdentity)
       .catch(() => setGlobalIdentity(null));

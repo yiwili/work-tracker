@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import type { Settings } from "./types";
+import { apiUrl } from "./api";
 type Agent = { name: string; default: string; effective: string };
 
 export function WorkflowSettings({
@@ -12,7 +13,7 @@ export function WorkflowSettings({
 }) {
   const [agents, setAgents] = useState<Record<string, Agent>>({});
   useEffect(() => {
-    fetch("/api/agents")
+    fetch(apiUrl("/agents"))
       .then((r) => r.json())
       .then(setAgents)
       .catch(() => {});

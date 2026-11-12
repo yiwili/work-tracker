@@ -8,6 +8,7 @@ DESKTOP_ALLOWED_ORIGINS = [
     'http://localhost:8765',
     'http://127.0.0.1:5173',
     'http://localhost:5173',
+    'http://tauri.localhost',
     'tauri://localhost',
     'https://tauri.localhost',
     'app://.',

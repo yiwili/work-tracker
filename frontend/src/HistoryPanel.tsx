@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BookOpen, Download, Upload } from "lucide-react";
 import type { Settings } from "./types";
+import { apiUrl } from "./api";
 type Historical = {
   id: string;
   title: string;
@@ -15,7 +16,7 @@ type Status = {
   error?: string;
 };
 async function api(path: string, body?: unknown, method = "POST") {
-  const r = await fetch("/api/" + path, {
+  const r = await fetch(apiUrl(path), {
     method,
     headers: { "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),

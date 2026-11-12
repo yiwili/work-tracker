@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 
 from sqlalchemy import (JSON, Boolean, Column, ForeignKey, Index, Integer, MetaData,
                         String, Table, Text, create_engine, event)
@@ -67,8 +68,23 @@ Index(
 )
 
 
+def _default_frozen_data_dir() -> Path:
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA", "").strip()
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "AIWorkTracker"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AIWorkTracker"
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "AIWorkTracker"
+
+
 def data_dir():
-    return Path(os.environ.get("AWT_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
+    env_dir = os.environ.get("AWT_DATA_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir)
+    if getattr(sys, "frozen", False):
+        return _default_frozen_data_dir()
+    return Path(__file__).resolve().parent.parent / "data"
 
 
 def make_engine(path=None):

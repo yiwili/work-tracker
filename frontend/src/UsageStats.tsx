@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { apiUrl } from "./api";
 
 type Period = "day" | "week" | "month" | "year" | "all";
 
@@ -73,7 +74,7 @@ export function UsageStats() {
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    fetch(`/api/usage/stats?period=${period}`, { signal: controller.signal })
+    fetch(apiUrl(`/usage/stats?period=${period}`), { signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error("usage unavailable");
         return response.json() as Promise<UsageStatsData>;

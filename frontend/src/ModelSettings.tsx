@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { LockKeyhole, LoaderCircle } from "lucide-react";
 import type { Settings } from "./types";
+import { apiUrl } from "./api";
 type Status = {
   configured: boolean;
   provider: string;
@@ -155,7 +156,7 @@ export function ModelSettings({
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   useEffect(() => {
-    fetch("/api/model/status")
+    fetch(apiUrl("/model/status"))
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => setStatus(null));
