@@ -379,6 +379,8 @@ def save_task(conn, payload: TaskInput, task_id=None):
     values = payload.model_dump(mode='json')
     minutes = values.pop('confirmed_minutes')
     suggested = values.pop('suggested_minutes', None)
+    if not existing and 'suggested_minutes' not in payload.model_fields_set and suggested is None and minutes > 0:
+        suggested = minutes
     has_suggested = 'suggested_minutes' in payload.model_fields_set or suggested is not None
     locked = values.pop('time_locked')
     locked = bool(minutes) if locked is None else locked
@@ -613,7 +615,7 @@ def merge_tasks(conn, ids):
         raise ValueError("合并后的工时超过单项上限 24h")
     first = selected[0]
     conn.execute(update(db.tasks).where(db.tasks.c.id == ids[0]).values(details='\n\n'.join(t['title'] + '\n' + t['details'] for t in selected), edited=True))
-    conn.execute(update(db.worklogs).where(db.worklogs.c.task_id == ids[0]).values(confirmed_minutes=minutes, suggested_minutes=None,time_locked=bool(minutes),time_source="manual",time_reason=""))
+    conn.execute(update(db.worklogs).where(db.worklogs.c.task_id == ids[0]).values(confirmed_minutes=minutes, suggested_minutes=minutes if minutes > 0 else None,time_locked=bool(minutes),time_source="manual",time_reason=""))
     for task in selected[1:]:
         for event_id in conn.execute(select(db.evidence.c.event_id).where(db.evidence.c.task_id == task['id'])).scalars():
             conn.execute(sqlite_insert(db.evidence).values(task_id=ids[0], event_id=event_id).on_conflict_do_nothing())

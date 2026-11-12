@@ -784,6 +784,8 @@ def create_app(engine=None):
             merged.update(payload.model_dump(exclude_unset=True))
             if 'confirmed_minutes' in payload.model_fields_set and 'time_locked' not in payload.model_fields_set:
                 merged['time_locked']=bool(merged['confirmed_minutes'])
+            if 'confirmed_minutes' in payload.model_fields_set and 'suggested_minutes' not in payload.model_fields_set:
+                merged['suggested_minutes'] = merged['confirmed_minutes'] if merged['confirmed_minutes'] > 0 else None
             res = {'id': service.save_task(conn, TaskInput.model_validate(merged), task_id)}
         trigger_cloud_sync()
         return res

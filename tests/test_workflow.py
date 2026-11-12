@@ -476,6 +476,17 @@ def test_patch_suggested_and_confirmed_minutes(client):
     assert updated['confirmed_minutes'] == 90
     assert updated['time_locked'] is True
 
+    # 仅设置完成工时时，预计工时默认同步为与完成工时相同
+    client.patch(f'/api/tasks/{task_id}', json={'confirmed_minutes': 150}).raise_for_status()
+    synced = client.get(f'/api/tasks?date={DAY}').json()[0]
+    assert synced['confirmed_minutes'] == 150
+    assert synced['suggested_minutes'] == 150
+
+    created_id = client.post('/api/tasks', json=manual(90, title='新建即同步预计工时')).json()['id']
+    created = next(t for t in client.get(f'/api/tasks?date={DAY}').json() if t['id'] == created_id)
+    assert created['confirmed_minutes'] == 90
+    assert created['suggested_minutes'] == 90
+
 
 def test_manual_work_items_are_excluded_from_todos(client, tmp_path):
     manual_entry_id = client.post(
