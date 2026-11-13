@@ -18,7 +18,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "shortDescription": "拾时 · AI 工作记录与每日工时管理",
     "longDescription": "本地优先的 AI 工作记录、会话归纳、工时分配与 Gitee 企业工作项同步桌面应用。",
     "icon": [
@@ -36,6 +36,15 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
       }
     }
   }

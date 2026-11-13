@@ -1,16 +1,23 @@
-name: Build Windows Desktop & Portable Packages
+name: Multi-Platform Desktop & Portable Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v0.1.0)'
+        required: false
+        default: 'v0.1.0'
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
+    name: Build Windows (Installer + Portable)
     runs-on: windows-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,11 +52,189 @@ jobs:
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml
 
-      - name: Upload dist-desktop artifacts
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ai-work-tracker-windows-desktop
+          name: ai-work-tracker-windows
           path: |
             dist-desktop/*.exe
             dist-desktop/*.zip
           if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: x64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Python dependencies & PyInstaller
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -e . pyinstaller
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Package Python backend sidecar
+        run: |
+          pyinstaller --noconfirm --clean --distpath build/sidecar-dist --workpath build/sidecar-work packaging/awt-sidecar.spec
+          mkdir -p src-tauri/resources/sidecar
+          cp -R build/sidecar-dist/awt-sidecar/* src-tauri/resources/sidecar/
+          chmod +x src-tauri/resources/sidecar/awt-sidecar
+
+      - name: Build Tauri desktop bundle
+        run: |
+          cd frontend
+          npx tauri build --target ${{ matrix.target }}
+
+      - name: Prepare macOS artifacts
+        run: |
+          mkdir -p dist-macos
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$bundle_dir/dmg" -name "*.dmg" -exec cp {} dist-macos/ \; || true
+          if [ -d "$bundle_dir/macos" ]; then
+            cd "$bundle_dir/macos"
+            for app in *.app; do
+              if [ -d "$app" ]; then
+                tar -czf "$GITHUB_WORKSPACE/dist-macos/${app%.*}-macos-${{ matrix.name }}.tar.gz" "$app"
+              fi
+            done
+            cd "$GITHUB_WORKSPACE"
+          fi
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-work-tracker-macos-${{ matrix.name }}
+          path: dist-macos/*
+          if-no-files-found: warn
+
+  build-linux:
+    name: Build Linux (AppImage & deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Python dependencies & PyInstaller
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -e . pyinstaller
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Package Python backend sidecar
+        run: |
+          pyinstaller --noconfirm --clean --distpath build/sidecar-dist --workpath build/sidecar-work packaging/awt-sidecar.spec
+          mkdir -p src-tauri/resources/sidecar
+          cp -R build/sidecar-dist/awt-sidecar/* src-tauri/resources/sidecar/
+          chmod +x src-tauri/resources/sidecar/awt-sidecar
+
+      - name: Build Tauri desktop bundle
+        run: |
+          cd frontend
+          npx tauri build
+
+      - name: Prepare Linux artifacts
+        run: |
+          mkdir -p dist-linux
+          find src-tauri/target/release/bundle/appimage -name "*.AppImage" -exec cp {} dist-linux/ \; || true
+          find src-tauri/target/release/bundle/deb -name "*.deb" -exec cp {} dist-linux/ \; || true
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-work-tracker-linux-x64
+          path: dist-linux/*
+          if-no-files-found: warn
+
+  publish-release:
+    name: Publish Multi-Platform Release to GitHub
+    needs: [build-windows, build-macos, build-linux]
+    if: always() && (needs.build-windows.result == 'success' || needs.build-macos.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-packages
+
+      - name: Consolidate release files
+        run: |
+          mkdir -p release-upload
+          find release-packages -type f -exec cp {} release-upload/ \;
+          ls -la release-upload/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name || github.ref_name }}
+          files: release-upload/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
