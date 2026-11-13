@@ -63,7 +63,7 @@ def report(date: str = typer.Option(...), format: str = 'markdown'):
     typer.echo(run(service.export_markdown, date))
 
 
-def _prepare_sidecar_stdio():
+def _prepare_sidecar_stdio(log_filename: str = 'sidecar.log'):
     """Redirect None or requested stdio in frozen --noconsole binaries to a bounded log file."""
     force_log = os.environ.get('AWT_LOG_TO_FILE', '').strip().lower() in ('1', 'true', 'yes')
     if not force_log and sys.stdout is not None and sys.stderr is not None:
@@ -72,9 +72,9 @@ def _prepare_sidecar_stdio():
     try:
         log_dir = db.data_dir() / 'logs'
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / 'sidecar.log'
+        log_path = log_dir / log_filename
         if log_path.exists() and log_path.stat().st_size > 2_000_000:
-            backup = log_dir / 'sidecar.log.1'
+            backup = log_dir / f'{log_filename}.1'
             backup.unlink(missing_ok=True)
             log_path.replace(backup)
         opened = open(log_path, 'a', encoding='utf-8', buffering=1)

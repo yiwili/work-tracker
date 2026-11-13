@@ -3,6 +3,8 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import db
+
 DESKTOP_ALLOWED_ORIGINS = [
     'http://127.0.0.1:8765',
     'http://localhost:8765',
@@ -40,4 +42,5 @@ def configure_desktop_cors(app: FastAPI) -> None:
             'mode': os.environ.get('AWT_RUNTIME_MODE', 'local-web'),
             'api_version': '1.0',
             'desktop_ready': True,
+            'portable': db.is_portable_mode(),
         }

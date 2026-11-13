@@ -1,0 +1,55 @@
+name: Build Windows Desktop & Portable Packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build & verify all Windows packages
+        shell: pwsh
+        run: |
+          .\build-desktop.ps1 -Setup -RunTests -Target all
+
+      - name: Run Rust unit tests
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Upload dist-desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-work-tracker-windows-desktop
+          path: |
+            dist-desktop/*.exe
+            dist-desktop/*.zip
+          if-no-files-found: error

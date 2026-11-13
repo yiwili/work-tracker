@@ -5,6 +5,9 @@ from threading import Lock
 from typing import Literal
 import asyncio
 import logging
+import mimetypes
+import os
+import sys
 from contextlib import suppress
 
 from fastapi import FastAPI, HTTPException, Request, Query
@@ -1045,7 +1048,33 @@ def create_app(engine=None):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"云端查询统计失败: {exc}")
 
-    dist = Path(__file__).resolve().parent.parent / 'frontend' / 'dist'
-    if dist.is_dir():
+    dist = resolve_frontend_dist()
+    if dist is not None:
+        _ensure_static_mimetypes()
         app.mount('/', StaticFiles(directory=dist, html=True), name='frontend')
     return app
+
+
+def _ensure_static_mimetypes() -> None:
+    mimetypes.add_type('application/javascript', '.js')
+    mimetypes.add_type('application/javascript', '.mjs')
+    mimetypes.add_type('text/css', '.css')
+    mimetypes.add_type('image/svg+xml', '.svg')
+    mimetypes.add_type('application/json', '.json')
+
+
+def resolve_frontend_dist() -> Path | None:
+    env_dist = os.environ.get('AWT_FRONTEND_DIST', '').strip()
+    candidates: list[Path] = []
+    if env_dist:
+        candidates.append(Path(env_dist))
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(Path(meipass) / 'frontend' / 'dist')
+    if getattr(sys, 'frozen', False):
+        candidates.append(Path(sys.executable).resolve().parent / 'frontend' / 'dist')
+    candidates.append(Path(__file__).resolve().parent.parent / 'frontend' / 'dist')
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None

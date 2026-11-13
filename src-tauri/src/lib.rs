@@ -84,20 +84,45 @@ fn show_startup_error(title: &str, message: &str) {
     }
 }
 
-fn resolve_data_dir(app: &AppHandle) -> PathBuf {
+fn resolve_portable_data_dir_from_exe_dir(exe_dir: &Path) -> Option<PathBuf> {
+    for marker in ["portable.flag", "portable"] {
+        if exe_dir.join(marker).is_file() {
+            return Some(exe_dir.join("data"));
+        }
+    }
+    if exe_dir.join("data").is_dir() {
+        return Some(exe_dir.join("data"));
+    }
+    None
+}
+
+fn resolve_data_dir(app: &AppHandle) -> (PathBuf, bool) {
     if let Some(raw) = std::env::var_os("AWT_DATA_DIR") {
         let trimmed = raw.to_string_lossy().trim().to_string();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+            let portable = std::env::var_os("AWT_PORTABLE")
+                .map(|v| matches!(v.to_string_lossy().trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false);
+            return (PathBuf::from(trimmed), portable);
+        }
+    }
+    if let Ok(cur_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = cur_exe.parent() {
+            if let Some(portable_dir) = resolve_portable_data_dir_from_exe_dir(exe_dir) {
+                return (portable_dir, true);
+            }
         }
     }
     if let Ok(local_data) = app.path().local_data_dir() {
-        return local_data.join("AIWorkTracker");
+        return (local_data.join("AIWorkTracker"), false);
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("data")))
-        .unwrap_or_else(|| PathBuf::from("data"))
+    (
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("data")))
+            .unwrap_or_else(|| PathBuf::from("data")),
+        true,
+    )
 }
 
 fn pick_sidecar_port() -> Result<u16, String> {
@@ -196,7 +221,7 @@ fn poll_runtime_ready(port: u16) -> bool {
         && response.contains("true")
 }
 
-fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<SidecarProcess, String> {
+fn spawn_sidecar(app: &AppHandle, data_dir: &Path, is_portable: bool) -> Result<SidecarProcess, String> {
     std::fs::create_dir_all(data_dir)
         .map_err(|e| format!("无法创建数据目录 {}：{e}", data_dir.display()))?;
 
@@ -206,6 +231,7 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<SidecarProcess, Str
     let mut cmd = Command::new(&sidecar_exe);
     cmd.args(["serve", "--port", &port.to_string(), "--watch-stdin"])
         .env("AWT_RUNTIME_MODE", "desktop-tauri")
+        .env("AWT_PORTABLE", if is_portable { "1" } else { "0" })
         .env("AWT_DATA_DIR", data_dir)
         .env("AWT_LOG_TO_FILE", "1")
         .env("PYTHONUTF8", "1")
@@ -305,7 +331,7 @@ fn open_data_directory(path: &Path) {
     }
 }
 
-fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_tray(app: &AppHandle, is_portable: bool) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
     let data_item = MenuItemBuilder::with_id("open_data", "打开数据目录").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "退出拾时").build(app)?;
@@ -317,9 +343,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .item(&quit_item)
         .build()?;
 
+    let tooltip = if is_portable {
+        "拾时 · AI 工作记录（便携版）"
+    } else {
+        "拾时 · AI 工作记录"
+    };
+
     let mut tray_builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("拾时 · AI 工作记录")
+        .tooltip(tooltip)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => restore_main_window(app),
@@ -361,12 +393,12 @@ pub fn run() {
         }))
         .setup(|app| {
             let handle = app.handle().clone();
-            let data_dir = resolve_data_dir(&handle);
+            let (data_dir, is_portable) = resolve_data_dir(&handle);
             app.manage(DataDirState(data_dir.clone()));
 
-            setup_tray(&handle)?;
+            setup_tray(&handle, is_portable)?;
 
-            let port = match spawn_sidecar(&handle, &data_dir) {
+            let port = match spawn_sidecar(&handle, &data_dir, is_portable) {
                 Ok(proc) => {
                     let port = proc.port;
                     if let Ok(mut guard) = handle.state::<SidecarState>().0.lock() {
@@ -426,4 +458,46 @@ pub fn run() {
             stop_sidecar(app_handle);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_portable_data_dir_from_exe_dir;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("awt-rust-test-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn portable_data_dir_requires_marker_or_existing_data_folder() {
+        let dir = make_temp_dir("empty");
+        assert_eq!(resolve_portable_data_dir_from_exe_dir(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn portable_data_dir_detects_flag_file_and_data_dir() {
+        let dir_flag = make_temp_dir("flag");
+        std::fs::write(dir_flag.join("portable.flag"), b"").unwrap();
+        assert_eq!(
+            resolve_portable_data_dir_from_exe_dir(&dir_flag),
+            Some(dir_flag.join("data"))
+        );
+        let _ = std::fs::remove_dir_all(&dir_flag);
+
+        let dir_data = make_temp_dir("data");
+        std::fs::create_dir_all(dir_data.join("data")).unwrap();
+        assert_eq!(
+            resolve_portable_data_dir_from_exe_dir(&dir_data),
+            Some(dir_data.join("data"))
+        );
+        let _ = std::fs::remove_dir_all(&dir_data);
+    }
 }

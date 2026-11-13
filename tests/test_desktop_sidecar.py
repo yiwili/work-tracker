@@ -15,6 +15,7 @@ from awt.app import create_app
 def test_tauri_origins_allowed_for_runtime_and_writes(tmp_path, monkeypatch):
     monkeypatch.setenv("AWT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AWT_RUNTIME_MODE", "desktop-tauri")
+    monkeypatch.delenv("AWT_PORTABLE", raising=False)
     engine = db.make_engine(tmp_path / "desktop.db")
     try:
         with TestClient(create_app(engine)) as client:
@@ -25,6 +26,7 @@ def test_tauri_origins_allowed_for_runtime_and_writes(tmp_path, monkeypatch):
                 "mode": "desktop-tauri",
                 "api_version": "1.0",
                 "desktop_ready": True,
+                "portable": False,
             }
             assert info.headers.get("access-control-allow-origin") == "http://tauri.localhost"
 

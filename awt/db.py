@@ -78,11 +78,34 @@ def _default_frozen_data_dir() -> Path:
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "AIWorkTracker"
 
 
+def resolve_portable_data_dir(exe_dir: Path) -> Path | None:
+    for marker in ("portable.flag", "portable"):
+        if (exe_dir / marker).is_file():
+            return exe_dir / "data"
+    if (exe_dir / "data").is_dir():
+        return exe_dir / "data"
+    return None
+
+
+def is_portable_mode() -> bool:
+    flag = os.environ.get("AWT_PORTABLE", "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return True
+    if flag in ("0", "false", "no"):
+        return False
+    if getattr(sys, "frozen", False):
+        return resolve_portable_data_dir(Path(sys.executable).resolve().parent) is not None
+    return False
+
+
 def data_dir():
     env_dir = os.environ.get("AWT_DATA_DIR", "").strip()
     if env_dir:
         return Path(env_dir)
     if getattr(sys, "frozen", False):
+        portable = resolve_portable_data_dir(Path(sys.executable).resolve().parent)
+        if portable is not None:
+            return portable
         return _default_frozen_data_dir()
     return Path(__file__).resolve().parent.parent / "data"
 

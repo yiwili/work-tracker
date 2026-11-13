@@ -28,29 +28,39 @@ cd ..
 
 更新前端后双击 `build.cmd`，或运行 `.\build.ps1` 重新构建；正在运行的服务会直接读取 `frontend\dist` 中的新文件。依赖缺失或需要重装时使用 `.\build.ps1 -Install`。后端代码改动仍需重启服务。
 
-## 桌面端打包（Tauri v2 一键构建）
+## 桌面端与绿色便携版打包（一键构建）
 
-项目支持打包为独立的 Windows 原生桌面应用（内置 PyInstaller 打包的 Python 后台，终端用户无需安装 Python；关闭主窗口最小化到系统托盘持续运行，托盘菜单支持显示窗口、打开数据目录和彻底退出，并具备单实例防重复启动；数据默认保存在 `%LOCALAPPDATA%\AIWorkTracker`）。
+项目支持打包为两种免安装便携形态与 Windows 安装版：
 
-构建环境要求（Windows）：Python 3.12+、Node.js 20.19+、Rust（`rustup`）、Visual Studio 2022 C++ Build Tools（含 Windows 10/11 SDK 与 VCTools）。
+1. **纯绿色便携版（`-Target green`，无需安装 VS Build Tools / Rust）**：
+   - 使用 PyInstaller 将 Python 后端与 `frontend\dist` 静态界面打包为独立绿色目录（`dist-desktop\portable-green\ai-work-tracker.exe` 及压缩包 `dist-desktop\ai-work-tracker-portable-win64.zip`）。
+   - 双击即启动本地服务，并自动通过系统 Edge 独立应用窗口模式打开界面；右下角系统托盘支持“打开主界面 / 打开数据目录 / 退出拾时”。
+   - 默认在程序同级目录附带 `portable.flag`，数据 `work.db`、日志及隔离浏览器配置均保存在同级 `data\` 目录中，拷走目录即可携带历史数据。
+2. **Tauri v2 原生桌面端与 Tauri 便携版（`-Target all` 或 `-Target tauri`）**：
+   - 内置 `awt-sidecar.exe`（WebView2 + 原生托盘 + 单实例），输出 NSIS 安装包（数据默认在 `%LOCALAPPDATA%\AIWorkTracker`）以及附带 `portable.flag` 的真便携版（`dist-desktop\portable\ai-work-tracker.exe` 及 `dist-desktop\ai-work-tracker-tauri-portable-win64.zip`，数据保存在同级 `data\`）。
+   - 需在本机具备 VS 2022 C++ Build Tools（含 Windows 10/11 SDK）与 Rust；仓库另提供 [`.github/workflows/release-desktop.yml`](file:///d:/Projects/ai-work-tracker/.github/workflows/release-desktop.yml) 可在 GitHub Actions `windows-latest` 上直接手动触发全量打包。
 
-Windows 双击 `build-desktop.cmd`，或在仓库根目录执行：
+Windows 双击 `build-desktop.cmd`（全量构建），或在仓库根目录执行：
 
 ```powershell
-# 首次构建（自动检查并安装 .[test,desktop] 与前端 Tauri 依赖）
+# 仅构建纯绿色免安装便携版与 zip（无需 VS Build Tools / Rust）
+.\build-desktop.cmd -Target green
+
+# 首次全量构建（自动检查并安装 .[test,desktop] 与前端依赖）
 .\build-desktop.ps1 -Setup
 
-# 日常一键打包（构建前端 + 打包 PyInstaller 后台 + 冒烟校验 + 生成 Tauri 安装包与便携版）
+# 全量一键打包（纯绿色便携版 + Tauri NSIS 安装包 + Tauri 便携版）
 .\build-desktop.ps1
 
 # 打包同时运行全部 pytest 自动化测试
 .\build-desktop.ps1 -RunTests
 ```
 
-后续开发者或 AI 助手协同打包桌面端时，请统一使用 `build-desktop.cmd` 或 `.\build-desktop.ps1`。构建完成后会在 `dist-desktop\` 下输出：
+后续开发者或 AI 助手协同打包桌面端/便携版时，请统一使用 `build-desktop.cmd` 或 `.\build-desktop.ps1`。构建完成后会在 `dist-desktop\` 下输出：
 
+- `dist-desktop\portable-green\ai-work-tracker.exe` 与 `dist-desktop\ai-work-tracker-portable-win64.zip`：纯绿色免安装便携版。
 - `dist-desktop\*setup.exe`：Windows NSIS 安装包（默认当前用户目录安装，支持简体中文向导）。
-- `dist-desktop\portable\ai-work-tracker.exe`：免安装绿色便携目录。
+- `dist-desktop\portable\ai-work-tracker.exe` 与 `dist-desktop\ai-work-tracker-tauri-portable-win64.zip`：Tauri 原生绿色便携版（内置 `portable.flag`，同级 `data\` 保存数据）。
 
 ## 使用
 

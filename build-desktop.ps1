@@ -1,22 +1,23 @@
 ﻿<#
 .SYNOPSIS
-    AI Work Tracker (拾时) Tauri v2 + Python Sidecar 一键式桌面端打包脚本。
+    AI Work Tracker (拾时) 一键式桌面端与绿色便携版打包脚本。
 
 .DESCRIPTION
-    所有后续桌面端正式构建（以及 AI 助手协助构建桌面端）请统一使用本脚本或 build-desktop.cmd：
-      1. 校验 Node.js / Python .venv (PyInstaller) / Rust / VS 2022 C++ Build Tools
-      2. 可选运行完整 pytest (-RunTests)
-      3. 使用 PyInstaller (packaging\awt-sidecar.spec) 打包独立 Python 后台并执行冒烟验证
-      4. 构建前端 (frontend\dist) 与 Tauri v2 原生桌面壳 + NSIS 安装包
-      5. 将安装包与便携版输出收集到 dist-desktop\ 目录
+    所有后续桌面端 / 便携版正式构建（以及 AI 助手协助构建）请统一使用本脚本或 build-desktop.cmd：
+      -Target all   : 构建纯绿色便携版 (Edge/托盘) + Tauri v2 原生安装版与 Tauri 便携版（默认）
+      -Target green : 仅构建纯绿色免安装便携版（PyInstaller 内置前端 + 托盘/Edge独立窗口 + 同级 data/，无需 VS Build Tools）
+      -Target tauri : 仅构建 Tauri v2 原生桌面壳 + NSIS 安装包 + Tauri 便携版
 
 .EXAMPLE
     .\build-desktop.ps1
+    .\build-desktop.ps1 -Target green
     .\build-desktop.ps1 -Setup
     .\build-desktop.ps1 -RunTests
     .\build-desktop.ps1 -SkipSidecar -SkipVerify
 #>
 param(
+    [ValidateSet('all', 'green', 'tauri')]
+    [string]$Target = 'all',
     [switch]$Setup,
     [switch]$SkipSidecar,
     [switch]$SkipVerify,
@@ -59,6 +60,18 @@ function Ensure-CargoPath {
     if (-not $rustc -or -not $cargo) {
         throw "Rust toolchain (rustc/cargo) not found. Install Rustup via: winget install Rustlang.Rustup"
     }
+}
+
+function Write-PortableReadme([string]$DestinationDir, [string]$EditionLabel) {
+    $readme = @"
+拾时 (AI Work Tracker) - $EditionLabel
+
+1. 解压到任意英文或中文目录后，直接双击 ai-work-tracker.exe 即可运行，无需安装 Python 或其他运行库。
+2. 同级目录下的 portable.flag 用于启用“真便携模式”：数据库 work.db、日志与浏览器缓存默认保存在本目录的 data\ 文件夹中（请勿删除 portable.flag）。
+3. 如整包复制到同一台电脑的任意新位置，历史数据与设置完整保留；若复制到另一台电脑，work.db 中的任务与历史记录仍可完整读取，模型 API Key 与 Gitee Token 需在新电脑上重新保存一次（Windows DPAPI 加密绑定本机账户）。
+4. 右下角系统托盘支持“打开主界面 / 打开数据目录 / 退出拾时”；如需备份，请先退出拾时，再直接备份整个文件夹或其中的 data\ 目录。
+"@
+    Set-Content -LiteralPath (Join-Path $DestinationDir 'README-PORTABLE.txt') -Value $readme -Encoding UTF8
 }
 
 function Assert-MsvcToolchain {
@@ -107,8 +120,11 @@ function Ensure-PythonVenv {
 
 function Ensure-FrontendDeps([string]$NpmCmd) {
     $tauriBin = Join-Path $PSScriptRoot 'frontend\node_modules\.bin\tauri.cmd'
-    if ($Setup -or -not (Test-Path -LiteralPath 'frontend\node_modules') -or -not (Test-Path -LiteralPath $tauriBin)) {
-        Write-Host 'Installing frontend & Tauri CLI dependencies...'
+    $viteBin = Join-Path $PSScriptRoot 'frontend\node_modules\.bin\vite.cmd'
+    $needTauri = ($Target -ne 'green')
+    $missingBin = (-not (Test-Path -LiteralPath $viteBin)) -or ($needTauri -and -not (Test-Path -LiteralPath $tauriBin))
+    if ($Setup -or -not (Test-Path -LiteralPath 'frontend\node_modules') -or $missingBin) {
+        Write-Host 'Installing frontend dependencies...'
         Push-Location frontend
         try {
             & $NpmCmd ci
@@ -117,10 +133,21 @@ function Ensure-FrontendDeps([string]$NpmCmd) {
             Pop-Location
         }
     }
-    if (-not (Test-Path -LiteralPath $tauriBin)) {
+    if ($needTauri -and -not (Test-Path -LiteralPath $tauriBin)) {
         throw "Tauri CLI not found at $tauriBin. Run .\build-desktop.ps1 -Setup."
     }
     return $tauriBin
+}
+
+function Build-FrontendDist([string]$NpmCmd) {
+    Write-Host 'Building frontend production bundle (frontend\dist)...'
+    Push-Location frontend
+    try {
+        & $NpmCmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend production build failed.' }
+    } finally {
+        Pop-Location
+    }
 }
 
 function Test-SidecarBinary([string]$VenvPy, [string]$SidecarExe) {
@@ -132,9 +159,23 @@ function Test-SidecarBinary([string]$VenvPy, [string]$SidecarExe) {
     if ($LASTEXITCODE -ne 0) { throw 'Sidecar smoke verification failed.' }
 }
 
-Write-Step '[1/6] Checking build toolchain...'
+function Test-PortableGreenBinary([string]$VenvPy, [string]$PortableExe) {
+    if (-not (Test-Path -LiteralPath $PortableExe)) {
+        throw "Missing portable binary: $PortableExe"
+    }
+    $verifyScript = Join-Path $PSScriptRoot 'packaging\verify_portable.py'
+    & $VenvPy $verifyScript $PortableExe
+    if ($LASTEXITCODE -ne 0) { throw 'Portable green smoke verification failed.' }
+}
+
+$needGreen = ($Target -eq 'all') -or ($Target -eq 'green')
+$needTauri = ($Target -eq 'all') -or ($Target -eq 'tauri')
+
+Write-Step "[1/6] Checking build toolchain (Target=$Target)..."
 $npmCmd = Resolve-NpmCmd
-Ensure-CargoPath
+if ($needTauri) {
+    Ensure-CargoPath
+}
 $venvPy = Ensure-PythonVenv
 $tauriBin = Ensure-FrontendDeps $npmCmd
 
@@ -152,11 +193,54 @@ if ($RunTests) {
     Write-Step '[2/6] Skipping full pytest suite (pass -RunTests to run all tests)...'
 }
 
+$outDir = Join-Path $PSScriptRoot 'dist-desktop'
+New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+
+if ($needGreen) {
+    Write-Step '[3/6] Building Pure-Green Portable Edition (no VS Build Tools required)...'
+    Build-FrontendDist $npmCmd
+    & $venvPy -m PyInstaller --noconfirm --clean --distpath build\portable-dist --workpath build\portable-work packaging\awt-portable.spec
+    if ($LASTEXITCODE -ne 0) { throw 'PyInstaller pure-green portable build failed.' }
+
+    $builtGreen = Join-Path $PSScriptRoot 'build\portable-dist\ai-work-tracker-portable'
+    if (-not (Test-Path -LiteralPath (Join-Path $builtGreen 'ai-work-tracker.exe'))) {
+        throw "Expected PyInstaller portable output missing under $builtGreen"
+    }
+
+    $greenDir = Join-Path $outDir 'portable-green'
+    if (Test-Path -LiteralPath $greenDir) {
+        Remove-Item -LiteralPath $greenDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $greenDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $builtGreen '*') -Destination $greenDir -Recurse -Force
+    Set-Content -LiteralPath (Join-Path $greenDir 'portable.flag') -Value 'portable=1' -Encoding ASCII
+    Write-PortableReadme $greenDir '纯绿色免安装便携版（内置前端 + 系统托盘 + Edge 独立应用窗口）'
+
+    $greenExe = Join-Path $greenDir 'ai-work-tracker.exe'
+    if (-not $SkipVerify) {
+        Test-PortableGreenBinary $venvPy $greenExe
+    }
+
+    $greenZip = Join-Path $outDir 'ai-work-tracker-portable-win64.zip'
+    if (Test-Path -LiteralPath $greenZip) {
+        Remove-Item -LiteralPath $greenZip -Force
+    }
+    Compress-Archive -Path (Join-Path $greenDir '*') -DestinationPath $greenZip -Force
+    Write-Host "  Pure-Green Portable Dir : dist-desktop\portable-green\ai-work-tracker.exe" -ForegroundColor Green
+    Write-Host "  Pure-Green Portable Zip : dist-desktop\ai-work-tracker-portable-win64.zip" -ForegroundColor Green
+}
+
+if (-not $needTauri) {
+    Write-Host ""
+    Write-Host "Portable green build complete!" -ForegroundColor Green
+    exit 0
+}
+
 $sidecarDir = Join-Path $PSScriptRoot 'src-tauri\resources\sidecar'
 $sidecarExe = Join-Path $sidecarDir 'awt-sidecar.exe'
 
 if (-not $SkipSidecar) {
-    Write-Step '[3/6] Packaging Python backend sidecar (PyInstaller --onedir)...'
+    Write-Step '[4/6] Packaging Python backend sidecar (PyInstaller --onedir)...'
     & $venvPy -m PyInstaller --noconfirm --clean --distpath build\sidecar-dist --workpath build\sidecar-work packaging\awt-sidecar.spec
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller sidecar build failed.' }
 
@@ -170,7 +254,7 @@ if (-not $SkipSidecar) {
     New-Item -ItemType Directory -Path $sidecarDir -Force | Out-Null
     Copy-Item -Path (Join-Path $builtSidecar '*') -Destination $sidecarDir -Recurse -Force
 } else {
-    Write-Step '[3/6] Reusing existing Python sidecar...'
+    Write-Step '[4/6] Reusing existing Python sidecar...'
 }
 
 if (-not (Test-Path -LiteralPath $sidecarExe)) {
@@ -178,10 +262,8 @@ if (-not (Test-Path -LiteralPath $sidecarExe)) {
 }
 
 if (-not $SkipVerify) {
-    Write-Step '[4/6] Running headless sidecar smoke verification...'
+    Write-Host 'Running headless sidecar smoke verification...'
     Test-SidecarBinary $venvPy $sidecarExe
-} else {
-    Write-Step '[4/6] Skipping sidecar smoke verification (-SkipVerify)...'
 }
 
 Write-Step '[5/6] Building Tauri v2 desktop executable and NSIS installer...'
@@ -189,12 +271,8 @@ Assert-MsvcToolchain
 & $tauriBin build
 if ($LASTEXITCODE -ne 0) { throw 'Tauri desktop build failed.' }
 
-Write-Step '[6/6] Collecting release artifacts into dist-desktop\...'
-$outDir = Join-Path $PSScriptRoot 'dist-desktop'
-if (Test-Path -LiteralPath $outDir) {
-    Remove-Item -LiteralPath $outDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+Write-Step '[6/6] Collecting Tauri release artifacts into dist-desktop\...'
+Get-ChildItem -Path $outDir -Filter '*-setup.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
 
 $nsisDir = Join-Path $PSScriptRoot 'src-tauri\target\release\bundle\nsis'
 $installers = @()
@@ -206,6 +284,9 @@ if (Test-Path -LiteralPath $nsisDir) {
 }
 
 $portableDir = Join-Path $outDir 'portable'
+if (Test-Path -LiteralPath $portableDir) {
+    Remove-Item -LiteralPath $portableDir -Recurse -Force
+}
 New-Item -ItemType Directory -Path $portableDir -Force | Out-Null
 $releaseDir = Join-Path $PSScriptRoot 'src-tauri\target\release'
 $mainExe = Join-Path $releaseDir 'ai-work-tracker.exe'
@@ -216,12 +297,25 @@ Copy-Item -LiteralPath $mainExe -Destination (Join-Path $portableDir 'ai-work-tr
 $portableSidecar = Join-Path $portableDir 'resources\sidecar'
 New-Item -ItemType Directory -Path $portableSidecar -Force | Out-Null
 Copy-Item -Path (Join-Path $sidecarDir '*') -Destination $portableSidecar -Recurse -Force
+Set-Content -LiteralPath (Join-Path $portableDir 'portable.flag') -Value 'portable=1' -Encoding ASCII
+Write-PortableReadme $portableDir 'Tauri 原生桌面便携版（WebView2 + 系统托盘 + 同级 data/）'
+
+$tauriPortableZip = Join-Path $outDir 'ai-work-tracker-tauri-portable-win64.zip'
+if (Test-Path -LiteralPath $tauriPortableZip) {
+    Remove-Item -LiteralPath $tauriPortableZip -Force
+}
+Compress-Archive -Path (Join-Path $portableDir '*') -DestinationPath $tauriPortableZip -Force
 
 Write-Host ""
 Write-Host "Desktop build complete!" -ForegroundColor Green
 if ($installers.Count -gt 0) {
     foreach ($inst in $installers) {
-        Write-Host "  NSIS Installer : dist-desktop\$($inst.Name)"
+        Write-Host "  NSIS Installer           : dist-desktop\$($inst.Name)"
     }
 }
-Write-Host "  Portable App   : dist-desktop\portable\ai-work-tracker.exe"
+Write-Host "  Tauri Portable Dir       : dist-desktop\portable\ai-work-tracker.exe"
+Write-Host "  Tauri Portable Zip       : dist-desktop\ai-work-tracker-tauri-portable-win64.zip"
+if ($needGreen) {
+    Write-Host "  Pure-Green Portable Dir  : dist-desktop\portable-green\ai-work-tracker.exe"
+    Write-Host "  Pure-Green Portable Zip  : dist-desktop\ai-work-tracker-portable-win64.zip"
+}
