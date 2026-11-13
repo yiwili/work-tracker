@@ -1921,7 +1921,6 @@ function App() {
                   } catch {
                     message += " 页面数据刷新失败，请刷新页面查看已保存设置。";
                   }
-                  setNotice(message);
                   return { ok: true, saved: true, message };
                 } catch (e) {
                   const message =
@@ -1930,7 +1929,6 @@ function App() {
                         ? "设置已保存，连接测试失败："
                         : "设置保存未完成，尚未测试连接："
                       : "设置保存未完成：") + (e as Error).message;
-                  setError(message);
                   return { ok: false, saved, message };
                 } finally {
                   setBusy("");
@@ -3089,8 +3087,7 @@ function SettingsForm({
     message: string;
     test?: boolean;
   } | null>(null);
-  const [s, setS] = useState(initial),
-    [error, setError] = useState("");
+  const [s, setS] = useState(initial);
   const tabsRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
   useEffect(() => {
@@ -3137,7 +3134,6 @@ function SettingsForm({
           test,
         });
         try {
-          setError("");
           const result = await onSave(
             {
               ...s,
@@ -3193,7 +3189,6 @@ function SettingsForm({
             message: result.message,
           });
         } catch (e) {
-          setError((e as Error).message);
           setFeedback({
             state: "error",
             message: "尚未完成保存或测试：" + (e as Error).message,
@@ -3217,7 +3212,10 @@ function SettingsForm({
             className="settings-tab"
             aria-selected={tab === key}
             aria-controls={`settings-pane-${key}`}
-            onClick={() => onTab(key)}
+            onClick={() => {
+              setFeedback(null);
+              onTab(key);
+            }}
           >
             <Icon size={15} />
             {label}
@@ -3480,7 +3478,6 @@ function SettingsForm({
             )}
           </div>
         </div>
-        {error && <div className="alert error">{error}</div>}
         {feedback && tab !== "model" && (
           <div
             className={
@@ -3491,7 +3488,14 @@ function SettingsForm({
             aria-label="设置保存反馈"
             aria-live={feedback.state === "error" ? "assertive" : "polite"}
           >
-            {feedback.message}
+            <span>{feedback.message}</span>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              aria-label="关闭提示"
+            >
+              <X size={16} />
+            </button>
           </div>
         )}
         <div className="settings-actions">
