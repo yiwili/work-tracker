@@ -507,7 +507,7 @@ def execute_auto_generate(
             logger.warning('定时自动生成异常 date=%s error=%s', canonical_day, msg)
             return {'triggered': True, 'status_code': 'error', 'reason': msg, 'date': str(canonical_day)}
 
-        completed_iso = datetime.now(timezone.utc).isoformat()
+        completed_iso = now_iso
         reason = _format_success_reason(result, new_events)
         summary = {
             'created': int(result.get('created') or 0),

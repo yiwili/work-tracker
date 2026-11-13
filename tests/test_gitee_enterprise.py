@@ -63,15 +63,18 @@ def test_save_mapping_preview_and_publish_once_without_changing_worklog(client,m
     c.put('/api/gitee/enterprise/config',json=config).raise_for_status()
     posted=[]
     def create(tool,arguments,credential=None,uncertain=False):
+        if tool == 'get_enterprise_issue_detail':
+            return {'id': int(arguments['issue_id']), 'registered_duration': 0}
         assert tool=='create_enterprise_issue' and arguments['enterprise_id']==7
         assert arguments['program_id']==11 and arguments['issue_type_id']==9
         assert arguments['duration'] in (90,120)
         assert arguments['plan_started_at']=='2026-10-24T00:00:00'
-        assert 'awt-work-item:' in arguments['description'] and 'raw_ref' not in arguments
+        assert arguments['description'] == '' and 'raw_ref' not in arguments
         assert 'state' not in arguments and 'finished_at' not in arguments
         posted.append(arguments)
         return {'id':100+len(posted),'ident':str(100+len(posted))}
     monkeypatch.setattr(ge,'_tool',create)
+    monkeypatch.setattr(ge.httpx, 'post', lambda *a, **kw: ge.httpx.Response(201))
     p=preview(c)
     assert all(i['program_id']==11 for i in p['items']) and posted==[]
     r=publish(c,p);r.raise_for_status()
@@ -404,8 +407,7 @@ def test_configurable_assignee_and_completed_state_on_publish_and_markdown(clien
     t_replace = task(c, '【上海工程】替换更新已完成与负责人测试', 90)
     p = preview(c, [t_create, t_replace])
     assert p['workload_configured'] is True
-    assert '预计工时：1.5h' in p['items'][0]['description']
-    assert '待人工核对' not in p['items'][0]['description']
+    assert p['items'][0]['description'] == ''
     assert p['assignee'] == {
         'id': 501,
         'name': '张三',
@@ -452,7 +454,7 @@ def test_configurable_assignee_and_completed_state_on_publish_and_markdown(clien
     assert all(not item['error'] for item in pub['items'])
     assert registrations == [(
         'https://api.gitee.com/enterprises/7/workloads/batch_create',
-        {'Authorization': 'Bearer workload-test-token'},
+        {'Authorization': 'Bearer workload-test-token', 'User-Agent': 'mcp-gitee-ent 0.3.0 Go/windows/amd64/go1.25.4', 'Content-Type': 'application/json'},
         {'workloads': [{'issue_id': 701, 'registered_at': '2026-10-24',
                         'owner_id': 501, 'duration': 1.5, 'left_duration': 0}]},
     )]

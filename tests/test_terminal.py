@@ -94,10 +94,15 @@ def test_terminal_failed_estimate_retains_same_request_and_inputs(context,monkey
 def test_terminal_gitee_requires_final_confirmation(context,monkeypatch,accept):
     create(context[0],duration=90);sent=[]
     def create_tool(tool,arguments,credential=None,uncertain=False):
-        assert tool=='create_enterprise_issue' and arguments['enterprise_id']==7
-        sent.append(arguments)
-        return {'id':123,'ident':'I123'}
+        if tool == 'create_enterprise_issue':
+            assert arguments['enterprise_id']==7
+            sent.append(arguments)
+            return {'id':123,'ident':'I123'}
+        if tool == 'get_enterprise_issue_detail':
+            return {'id': int(arguments['issue_id']), 'registered_duration': 0}
+        raise AssertionError(f"Unexpected tool: {tool}")
     monkeypatch.setattr(ge,'_tool',create_tool)
+    monkeypatch.setattr(ge.httpx, 'post', lambda *args, **kwargs: type('Resp', (), {'status_code': 201, 'json': lambda self: {'data': []}, 'text': ''})())
     script=Script([''],[False,False,accept]);app,output=terminal(context,script)
     app.publish()
     assert len(sent)==int(accept)

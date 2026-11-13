@@ -356,7 +356,7 @@ def test_publish_with_dedup_and_existing_issue_updates_cloud(sync_client, monkey
     assert len(created_calls) == 0
     assert updated_calls[0]["issue_id"] == "5001"
     assert updated_calls[0]["duration"] == 100
-    assert "工作日期：2026-10-25" in updated_calls[0]["description"]
+    assert updated_calls[0]["description"] == ""
 
     # Explicit force_create must create a new Gitee item instead of silent skip
     preview2 = c.post("/api/gitee/enterprise/preview", json={"date": day, "task_ids": [task_id]})

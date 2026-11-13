@@ -490,15 +490,17 @@ export function GiteePublishModal({
                         </div>
                       </div>
                     )}
-                    <details>
-                      <summary>查看将发送的工作内容</summary>
-                      <pre className="publish-description">
-                        {item.description.replace(
-                          /\n*<!-- awt-work-item:[^>]+ -->$/,
-                          "",
-                        )}
-                      </pre>
-                    </details>
+                    {Boolean(item.description?.trim()) && (
+                      <details>
+                        <summary>查看将发送的工作内容</summary>
+                        <pre className="publish-description">
+                          {item.description.replace(
+                            /\n*<!-- awt-work-item:[^>]+ -->$/,
+                            "",
+                          )}
+                        </pre>
+                      </details>
+                    )}
                     {state && (
                       <p
                         role="status"

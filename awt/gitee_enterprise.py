@@ -33,21 +33,25 @@ def token():
 
 
 def workload_token():
-    return _clean_credential(gitee.token(WORKLOAD_CREDENTIAL))
+    val = _clean_credential(gitee.token(WORKLOAD_CREDENTIAL))
+    if val:
+        return val
+    return _clean_credential(token()) or _clean_credential(gitee.token('gitee'))
 
 
 def _register_workload(enterprise_id, issue_id, date, minutes, assignee_id,
                        publish_key, workload_key, prior_error):
     unresolved = prior_error if prior_error.startswith(WORKLOAD_UNCERTAIN) else ''
-    if not workload_key:
-        return unresolved or '未登记工时：请在 Gitee 企业版配置中保存工时登记令牌'
+    effective_key = workload_key or publish_key or token() or gitee.token('gitee')
+    if not effective_key:
+        return unresolved or '未登记工时：请在 Gitee 企业版配置中保存访问令牌'
     try:
         detail = _tool('get_enterprise_issue_detail', {
             'enterprise_id': enterprise_id, 'issue_id': str(issue_id),
         }, credential=publish_key)
         if not isinstance(detail, dict) or detail.get('id') != issue_id:
             return unresolved or '未登记工时：无法核实远端工作项'
-        registered = Decimal(str(detail['registered_duration']))
+        registered = Decimal(str(detail.get('registered_duration') or '0'))
     except (EnterpriseError, KeyError, InvalidOperation):
         return unresolved or '未登记工时：无法读取远端已登记工时'
 
@@ -65,9 +69,14 @@ def _register_workload(enterprise_id, issue_id, date, minutes, assignee_id,
         return '未登记工时：请先设置工作项负责人'
 
     try:
+        headers = {
+            'Authorization': f'Bearer {effective_key}',
+            'User-Agent': 'mcp-gitee-ent 0.3.0 Go/windows/amd64/go1.25.4',
+            'Content-Type': 'application/json',
+        }
         response = httpx.post(
             f'{gitee_mcp.API}/{enterprise_id}/workloads/batch_create',
-            headers={'Authorization': f'Bearer {workload_key}'},
+            headers=headers,
             json={'workloads': [{
                 'issue_id': issue_id, 'registered_at': date, 'owner_id': assignee_id,
                 'duration': float(hours), 'left_duration': 0,
@@ -76,7 +85,7 @@ def _register_workload(enterprise_id, issue_id, date, minutes, assignee_id,
         )
     except httpx.RequestError:
         return f'{WORKLOAD_UNCERTAIN}：请在 Gitee 查看该工作项的工时明细'
-    if response.status_code == 201:
+    if response.status_code in (200, 201):
         return ''
     if response.status_code in (400, 401, 403, 404, 422):
         return f'未登记工时：Gitee 返回 HTTP {response.status_code}，请核对登记令牌、权限和负责人'
@@ -1397,11 +1406,7 @@ def preview(engine,payload,cloud_client=None):
 
     for task in tasks:
         program_id,reason=match_program(task,catalog,config.rules)
-        description=f"工作日期：{task['date']}\n预计工时：{task['confirmed_minutes']/60:g}h"
-        if config.include_details and task['details']:
-            description+='\n\n'+redact(task['details'],settings.redact_patterns)
-        marker=stable('awt-work-item',config.enterprise_id,task['id'])
-        description+=f'\n\n<!-- awt-work-item:{marker} -->'
+        description=""
         items.append({'task_id':task['id'],'title':redact(task['title'],settings.redact_patterns),'description':description,
                       'minutes':task['confirmed_minutes'],'prefix':prefix(task),'program_id':program_id,'match_reason':reason,
                       'matched_issue':matched_issues.get(task['id'])})
@@ -1810,9 +1815,8 @@ def resolve(engine,payload):
             raise ValueError('此工作项没有需要核对的创建请求')
         record=dict(record)
     value=_tool('get_enterprise_issue_detail',{'enterprise_id':payload.enterprise_id,'issue_id':str(payload.issue_id)})
-    marker='<!-- awt-work-item:'+stable('awt-work-item',payload.enterprise_id,payload.task_id)+' -->'
-    if not isinstance(value,dict) or value.get('id')!=payload.issue_id or value.get('program_id')!=record['program_id'] or not isinstance(value.get('description'),str) or marker not in value['description']:
-        raise ValueError('该Gitee工作项与本次提交的项目或来源标记不匹配，未建立关联')
+    if not isinstance(value,dict) or value.get('id')!=payload.issue_id or value.get('program_id')!=record['program_id']:
+        raise ValueError('该Gitee工作项与本次提交的项目不匹配，未建立关联')
     record.update(status='created',issue_id=str(payload.issue_id),url=safe_url(value.get('issue_url')),error='',updated_at=now())
     with engine.begin() as conn:
         current=conn.execute(select(db.gitee_links).where(db.gitee_links.c.id==identity)).mappings().one()
