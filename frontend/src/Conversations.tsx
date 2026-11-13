@@ -15,6 +15,7 @@ import {
   RotateCcw,
   LockKeyhole,
   Unlink,
+  X,
 } from "lucide-react";
 import type { ConversationOverview, MultiDayBinding, Settings } from "./types";
 import { api } from "./api";
@@ -340,20 +341,6 @@ export function Conversations({
               分析结果{pendingCount ? `（${pendingCount}）` : ""}
             </button>
           )}
-          <button
-            type="button"
-            className={`outline multiday-toggle-btn ${showMultiDay || isBound ? "active" : ""}`}
-            disabled={busy || overview.running || analyzing}
-            onClick={() => setShowMultiDay(!showMultiDay)}
-            title="自选统计跨度，支持跨天一键采集并将多日工作合并统计"
-          >
-            <CalendarRange size={15} />
-            {isBound
-              ? `已绑定 (${diffDays}天)`
-              : showMultiDay
-                ? `跨天合并 (${diffDays}天)`
-                : "多天合并"}
-          </button>
           {!showMultiDay && (
             <button
               className="primary"
@@ -523,6 +510,16 @@ export function Conversations({
               <span className="multi-day-target-badge">
                 归入 {(binding?.anchor_date || effectiveDay).slice(5)} 日报
               </span>
+              {!isBound && (
+                <button
+                  type="button"
+                  className="multi-day-close-btn"
+                  onClick={() => setShowMultiDay(false)}
+                  title="收起多天合并面板"
+                >
+                  <X size={15} />
+                </button>
+              )}
             </div>
           </div>
 
@@ -892,10 +889,26 @@ export function Conversations({
           {activeOverview.work_timing &&
             ` · 活跃 ${activeOverview.work_timing.observable_active_minutes}m`}
         </span>
-        <button onClick={onSettings}>
-          <Settings2 size={14} />
-          模型设置
-        </button>
+        <div className="metrics-bar-actions">
+          <button
+            type="button"
+            className={`metrics-multiday-btn ${showMultiDay || isBound ? "active" : ""}`}
+            disabled={busy || overview.running || analyzing}
+            onClick={() => setShowMultiDay(!showMultiDay)}
+            title="自选统计跨度，支持跨天一键采集并将多日工作合并统计"
+          >
+            <CalendarRange size={14} />
+            {isBound
+              ? `已绑定 (${diffDays}天)`
+              : showMultiDay
+                ? `收起跨天 (${diffDays}天)`
+                : "多天合并"}
+          </button>
+          <button type="button" onClick={onSettings} title="调整分析模型与相关参数">
+            <Settings2 size={14} />
+            模型设置
+          </button>
+        </div>
       </div>
       {legacyCount > 0 && (
         <p className="conversation-hint warning">

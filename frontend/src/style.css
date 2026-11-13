@@ -2174,17 +2174,51 @@ h2 {
   white-space: nowrap;
 }
 
-.conversation-total button {
+.metrics-bar-actions {
   margin-left: auto;
-  font-size: 12px;
-  color: var(--apple-blue);
-  font-weight: 600;
-  padding: 5px 10px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.conversation-total button:hover {
-  background: rgba(0, 122, 255, 0.1);
+.metrics-bar-actions button {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--apple-blue, #0071e3);
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 113, 227, 0.16);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.metrics-bar-actions button:hover {
+  background: #ffffff;
+  border-color: rgba(0, 113, 227, 0.35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.metrics-bar-actions .metrics-multiday-btn {
+  color: var(--apple-text-secondary, #48484a);
+  font-weight: 500;
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.metrics-bar-actions .metrics-multiday-btn:hover {
+  color: var(--apple-blue, #0071e3);
+  border-color: rgba(0, 113, 227, 0.3);
+}
+
+.metrics-bar-actions .metrics-multiday-btn.active {
+  background: rgba(0, 113, 227, 0.12);
+  color: var(--apple-blue, #0071e3);
+  border-color: rgba(0, 113, 227, 0.35);
+  font-weight: 600;
 }
 
 .conversation-hint {
@@ -7936,6 +7970,25 @@ body.todo-bubble-resizing {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.multi-day-close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 6px;
+  color: var(--apple-text-tertiary, #86868b);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  margin-left: 6px;
+}
+
+.multi-day-close-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--apple-text-primary, #1d1d1f);
 }
 
 .multi-day-controls-row {
