@@ -3179,6 +3179,10 @@ function SettingsForm({
                 ...s.trae_intl,
                 paths: lines(s.trae_intl.paths.join("\n")),
               },
+              cursor: {
+                ...s.cursor,
+                paths: lines(s.cursor.paths.join("\n")),
+              },
             },
             apiKey,
             test,

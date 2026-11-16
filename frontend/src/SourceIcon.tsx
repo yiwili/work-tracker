@@ -14,6 +14,7 @@ const iconFiles: Record<string, string> = {
   trae: "trae.svg",
   trae_cn: "trae.svg",
   trae_intl: "trae.svg",
+  cursor: "cursor.svg",
   git: "git.svg",
 };
 

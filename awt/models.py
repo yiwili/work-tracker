@@ -1,4 +1,5 @@
 import re
+import sys
 from datetime import date as Date, datetime
 from pathlib import Path
 from typing import Literal
@@ -13,7 +14,7 @@ class SourceConfig(BaseModel):
 
 
 CONVERSATION_SOURCES = ('codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl',
-                        'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl')
+                        'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'cursor')
 
 # 旧版把国内外版合并成一个来源；读取旧设置时按路径拆到两个新来源。
 SOURCE_FAMILIES = {
@@ -86,6 +87,18 @@ def _trae_cn_source():
 
 def _trae_intl_source():
     return _source(Path.home() / ".trae" / "memory" / "projects")
+
+
+def _cursor_source():
+    paths = [Path.home() / ".cursor" / "projects"]
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "Cursor" / "User"
+    elif sys.platform.startswith("linux"):
+        base = Path.home() / ".config" / "Cursor" / "User"
+    else:
+        base = Path.home() / "AppData" / "Roaming" / "Cursor" / "User"
+    paths.extend([base / "globalStorage", base / "workspaceStorage"])
+    return SourceConfig(paths=[str(p) for p in paths])
 
 
 def _is_cn_path(family, path):
@@ -302,6 +315,7 @@ class Settings(BaseModel):
     qoder_intl: SourceConfig = Field(default_factory=_qoder_intl_source)
     trae_cn: SourceConfig = Field(default_factory=_trae_cn_source)
     trae_intl: SourceConfig = Field(default_factory=_trae_intl_source)
+    cursor: SourceConfig = Field(default_factory=_cursor_source)
     git_roots: list[str] = Field(default_factory=list)
     git_author: GitAuthor | None = None
     git_author_overrides: dict[str,GitAuthor] = Field(default_factory=dict,max_length=100)
@@ -323,7 +337,7 @@ class Settings(BaseModel):
     auto_generate: AutoGenerateConfig = Field(default_factory=AutoGenerateConfig)
     task_details_mode: Literal['standard', 'concise', 'none'] = 'standard'
     theme_id: str = Field(default='apple-hig', max_length=64)
-    analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'git']] = Field(default_factory=lambda: ['codex'])
+    analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'cursor', 'git']] = Field(default_factory=lambda: ['codex'])
     agent_prompts: dict[str, str] = Field(default_factory=dict)
     title_examples: list[str] = Field(default_factory=list, max_length=80)
     history_reference: dict = Field(default_factory=dict)

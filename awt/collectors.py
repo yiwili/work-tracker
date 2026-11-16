@@ -819,3 +819,271 @@ class TraeCnAdapter(TraeAdapter):
 
 class TraeIntlAdapter(TraeAdapter):
     name = "trae_intl"
+
+
+_CURSOR_SHELL_TOOLS = frozenset({
+    "run_terminal_cmd", "run_terminal_command", "run_command",
+    "bash", "shell", "exec_command", "shell_command",
+})
+
+
+def _decode_file_uri(uri):
+    import urllib.parse
+    if not isinstance(uri, str) or not uri.startswith("file://"):
+        return str(uri or "")
+    clean = uri.removeprefix("file:///")
+    if clean.startswith("/") and len(clean) > 2 and clean[2] == ":":
+        clean = clean.lstrip("/")
+    return str(Path(urllib.parse.unquote(clean)))
+
+
+class CursorAdapter(JSONLAdapter):
+    """Cursor IDE / Agent 会话记录。
+
+    支持：
+    1. ~/.cursor/projects/<slug>/agent-transcripts/*.jsonl（Cursor Agent / CLI JSONL 记录）
+    2. Cursor IDE SQLite 数据库 state.vscdb（cursorDiskKV 中的 composerData/bubbleId，以及 ItemTable 中的 chatdata/composerData）
+    """
+
+    name = "cursor"
+
+    def discover(self):
+        found = {}
+        for configured in self.paths:
+            path = Path(configured).expanduser()
+            if path.is_file() and path.suffix in (".jsonl", ".vscdb"):
+                found[str(path.resolve())] = path
+            elif path.is_dir():
+                for pattern in ("*.jsonl", "state.vscdb"):
+                    for item in path.rglob(pattern):
+                        found[str(item.resolve())] = item
+            else:
+                self.warnings.append(f"路径不存在：{path}")
+        return [SourceLocation(path, self.name) for path in found.values()]
+
+    def collect(self, location, cursor):
+        if location.path.suffix == ".vscdb":
+            yield from self._collect_vscdb(location, cursor)
+            return
+        yield from super().collect(location, cursor)
+
+    def _workspace_cwd(self, vscdb_path):
+        ws_file = vscdb_path.parent / "workspace.json"
+        if not ws_file.is_file():
+            return ""
+        try:
+            data = json.loads(ws_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        raw_uri = data.get("folder") or data.get("workspace") or ""
+        return _decode_file_uri(raw_uri)
+
+    def _parse_json_value(self, raw_value):
+        if isinstance(raw_value, bytes):
+            raw_value = raw_value.decode("utf-8", errors="replace")
+        if not isinstance(raw_value, str):
+            return None
+        try:
+            return json.loads(raw_value)
+        except ValueError:
+            return None
+
+    def _emit_tool_call(self, raw, location, name, args, ts):
+        ctx = tool_context(args, self.cwd)
+        is_shell = str(name).lower() in _CURSOR_SHELL_TOOLS
+        rendered = f"{name}\n{args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)}"
+        return self.make(raw, location, "shell_command" if is_shell else "tool_call",
+                         rendered, ts, {"tool": name, **ctx})
+
+    def _emit_bubble(self, raw, location, bubble, fallback_ts=None):
+        if not isinstance(bubble, dict):
+            return []
+        ts = bubble.get("createdAt") or bubble.get("timestamp") or bubble.get("created_at") or fallback_ts
+        if not ts:
+            return []
+        btype = bubble.get("type")
+        role = str(bubble.get("role") or "").lower()
+        is_user = btype == 1 or str(btype).lower() in ("user", "human", "user_input", "user_prompt") or role in ("user", "human")
+        is_assistant = btype == 2 or str(btype).lower() in ("assistant", "ai", "bot", "model") or role in ("assistant", "model")
+
+        text = str(
+            bubble.get("text")
+            or bubble.get("rawText")
+            or content_text(bubble.get("content", ""))
+            or content_text(bubble.get("message", ""))
+            or ""
+        ).strip()
+
+        if is_user:
+            return self.make(raw, location, "user_prompt", text, ts) if text else []
+
+        if is_assistant:
+            res = []
+            tools = bubble.get("toolFormerData")
+            if isinstance(tools, dict):
+                tools = [tools]
+            if isinstance(tools, list):
+                for tf in tools:
+                    if not isinstance(tf, dict):
+                        continue
+                    fname = tf.get("name") or tf.get("toolName") or "tool"
+                    fargs = tf.get("rawArgs") or tf.get("params") or tf.get("args") or {}
+                    res += self._emit_tool_call(raw, location, fname, fargs, ts)
+            if text:
+                res += self.make(raw, location, "assistant_message", text, ts)
+            return res
+
+        return []
+
+    def _collect_vscdb(self, location, cursor):
+        import sqlite3
+
+        workspace_cwd = self._workspace_cwd(location.path)
+        self.cwd = workspace_cwd
+        self.session_id = location.path.parent.name or location.path.stem
+        self.calls = {}
+        self.call_contexts = {}
+
+        try:
+            with sqlite3.connect(f"file:{location.path}?mode=ro", uri=True, timeout=1.0) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if "cursorDiskKV" in tables:
+                    yield from self._collect_cursor_disk_kv(conn, location, workspace_cwd)
+                if "ItemTable" in tables:
+                    yield from self._collect_item_table(conn, location, workspace_cwd)
+        except (sqlite3.Error, OSError) as exc:
+            self.warnings.append(f"{location.path.name}: 无法读取 Cursor 数据库 ({exc})")
+            return
+
+        try:
+            cursor.offset = location.path.stat().st_size
+        except OSError:
+            pass
+
+    def _collect_cursor_disk_kv(self, conn, location, workspace_cwd):
+        composers = {}
+        for key, raw_val in conn.execute("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"):
+            data = self._parse_json_value(raw_val)
+            if not isinstance(data, dict):
+                continue
+            cid = str(data.get("composerId") or key.removeprefix("composerData:"))
+            composers[cid] = data
+
+        seen_composers_with_bubbles = set()
+        for idx, (key, raw_val) in enumerate(conn.execute("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'")):
+            data = self._parse_json_value(raw_val)
+            if not isinstance(data, dict):
+                continue
+            parts = key.split(":", 2)
+            cid = parts[1] if len(parts) >= 2 else location.path.stem
+            seen_composers_with_bubbles.add(cid)
+            comp = composers.get(cid, {})
+            self.session_id = cid
+            self.cwd = str(comp.get("workspacePath") or comp.get("worktreePath") or comp.get("cwd") or comp.get("projectPath") or workspace_cwd)
+            fallback_ts = comp.get("createdAt") or comp.get("lastUpdatedAt")
+            yield from self._emit_bubble(RawEvent(data, idx), location, data, fallback_ts)
+
+        for cid, comp in composers.items():
+            if cid in seen_composers_with_bubbles:
+                continue
+            conv = comp.get("conversation")
+            if not isinstance(conv, list):
+                continue
+            self.session_id = cid
+            self.cwd = str(comp.get("workspacePath") or comp.get("worktreePath") or comp.get("cwd") or comp.get("projectPath") or workspace_cwd)
+            fallback_ts = comp.get("createdAt") or comp.get("lastUpdatedAt")
+            for idx, bubble in enumerate(conv):
+                yield from self._emit_bubble(RawEvent(bubble, idx), location, bubble, fallback_ts)
+
+    def _collect_item_table(self, conn, location, workspace_cwd):
+        rows = conn.execute(
+            "SELECT key, value FROM ItemTable WHERE key IN ('workbench.panel.aichat.view.aichat.chatdata', 'composer.composerData')"
+        )
+        for key, raw_val in rows:
+            data = self._parse_json_value(raw_val)
+            if not isinstance(data, dict):
+                continue
+            if key == "workbench.panel.aichat.view.aichat.chatdata":
+                for tab in data.get("tabs") or []:
+                    if not isinstance(tab, dict):
+                        continue
+                    self.session_id = str(tab.get("tabId") or location.path.parent.name or location.path.stem)
+                    self.cwd = workspace_cwd
+                    for idx, bubble in enumerate(tab.get("bubbles") or []):
+                        yield from self._emit_bubble(RawEvent(bubble, idx), location, bubble)
+            elif key == "composer.composerData":
+                for comp in data.get("allComposers") or []:
+                    if not isinstance(comp, dict):
+                        continue
+                    self.session_id = str(comp.get("composerId") or location.path.parent.name or location.path.stem)
+                    self.cwd = str(comp.get("workspacePath") or comp.get("cwd") or workspace_cwd)
+                    fallback_ts = comp.get("createdAt") or comp.get("lastUpdatedAt")
+                    for idx, bubble in enumerate(comp.get("conversation") or []):
+                        yield from self._emit_bubble(RawEvent(bubble, idx), location, bubble, fallback_ts)
+
+    def normalize(self, raw, location):
+        row = raw.value
+        if "session_id" in row or "sessionId" in row:
+            self.session_id = str(row.get("session_id") or row.get("sessionId") or self.session_id)
+        if any(k in row for k in ("cwd", "workdir", "workspacePath")):
+            self.cwd = str(row.get("cwd") or row.get("workdir") or row.get("workspacePath") or self.cwd)
+
+        ts = row.get("timestamp") or row.get("createdAt") or row.get("created_at") or row.get("time") or row.get("ts")
+        if not ts:
+            try:
+                ts = datetime.fromtimestamp(location.path.stat().st_mtime, timezone.utc).isoformat()
+            except OSError:
+                return []
+
+        kind = str(row.get("type") or row.get("role") or "").lower()
+        msg = row.get("message") if isinstance(row.get("message"), dict) else None
+        if not kind and msg:
+            kind = str(msg.get("role") or "").lower()
+
+        if kind in ("user", "human", "user_input", "user_prompt"):
+            content = msg.get("content", "") if msg else row.get("content", row.get("message", row.get("text", "")))
+            text = content_text(content).strip()
+            return self.make(raw, location, "user_prompt", text, ts) if text else []
+
+        if kind in ("assistant", "model", "ai"):
+            res = []
+            text_parts = []
+            content = msg.get("content", "") if msg else row.get("content", row.get("message", row.get("text", "")))
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, str):
+                        text_parts.append(part)
+                    elif isinstance(part, dict):
+                        ptype = str(part.get("type") or "").lower()
+                        if ptype == "tool_use":
+                            res += self._emit_tool_call(raw, location, part.get("name", "tool"), part.get("input", {}), ts)
+                        elif ptype in ("text", "output_text", ""):
+                            text_parts.append(content_text(part.get("text", part.get("content", ""))))
+            else:
+                text_parts.append(content_text(content))
+
+            for tc in row.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                fname = tc.get("name") or (tc.get("function") or {}).get("name", "tool")
+                fargs = tc.get("args") or tc.get("arguments") or (tc.get("function") or {}).get("arguments", {})
+                res += self._emit_tool_call(raw, location, fname, fargs, ts)
+
+            combined = "\n".join(t.strip() for t in text_parts if t.strip())
+            if combined:
+                res += self.make(raw, location, "assistant_message", combined, ts)
+            return res
+
+        if kind in ("tool_call", "function_call", "tool_use"):
+            fname = row.get("name") or (row.get("function") or {}).get("name", "tool")
+            fargs = row.get("input") or row.get("arguments") or row.get("args") or (row.get("function") or {}).get("arguments", {})
+            return self._emit_tool_call(raw, location, fname, fargs, ts)
+
+        if kind in ("tool_result", "function_response", "tool"):
+            output = row.get("response") or row.get("output") or row.get("content", "")
+            text = content_text(output).strip()
+            return self.make(raw, location, "tool_result", text, ts, {"tool": "tool", "event_cwd": self.cwd}) if text else []
+
+        return []

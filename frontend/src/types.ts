@@ -301,6 +301,7 @@ export type Settings = {
   qoder_intl: SourceConfig;
   trae_cn: SourceConfig;
   trae_intl: SourceConfig;
+  cursor: SourceConfig;
   git_roots: string[];
   git_author: GitAuthor | null;
   git_author_overrides: Record<string, GitAuthor>;

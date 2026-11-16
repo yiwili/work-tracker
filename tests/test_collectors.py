@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from awt.collectors import (AntigravityAdapter, CollectionCursor, DeepSeekHarnessAdapter,
+from awt.collectors import (AntigravityAdapter, CollectionCursor, CursorAdapter, DeepSeekHarnessAdapter,
                             DoubaoAdapter, GeminiAdapter, QoderAdapter, SourceLocation,
                             TraeAdapter, WorkBuddyAdapter, zstandard)
 from awt.models import Settings
@@ -33,6 +33,8 @@ def test_default_sources_cover_domestic_and_international_editions(tmp_path, mon
     assert any('.trae-cn' in path for path in settings.trae_cn.paths)
     assert any(path.endswith('.trae\\memory\\projects') or path.endswith('.trae/memory/projects') for path in settings.trae_intl.paths)
     assert any(path.endswith('.dsh\\sessions') or path.endswith('.dsh/sessions') for path in settings.deepseek_harness.paths)
+    assert any(path.endswith('.cursor\\projects') or path.endswith('.cursor/projects') for path in settings.cursor.paths)
+    assert any('globalStorage' in path and 'Cursor' in path for path in settings.cursor.paths)
 
 
 def test_legacy_merged_sources_split_into_domestic_and_international():
@@ -285,3 +287,127 @@ def test_doubao_reads_session_events(tmp_path):
     assert events[1].metadata['tool'] == 'run_command'
     assert events[2].summary == '今日已完成豆包桌面端接入'
     assert events[3].summary == '8 passed'
+
+
+def test_cursor_reads_agent_transcript_jsonl(tmp_path):
+    transcript = tmp_path / '.cursor' / 'projects' / 'd-Projects-demo' / 'agent-transcripts' / 'cur-1.jsonl'
+    write(transcript, [
+        {
+            'role': 'user', 'session_id': 'cur-1', 'cwd': str(tmp_path / 'demo'),
+            'timestamp': '2026-11-16T07:00:00Z',
+            'message': {'role': 'user', 'content': [{'type': 'text', 'text': '新增 Cursor 采集器'}]},
+        },
+        {
+            'role': 'assistant', 'session_id': 'cur-1',
+            'timestamp': '2026-11-16T07:01:00Z',
+            'message': {
+                'role': 'assistant',
+                'content': [
+                    {'type': 'tool_use', 'name': 'run_terminal_cmd', 'input': {'command': 'pytest'}},
+                    {'type': 'text', 'text': '已完成 Cursor 采集器接入'},
+                ],
+            },
+        },
+        {
+            'type': 'tool_result', 'session_id': 'cur-1',
+            'timestamp': '2026-11-16T07:02:00Z',
+            'output': 'all passed',
+        },
+    ])
+    adapter = CursorAdapter([tmp_path / '.cursor' / 'projects'])
+    locations = adapter.discover()
+    assert [loc.path for loc in locations] == [transcript]
+    events = collect(adapter, transcript)
+    assert [e.kind for e in events] == ['user_prompt', 'shell_command', 'assistant_message', 'tool_result']
+    assert events[0].summary == '新增 Cursor 采集器'
+    assert events[0].cwd == str(tmp_path / 'demo')
+    assert events[1].metadata['tool'] == 'run_terminal_cmd'
+    assert events[2].summary == '已完成 Cursor 采集器接入'
+    assert events[3].summary == 'all passed'
+
+
+def test_cursor_reads_global_vscdb_cursor_disk_kv(tmp_path):
+    import sqlite3
+
+    vscdb = tmp_path / 'globalStorage' / 'state.vscdb'
+    vscdb.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(vscdb) as conn:
+        conn.execute('CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute(
+            'INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)',
+            ('composerData:comp-1', json.dumps({
+                'composerId': 'comp-1',
+                'workspacePath': str(tmp_path / 'repo'),
+                'createdAt': 1763276400000,
+            })),
+        )
+        conn.execute(
+            'INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)',
+            ('bubbleId:comp-1:b1', json.dumps({
+                'type': 1,
+                'text': '检查登录接口报错',
+                'createdAt': '2026-11-16T08:00:00Z',
+            })),
+        )
+        conn.execute(
+            'INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)',
+            ('bubbleId:comp-1:b2', json.dumps({
+                'type': 2,
+                'text': '已定位并修复 token 校验逻辑',
+                'createdAt': '2026-11-16T08:01:00Z',
+                'toolFormerData': {
+                    'name': 'edit_file',
+                    'rawArgs': json.dumps({'file_path': str(tmp_path / 'repo' / 'auth.py')}),
+                },
+            })),
+        )
+
+    adapter = CursorAdapter([tmp_path / 'globalStorage'])
+    locations = adapter.discover()
+    assert [loc.path for loc in locations] == [vscdb]
+    cursor = CollectionCursor()
+    events = list(adapter.collect(locations[0], cursor))
+    assert [e.kind for e in events] == ['user_prompt', 'tool_call', 'assistant_message']
+    assert events[0].session_id == 'comp-1'
+    assert events[0].cwd == str(tmp_path / 'repo')
+    assert events[0].summary == '检查登录接口报错'
+    assert events[1].metadata['tool'] == 'edit_file'
+    assert events[2].summary == '已定位并修复 token 校验逻辑'
+    assert cursor.offset == vscdb.stat().st_size
+
+
+def test_cursor_reads_workspace_vscdb_item_table_and_workspace_json(tmp_path):
+    import sqlite3
+
+    ws_dir = tmp_path / 'workspaceStorage' / 'abc123'
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir = tmp_path / 'my-project'
+    (ws_dir / 'workspace.json').write_text(
+        json.dumps({'folder': repo_dir.as_uri()}),
+        encoding='utf-8',
+    )
+    vscdb = ws_dir / 'state.vscdb'
+    with sqlite3.connect(vscdb) as conn:
+        conn.execute('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute(
+            'INSERT INTO ItemTable (key, value) VALUES (?, ?)',
+            ('workbench.panel.aichat.view.aichat.chatdata', json.dumps({
+                'tabs': [{
+                    'tabId': 'tab-1',
+                    'bubbles': [
+                        {'type': 'user', 'text': '补充单元测试', 'timestamp': '2026-11-16T09:00:00Z'},
+                        {'type': 'ai', 'text': '已新增 3 个测试用例', 'timestamp': '2026-11-16T09:01:00Z'},
+                    ],
+                }],
+            })),
+        )
+
+    adapter = CursorAdapter([tmp_path / 'workspaceStorage'])
+    locations = adapter.discover()
+    assert [loc.path for loc in locations] == [vscdb]
+    events = collect(adapter, vscdb)
+    assert [e.kind for e in events] == ['user_prompt', 'assistant_message']
+    assert events[0].session_id == 'tab-1'
+    assert Path(events[0].cwd) == repo_dir
+    assert events[0].summary == '补充单元测试'
+    assert events[1].summary == '已新增 3 个测试用例'

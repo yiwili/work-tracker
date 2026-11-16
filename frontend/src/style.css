@@ -4185,6 +4185,11 @@ code {
   box-shadow: 0 0 0 2px rgba(48, 176, 199, 0.25);
 }
 
+.timeline-dot.cursor {
+  background: #27272a;
+  box-shadow: 0 0 0 2px rgba(39, 39, 42, 0.25);
+}
+
 .timeline-event::after {
   content: "";
   position: absolute;

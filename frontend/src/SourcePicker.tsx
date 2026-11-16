@@ -25,6 +25,7 @@ export const sourceKeys = [
   "qoder_intl",
   "trae_cn",
   "trae_intl",
+  "cursor",
 ] as const;
 export type SourceKey = (typeof sourceKeys)[number];
 
@@ -41,6 +42,7 @@ export const sourceLabels: Record<SourceKey, string> = {
   qoder_intl: "Qoder 国际版",
   trae_cn: "Trae 国内版（会话摘要）",
   trae_intl: "Trae 国际版（会话摘要）",
+  cursor: "Cursor",
 };
 
 type PathStatus = {

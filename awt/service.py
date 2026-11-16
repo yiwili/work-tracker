@@ -11,7 +11,7 @@ from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from . import db
-from .collectors import (ClaudeAdapter, CodexAdapter, AntigravityAdapter, GeminiAdapter,
+from .collectors import (ClaudeAdapter, CodexAdapter, AntigravityAdapter, CursorAdapter, GeminiAdapter,
                          DoubaoAdapter, DeepSeekHarnessAdapter, QoderCnAdapter,
                          QoderIntlAdapter, TraeCnAdapter, TraeIntlAdapter, WorkBuddyCnAdapter,
                          WorkBuddyIntlAdapter, CollectionCursor, stable)
@@ -143,7 +143,8 @@ def collect(conn, day, progress=None, start_day=None, end_day=None):
                         (WorkBuddyCnAdapter, settings.workbuddy_cn), (WorkBuddyIntlAdapter, settings.workbuddy_intl),
                         (DeepSeekHarnessAdapter, settings.deepseek_harness),
                         (QoderCnAdapter, settings.qoder_cn), (QoderIntlAdapter, settings.qoder_intl),
-                        (TraeCnAdapter, settings.trae_cn), (TraeIntlAdapter, settings.trae_intl)]:
+                        (TraeCnAdapter, settings.trae_cn), (TraeIntlAdapter, settings.trae_intl),
+                        (CursorAdapter, settings.cursor)]:
         adapter = cls(config.paths, settings.redact_patterns, settings.timezone)
         count, files = 0, 0
         if config.enabled:

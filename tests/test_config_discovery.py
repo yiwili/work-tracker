@@ -106,3 +106,18 @@ def test_source_check_rediscover_includes_builtin_defaults(client, tmp_path, mon
 def test_source_check_rejects_unknown_source(client):
     response = client.post('/api/sources/check', json={'sources': {'unknown': ['C:/tmp']}})
     assert response.status_code in (400, 422)
+
+
+def test_source_check_detects_cursor_paths(client, tmp_path):
+    cursor_projects = tmp_path / '.cursor' / 'projects'
+    cursor_projects.mkdir(parents=True)
+    missing = tmp_path / 'Cursor' / 'User' / 'globalStorage'
+    response = client.post('/api/sources/check', json={'sources': {
+        'cursor': [str(cursor_projects), str(missing)],
+    }})
+    response.raise_for_status()
+    data = response.json()
+    assert {(item['source'], item['exists']) for item in data['items']} == {
+        ('cursor', True), ('cursor', False),
+    }
+    assert data['detected'] == ['cursor']
