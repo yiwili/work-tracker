@@ -134,11 +134,7 @@ export function AnalysisLog({
           aria-expanded={expanded}
           onClick={() => setManual(!expanded)}
         >
-          {thinkingLive ? (
-            <LoaderCircle className="spin" size={14} />
-          ) : (
-            <Brain size={14} />
-          )}
+          <Brain size={14} />
           <span>
             {thinking
               ? thinkingLive
