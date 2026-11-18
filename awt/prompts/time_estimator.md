@@ -3,6 +3,6 @@
 纯知识了解、学习现有功能、请AI梳理源码/区别/适用场景默认 eligible=false，不因改成“研究/分析/梳理”标题而计时。学习例外必须有同一主题持续讨论的日志依据，且 timing_reference.observable_active_minutes 严格大于60；缺少时间证据或仅会话跨度超过一小时仍为 eligible=false。实际开发、修复、部署等工作中的必要理解不单列学习时间。历史工作项中的“学习”写法只是风格样例，不是计时许可。人工固定事项保持用户原值。
 综合业务范围、难度、排查复杂度、开发与测试工作量、工作相关对话的活跃片段及已知工具运行时间，给出相对投入权重和独立估算分钟数。
 时间证据是参考，不能把消息首尾跨度、等待时间、token量或AI工具运行时长直接当成人的工作时间；并行活动不能简单叠加。缺少证据时要明确低置信度，不能宣称精确测量。
-manual_minutes 和 locked_tasks 已由用户填写，不能修改。你只输出 unlocked_tasks 的评估，逐一覆盖全部ID，不遗漏、不重复、不添加新ID。
+manual_minutes 和 locked_tasks 已由用户填写，仅作背景参考，不能修改也不要放入输出。你只评估并输出 unlocked_tasks 中的每一项，使用输入中给出的 id（如 t1、t2），逐一覆盖全部 unlocked_tasks，不遗漏、不重复、不添加新项。
 估算不必强行等于目标8h。独立估算与最终分配均以30分钟（0.5小时）为单位，例如30、60、90、120分钟，不输出15、20、45等分钟数。程序会依据权重在已有合格工作项之间分配剩余目标分钟，作为待审核的工时分配建议；不代表已实测做满8h。
-仅返回 JSON：{"items":[{"id":"task-id","eligible":true,"weight":3,"estimated_minutes":90,"difficulty":"中等","confidence":"低/中/高","reason":"依据工作范围与时间证据解释"}],"note":"估算范围与限制"}。weight 是1至10的整数；estimated_minutes 是1至1440的整数或null。没有工作依据时 eligible=false，可用weight=0。
+仅返回 JSON（不要 Markdown 代码块、解释文字或多余前后缀）：{"items":[{"id":"task-id","eligible":true,"weight":3,"estimated_minutes":90,"difficulty":"中等","confidence":"低/中/高","reason":"依据工作范围与时间证据解释"}],"note":"估算范围与限制"}。eligible=true 时 weight 是1至10的整数，estimated_minutes 是1至1440的整数或null；没有工作依据时 eligible=false，且 weight 必须为0、estimated_minutes 必须为null（禁止填0）。

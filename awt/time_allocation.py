@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from decimal import Decimal, ROUND_FLOOR
 from sqlalchemy import select, update
@@ -7,6 +8,7 @@ from . import activity_time, analysis_progress, db, model_provider, prompts
 from .collectors import stable
 from .privacy import redact
 from .models import AllocationInput, TaskInput
+from .work_scope import _json_object
 
 ALLOCATION_STEP = 30
 
@@ -42,27 +44,103 @@ def distribute(remaining, items, step):
     return result
 
 
-def parse_estimates(text, ids):
+def _coerce_int(value):
+    """Accept strict ints, integral floats (e.g. 3.0), or signed integer strings; reject booleans."""
+    if type(value) is int:
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r'\s*-?\d+\s*', value):
+        return int(value.strip())
+    raise ValueError('数值必须是整数')
+
+
+def _extract_json_object(text):
+    cleaned = re.sub(r'<think\b[^>]*>.*?</think>', '', str(text or ''), flags=re.IGNORECASE | re.DOTALL)
+    return _json_object(cleaned)
+
+
+def parse_estimates(text, ids, id_aliases=None, locked_ids=None):
+    """Validate and normalize model time-estimation JSON against expected unlocked task IDs."""
+    aliases = {str(task_id): str(task_id) for task_id in ids}
+    if id_aliases:
+        aliases.update({str(key): str(val) for key, val in id_aliases.items()})
+    locked_set = {str(i) for i in (locked_ids or ())} - set(ids)
     try:
-        text=re.sub(r'^```(?:json)?\s*|\s*```$','',text.strip())
-        data=json.loads(text)
-        items=data['items']
-        if not isinstance(items,list) or len(items)!=len(ids) or any(not isinstance(i,dict) or not isinstance(i.get('id'),str) for i in items) or {i.get('id') for i in items}!=set(ids):
-            raise ValueError()
+        try:
+            data = _extract_json_object(text)
+        except ValueError:
+            raise ValueError('未返回合法 JSON 对象') from None
+        items = data.get('items')
+        if not isinstance(items, list) or any(
+            not isinstance(i, dict) or not isinstance(i.get('id'), (str, int)) or type(i.get('id')) is bool
+            for i in items
+        ):
+            raise ValueError('缺少 items 列表或条目格式无效')
+        normalized = []
         for item in items:
-            if type(item.get('eligible')) is not bool or type(item.get('weight')) is not int:
-                raise ValueError()
-            if not 0<=item['weight']<=10 or (item['eligible'] and not item['weight']):
-                raise ValueError()
-            minutes=item.get('estimated_minutes')
-            if minutes is not None and (type(minutes) is not int or not 1<=minutes<=1440):
-                raise ValueError()
-            item['estimated_minutes']=((minutes+ALLOCATION_STEP-1)//ALLOCATION_STEP)*ALLOCATION_STEP if minutes is not None else None
-            if not isinstance(item.get('reason'),str) or len(item['reason'])>3000:
-                raise ValueError()
+            raw_id = str(item['id']).strip()
+            if raw_id in locked_set and len(items) > len(ids):
+                continue
+            item['id'] = aliases.get(raw_id, raw_id)
+            normalized.append(item)
+        data['items'] = normalized
+        items = normalized
+        expected = set(ids)
+        returned_ids = [i['id'] for i in items]
+        returned_set = set(returned_ids)
+        if len(returned_ids) != len(returned_set):
+            raise ValueError('返回的任务 ID 存在重复')
+        if returned_set != expected:
+            missing = expected - returned_set
+            extra = returned_set - expected
+            logging.getLogger('awt.time_allocation').warning(
+                '工时估算任务 ID 不匹配: expected=%d returned=%d missing=%s extra=%s',
+                len(expected), len(returned_ids), sorted(missing), sorted(extra),
+            )
+            details = []
+            if missing:
+                details.append(f'缺少 {len(missing)} 项')
+            if extra:
+                details.append(f'多出 {len(extra)} 项')
+            raise ValueError(f'返回的任务 ID 与待评估工作项不匹配（{"，".join(details)}）')
+        for item in items:
+            eligible = item.get('eligible')
+            if type(eligible) is not bool:
+                raise ValueError('eligible 必须是布尔值')
+            try:
+                weight = _coerce_int(item.get('weight'))
+            except ValueError:
+                raise ValueError('weight 必须是 0~10 的整数') from None
+            if not 0 <= weight <= 10 or (eligible and not weight):
+                raise ValueError('weight 超出范围或 eligible=true 时为 0')
+            item['weight'] = weight
+            raw_minutes = item.get('estimated_minutes')
+            if raw_minutes is None:
+                minutes = None
+            else:
+                try:
+                    minutes = _coerce_int(raw_minutes)
+                except ValueError:
+                    raise ValueError('estimated_minutes 必须是整数或 null') from None
+                if minutes == 0 and not eligible:
+                    minutes = None
+                elif not 1 <= minutes <= 1440:
+                    raise ValueError('estimated_minutes 必须在 1~1440 之间')
+            item['estimated_minutes'] = ((minutes + ALLOCATION_STEP - 1) // ALLOCATION_STEP) * ALLOCATION_STEP if minutes is not None else None
+            reason = item.get('reason')
+            if reason is None:
+                item['reason'] = ''
+            elif not isinstance(reason, str):
+                raise ValueError('reason 必须是文本')
+            elif len(reason) > 3000:
+                item['reason'] = reason[:3000]
         return data
-    except (ValueError,KeyError,TypeError):
-        raise model_provider.ModelError('工时估算格式无效，所有工时保持原值；请重试') from None
+    except (ValueError, KeyError, TypeError) as exc:
+        detail = str(exc).strip()
+        logging.getLogger('awt.time_allocation').warning('工时估算结果校验失败: %s', detail or type(exc).__name__)
+        suffix = f'（{detail}）' if detail else ''
+        raise model_provider.ModelError(f'工时估算格式无效{suffix}，所有工时保持原值；请重试') from None
 
 
 def select_tasks(tasks, task_ids):
@@ -166,14 +244,19 @@ def estimate(conn, day, request=None):
         except (ValueError,KeyError,TypeError):
             raise model_provider.ModelError('人工事项命名格式无效，所有事项和工时保持原值；请重试') from None
         analysis_progress.emit(f'人工事项已命名，正在估算 {len(selected)} 个工作项的工时')
+    alias_by_id = {t['id']: f't{i + 1}' for i, t in enumerate(selected)}
+    id_aliases = {t['id']: t['id'] for t in selected}
+    for index, task in enumerate(selected, start=1):
+        for candidate in (f't{index}', str(index)):
+            id_aliases.setdefault(candidate, task['id'])
     payload={'date':canonical_day,'target_minutes':target_minutes,'manual_minutes':human_fixed,'preserved_minutes':preserved_minutes,'remaining_target_minutes':remaining,'allocation_step_minutes':ALLOCATION_STEP,
-             'locked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'minutes':t['confirmed_minutes']} for t in locked]+[{'id':f'quick-{i}','title':p.title,'minutes':p.confirmed_minutes} for i,p in enumerate(prepared)],
-             'unlocked_tasks':[{'id':t['id'],'title':redact(t['title'],settings.redact_patterns),'details':redact(t['details'],settings.redact_patterns),
+             'locked_tasks':[{'title':redact(t['title'],settings.redact_patterns),'minutes':t['confirmed_minutes']} for t in locked]+[{'title':p.title,'minutes':p.confirmed_minutes} for p in prepared],
+             'unlocked_tasks':[{'id':alias_by_id[t['id']],'title':redact(t['title'],settings.redact_patterns),'details':redact(t['details'],settings.redact_patterns),
                                 'project':t['project'],'category':t['category'],'status':t['status'],'source':t['origin'],
                                 'evidence_count':len(t['evidence']),'timing_reference':activity_time.profile(t['evidence'],timeline,settings.activity_gap_minutes)} for t in selected]}
     if remaining:
-        text=model_provider.complete(settings,prompts.prompt(settings,'time_estimator'),json.dumps(payload,ensure_ascii=False),max_tokens=8000,purpose='time_estimator')
-        result=parse_estimates(text,[t['id'] for t in selected])
+        text=model_provider.complete(settings,prompts.prompt(settings,'time_estimator'),json.dumps(payload,ensure_ascii=False),max_tokens=12000,purpose='time_estimator')
+        result=parse_estimates(text,[t['id'] for t in selected],id_aliases=id_aliases,locked_ids=[t['id'] for t in locked])
     else:
         result={'items':[],'note':'人工固定工时已达到目标。'}
     eligible=[i for i in result['items'] if i['eligible']]

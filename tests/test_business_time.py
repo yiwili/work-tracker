@@ -414,3 +414,71 @@ def test_distribute_exact_integer_minutes_across_many_weights():
         items=[{'id':str(i),'weight':i+1} for i in range(7)]
         result=time_allocation.distribute(remaining,items,15)
         assert sum(result.values())==remaining and all(type(v)is int and v>=0 for v in result.values())
+
+
+def test_parse_estimates_tolerates_wrappers_ineligible_zero_and_integral_floats():
+    raw=(
+        '<think>先分析两个工作项，其中 {b} 缺少证据。</think>\n'
+        '以下是估算结果：\n'
+        '```json\n'
+        '{"items":['
+        '{"id":"a","eligible":true,"weight":3.0,"estimated_minutes":75.0,"reason":null},'
+        '{"id":"b","eligible":false,"weight":"0","estimated_minutes":0,"reason":"无依据"}'
+        '],"note":"ok"}\n'
+        '```\n'
+        '请查收。'
+    )
+    parsed=time_allocation.parse_estimates(raw,['a','b'])
+    by_id={i['id']:i for i in parsed['items']}
+    assert by_id['a']['weight']==3 and by_id['a']['estimated_minutes']==90 and by_id['a']['reason']==''
+    assert by_id['b']['weight']==0 and by_id['b']['estimated_minutes'] is None
+
+
+def test_parse_estimates_reports_specific_reason_on_invalid_payload():
+    with pytest.raises(model_provider.ModelError) as exc:
+        time_allocation.parse_estimates(json.dumps({'items':[{'id':'a','eligible':True,'weight':2,'estimated_minutes':0,'reason':'ok'}]}),['a'])
+    assert '工时估算格式无效' in str(exc.value) and 'estimated_minutes' in str(exc.value)
+
+    with pytest.raises(model_provider.ModelError) as exc2:
+        time_allocation.parse_estimates(json.dumps({'items':[{'id':'wrong','eligible':True,'weight':2,'estimated_minutes':60,'reason':'ok'}]}),['a'])
+    assert 'ID' in str(exc2.value) and '缺少 1 项' in str(exc2.value) and '多出 1 项' in str(exc2.value)
+
+    parsed_extra = time_allocation.parse_estimates(
+        json.dumps({'items':[
+            {'id':'locked-1','eligible':False,'weight':0,'estimated_minutes':0,'reason':'已锁定'},
+            {'id':'t1','eligible':True,'weight':4,'estimated_minutes':90,'reason':'ok'},
+        ]}),
+        ['uuid-a'],
+        id_aliases={'t1':'uuid-a'},
+        locked_ids=['locked-1'],
+    )
+    assert [i['id'] for i in parsed_extra['items']] == ['uuid-a']
+
+
+def test_estimate_uses_short_aliases_and_excludes_ids_from_locked_tasks(client, monkeypatch):
+    c, _ = client
+    fixed = add_task(c, '固定人工事项', 60)
+    t_a = add_task(c, '工作项A')
+    t_b = add_task(c, '工作项B')
+    seen_payloads = []
+
+    def model(settings, system, text, **kw):
+        p = json.loads(text)
+        seen_payloads.append(p)
+        assert all('id' not in item for item in p['locked_tasks'])
+        assert [item['id'] for item in p['unlocked_tasks']] == ['t1', 't2']
+        return json.dumps({
+            'items': [
+                {'id': 't1', 'eligible': True, 'weight': 2, 'estimated_minutes': 60, 'reason': 'ok'},
+                {'id': 't2', 'eligible': True, 'weight': 5, 'estimated_minutes': 120, 'reason': 'ok'},
+            ],
+            'note': 'ok',
+        })
+
+    monkeypatch.setattr(model_provider, 'complete', model)
+    r = c.post('/api/reports/2026-10-24/estimate-time', json={})
+    r.raise_for_status()
+    assert len(seen_payloads) == 1
+    report = c.get('/api/reports/2026-10-24').json()
+    by_id = {t['id']: t['confirmed_minutes'] for t in report['tasks']}
+    assert by_id[fixed] == 60 and by_id[t_a] + by_id[t_b] == 420
