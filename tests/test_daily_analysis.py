@@ -274,12 +274,15 @@ def scope_model(answer):
     ('z-ai/glm-5.3','task_writer',65536,65536),
     ('glm-5.3','',64,64),
     ('glm-5.3','manual_writer',4000,4000),
-    ('glm-4.7','task_writer',12000,12000),
-    ('claude-sonnet','scope_filter',6000,6000),
-    ('glm-5.30','task_writer',12000,12000),
+    ('glm-4.7','task_writer',12000,32768),
+    ('claude-sonnet','scope_filter',6000,32768),
+    ('glm-5.30','task_writer',12000,32768),
+    ('deepseek-flash','scope_filter',6000,32768),
+    ('deepseek-v4-pro','task_writer',12000,32768),
+    ('deepseek-flash','time_estimator',8000,8000),
 ])
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
-def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_models(monkeypatch,model,purpose,requested,expected,protocol):
+def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_stages(monkeypatch,model,purpose,requested,expected,protocol):
     captured=[]
     monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
     class Client:
@@ -299,7 +302,8 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_mod
     assert model_provider.complete(Settings(),'rules','input',max_tokens=requested,purpose=purpose)=='OK'
     assert len(captured)==1 and captured[0]['max_tokens']==expected
     assert 'thinking' not in captured[0]  # Forced-thinking models must not be disabled.
-    if model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash') and purpose in ('scope_filter','task_writer'):
+    reasoning = model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash','deepseek-flash','deepseek-v4-pro') and purpose in ('scope_filter','task_writer')
+    if reasoning:
         assert captured[0]['reasoning_effort']=='low' and captured[0]['stream']
     else:assert 'reasoning_effort' not in captured[0] and not captured[0]['stream']
 

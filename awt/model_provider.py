@@ -131,14 +131,16 @@ def usage_summary(calls=None):
 
 def daily_reasoning_model(model, purpose):
     name=model.lower().rsplit('/',1)[-1]
-    return purpose in ('scope_filter','task_writer') and bool(re.match(r'^glm-5\.3(?:$|[-\[])',name))
+    return purpose in ('scope_filter','task_writer') and bool(
+        re.match(r'^(?:glm-5\.3|deepseek-(?:flash|v4(?:-pro)?))(?:$|[-\[])',name))
 
 
 def output_budget(model, requested, purpose):
-    # GLM-5.3 always reasons; its thinking and final JSON share max_tokens.
-    # Only daily analysis reserves more room. Connection probes stay tiny,
-    # other providers retain their caller's cap, and we never retry a paid call.
-    if daily_reasoning_model(model,purpose):
+    # Daily analysis JSON is long and thinking tokens share max_tokens on every
+    # reasoning model, so all models get GLM-5.3's headroom for these stages.
+    # Probes and other stages keep their caller's cap, and we never retry a
+    # paid call.
+    if purpose in ('scope_filter','task_writer'):
         return max(requested,32768)
     return requested
 
@@ -699,8 +701,8 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
         headers['Authorization'] = 'Bearer ' + c['key']
         body = {'model': c['model'], 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}], 'max_tokens': max_tokens, 'stream': False}
     if daily_reasoning_model(c['model'],purpose):
-        # GLM defaults to maximum reasoning. Classifying and summarizing logs
-        # uses its supported light effort without disabling forced thinking.
+        # GLM and DeepSeek default to heavy reasoning. Classification only needs
+        # light effort, and thinking tokens share max_tokens with the answer.
         body['reasoning_effort']='low'
         body['stream']=True
     if current.get() is not None and purpose in STREAM_PURPOSES:
