@@ -285,6 +285,59 @@ export type GitIdentity = {
   selected: GitAuthor & { source: string };
   authors: (GitAuthor & { commits: number })[];
 };
+export type LlmProvider = "deepseek" | "glm" | "glm-coding" | "ccswitch" | "custom";
+export type LlmProtocol = "openai" | "anthropic";
+
+export type ModelConnection = {
+  id: string;
+  label: string;
+  provider: LlmProvider;
+  endpoint: string;
+  protocol: LlmProtocol;
+  key_env: string;
+  ccswitch_config_path: string;
+  model: string;
+};
+
+export type ModelCheck = {
+  ok: boolean;
+  message: string;
+  at: string;
+};
+
+export type ModelConnectionState = {
+  state: "ok" | "error" | "unknown";
+  message: string;
+  last_test: ModelCheck | null;
+  last_use: ModelCheck | null;
+};
+
+export type ModelConnectionStatus = {
+  id: string;
+  label: string;
+  provider: LlmProvider;
+  provider_label: string;
+  endpoint: string;
+  protocol: LlmProtocol;
+  key_env: string;
+  ccswitch_config_path: string;
+  key_configured: boolean;
+  model: string;
+  model_label: string;
+  status: ModelConnectionState;
+};
+
+export type ModelStatus = {
+  configured: boolean;
+  provider: string;
+  endpoint: string;
+  model: string;
+  protocol?: string;
+  error: string;
+  connections?: ModelConnectionStatus[];
+  active?: { connection_id: string; model: string };
+};
+
 export type Settings = {
   timezone: string;
   target_minutes: number;
@@ -312,8 +365,11 @@ export type Settings = {
   llm_endpoint: string;
   llm_model: string;
   llm_key_env: string;
-  llm_provider: "deepseek" | "glm" | "glm-coding" | "ccswitch" | "custom";
-  llm_protocol: "openai" | "anthropic";
+  llm_provider: LlmProvider;
+  llm_protocol: LlmProtocol;
+  llm_connections?: ModelConnection[];
+  llm_active_connection?: string;
+  llm_active_model?: string;
   ccswitch_config_path: string;
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;

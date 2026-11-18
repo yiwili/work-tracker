@@ -45,8 +45,8 @@ test("setup wizard walks each step, saves the model connection and reports statu
     await expect(dialog.getByLabel("完整 API 接口 URL")).toHaveValue(
       "https://api.deepseek.com/chat/completions",
     );
-    await expect(dialog.getByLabel("模型名称")).toHaveValue("deepseek-chat");
-    await dialog.getByLabel("模型名称").selectOption("deepseek-reasoner");
+    await expect(dialog.getByLabel("模型名称")).toHaveValue("deepseek-flash");
+    await dialog.getByLabel("模型名称").selectOption("deepseek-v4-pro");
     await dialog.getByLabel(/API Key/).fill("wizard-fixture-key");
     await dialog.getByRole("button", { name: "保存并测试连接" }).click();
     await expect(
@@ -54,7 +54,7 @@ test("setup wizard walks each step, saves the model connection and reports statu
     ).toBeVisible();
     const saved = await readSettings(page);
     expect(saved.llm_provider).toBe("deepseek");
-    expect(saved.llm_model).toBe("deepseek-reasoner");
+    expect(saved.llm_model).toBe("deepseek-v4-pro");
     expect(saved.llm_enabled).toBe(true);
 
     // 第 3 步：Git 仓库
@@ -86,7 +86,7 @@ test("setup wizard walks each step, saves the model connection and reports statu
     await page.getByRole("button", { name: "系统设置" }).click();
     await page.getByRole("tab", { name: "模型分析" }).click();
     await expect(page.getByLabel("AI 分析供应商")).toHaveValue("deepseek");
-    await expect(page.getByLabel("模型名称")).toHaveValue("deepseek-reasoner");
+    await expect(page.getByLabel("模型名称")).toHaveValue("deepseek-v4-pro");
     await expect(page.getByLabel("完整 API 接口 URL")).toHaveValue(
       "https://api.deepseek.com/chat/completions",
     );

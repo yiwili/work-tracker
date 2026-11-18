@@ -1,307 +1,36 @@
-import { useEffect, useState } from "react";
-import { LockKeyhole, LoaderCircle } from "lucide-react";
 import type { Settings } from "./types";
-import { apiUrl } from "./api";
-type Status = {
-  configured: boolean;
-  provider: string;
-  endpoint: string;
-  model: string;
-  error: string;
-};
-const glmModels = [
-  { id: "glm-5.3-flash", label: "GLM-5.3-Flash" },
-  { id: "glm-5.3-flashx", label: "GLM-5.3-FlashX" },
-  { id: "glm-5.3", label: "GLM-5.3" },
-  { id: "glm-5.2", label: "GLM-5.2" },
-  { id: "glm-5.1", label: "GLM-5.1" },
-  { id: "glm-5", label: "GLM-5" },
-  { id: "glm-5-turbo", label: "GLM-5-Turbo" },
-  { id: "glm-4.7", label: "GLM-4.7" },
-  { id: "glm-4.6", label: "GLM-4.6" },
-  { id: "glm-4.5", label: "GLM-4.5" },
-  { id: "glm-4.5-air", label: "GLM-4.5-Air" },
-  { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）" },
-];
-export const presets: Record<
-  Settings["llm_provider"],
-  {
-    endpoint: string;
-    model: string;
-    protocol: Settings["llm_protocol"];
-    models: { id: string; label: string }[];
-  }
-> = {
-  deepseek: {
-    endpoint: "https://api.deepseek.com/chat/completions",
-    model: "deepseek-chat",
-    protocol: "openai" as const,
-    models: [
-      { id: "deepseek-chat", label: "DeepSeek Chat" },
-      { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
-    ],
-  },
-  glm: {
-    endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    model: "glm-5.3-flash",
-    protocol: "openai" as const,
-    models: glmModels,
-  },
-  "glm-coding": {
-    endpoint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-    model: "glm-5.3-flash",
-    protocol: "openai" as const,
-    models: glmModels.filter((item) => item.id !== "glm-4.5-flash"),
-  },
-  ccswitch: {
-    endpoint: "https://api.anthropic.com/v1/messages",
-    model: "",
-    protocol: "anthropic" as const,
-    models: [],
-  },
-  custom: {
-    endpoint: "",
-    model: "",
-    protocol: "openai" as const,
-    models: [],
-  },
-};
+import { ModelConnections, ModelToast } from "./ModelConnections";
 
-export function ModelSelect({
-  provider,
-  value,
-  onChange,
-  label = "模型名称",
-}: {
-  provider: Settings["llm_provider"];
-  value: string;
-  onChange: (model: string) => void;
-  label?: string;
-}) {
-  const models = presets[provider].models;
-  const matched = models.find(
-    (item) => item.id.toLowerCase() === value.trim().toLowerCase(),
-  );
-  const [custom, setCustom] = useState(!matched);
-  if (!models.length)
-    return (
-      <label>
-        {label}
-        <input
-          required
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </label>
-    );
-  return (
-    <>
-      <label>
-        {label}
-        <select
-          value={custom ? "__custom__" : (matched?.id ?? value)}
-          onChange={(event) => {
-            const next = event.target.value;
-            if (next === "__custom__") {
-              setCustom(true);
-              onChange("");
-            } else {
-              setCustom(false);
-              onChange(next);
-            }
-          }}
-        >
-          {models.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label}
-            </option>
-          ))}
-          <option value="__custom__">自定义模型名…</option>
-        </select>
-      </label>
-      {custom && (
-        <label>
-          自定义模型 id
-          <input
-            required
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            placeholder="填写服务商文档中的模型 id"
-          />
-        </label>
-      )}
-    </>
-  );
-}
 export function ModelSettings({
-  settings: s,
+  settings,
   onChange,
-  apiKey,
-  onKeyChange,
   busy,
-  saved,
   feedback,
+  onFeedbackClose,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
-  apiKey: string;
-  onKeyChange: (s: string) => void;
   busy: boolean;
-  saved: Settings;
   feedback: {
     state: "running" | "success" | "error";
     message: string;
     test?: boolean;
   } | null;
+  onFeedbackClose?: () => void;
 }) {
-  const [status, setStatus] = useState<Status | null>(null);
-  useEffect(() => {
-    fetch(apiUrl("/model/status"))
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(null));
-  }, [saved]);
   return (
     <>
-      <label>
-        AI 分析供应商
-        <select
-          value={s.llm_provider}
-          onChange={(e) => {
-            const provider = e.target.value as Settings["llm_provider"];
-            onChange({
-              ...s,
-              llm_provider: provider,
-              llm_endpoint: presets[provider].endpoint || s.llm_endpoint,
-              llm_model: presets[provider].model,
-              llm_protocol: presets[provider].protocol,
-            });
-            onKeyChange("");
-          }}
-        >
-          <option value="deepseek">DeepSeek API</option>
-          <option value="glm">智谱 GLM（标准 API）</option>
-          <option value="glm-coding">智谱 GLM Coding Plan</option>
-          <option value="ccswitch">CCSwitch / Claude Code 当前接口</option>
-          <option value="custom">自定义兼容接口</option>
-        </select>
-      </label>
-      {s.llm_provider === "ccswitch" ? (
-        <>
-          <label>
-            Claude Code settings.json 路径（留空自动检测）
-            <input
-              value={s.ccswitch_config_path}
-              onChange={(e) =>
-                onChange({ ...s, ccswitch_config_path: e.target.value })
-              }
-              placeholder="默认 ~/.claude/settings.json"
-            />
-          </label>
-          <label>
-            覆盖模型名（留空跟随 CCSwitch）
-            <input
-              value={s.llm_model}
-              onChange={(e) => onChange({ ...s, llm_model: e.target.value })}
-            />
-          </label>
-        </>
-      ) : (
-        <>
-          <label>
-            完整 API 接口 URL
-            <input
-              required={s.llm_enabled}
-              type="url"
-              value={s.llm_endpoint}
-              onChange={(e) => onChange({ ...s, llm_endpoint: e.target.value })}
-            />
-          </label>
-          <ModelSelect
-            key={s.llm_provider}
-            provider={s.llm_provider}
-            value={s.llm_model}
-            onChange={(model) => onChange({ ...s, llm_model: model })}
-          />
-          <label>
-            接口格式
-            <select
-              value={s.llm_protocol}
-              onChange={(e) =>
-                onChange({
-                  ...s,
-                  llm_protocol: e.target.value as Settings["llm_protocol"],
-                })
-              }
-            >
-              <option value="openai">Chat Completions</option>
-              <option value="anthropic">Anthropic Messages</option>
-            </select>
-          </label>
-          <label>
-            API Key（留空保留已保存的密钥）
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              onChange={(e) => onKeyChange(e.target.value)}
-              placeholder="输入 DeepSeek / GLM API Key"
-            />
-          </label>
-          <label>
-            也可使用服务端 API Key 环境变量
-            <input
-              value={s.llm_key_env}
-              onChange={(e) => onChange({ ...s, llm_key_env: e.target.value })}
-            />
-          </label>
-        </>
-      )}
-      <div className="model-status">
-        <LockKeyhole size={16} />
-        <div>
-          <strong>
-            {status?.provider === s.llm_provider
-              ? status.configured
-                ? "已检测到连接配置"
-                : "连接配置未就绪"
-              : "请保存新连接配置"}
-          </strong>
-          {status?.provider === s.llm_provider && (
-            <p>
-              {status.configured
-                ? `${status.model} · ${status.endpoint}`
-                : status.error}
-            </p>
-          )}
-        </div>
-        <button
-          type="submit"
-          name="test_connection"
-          className="outline"
-          disabled={busy}
-          aria-busy={feedback?.state === "running" && feedback.test}
-        >
-          {feedback?.state === "running" && feedback.test && (
-            <LoaderCircle size={16} className="spin" />
-          )}
-          {feedback?.state === "running" && feedback.test
-            ? "正在保存与测试…"
-            : "保存并测试连接"}
-        </button>
-      </div>
+      <ModelConnections
+        settings={settings}
+        onSettings={onChange}
+        busy={busy}
+      />
       {feedback && (
-        <div
-          className={
-            "alert model-test-feedback" +
-            (feedback.state === "error" ? " error" : "")
-          }
-          role={feedback.state === "error" ? "alert" : "status"}
-          aria-label="模型连接反馈"
-          aria-live={feedback.state === "error" ? "assertive" : "polite"}
-        >
-          {feedback.message}
-        </div>
+        <ModelToast
+          state={feedback.state}
+          message={feedback.message}
+          onClose={onFeedbackClose}
+        />
       )}
     </>
   );

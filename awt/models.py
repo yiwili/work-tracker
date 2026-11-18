@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import sys
 from datetime import date as Date, datetime
@@ -26,6 +28,61 @@ SOURCE_FAMILIES = {
 
 def _source(path):
     return SourceConfig(paths=[str(path)])
+
+
+def _stable_id(*values):
+    # 与 collectors.stable 保持一致；旧版密钥按 provider+endpoint 存储，
+    # 迁移出的连接沿用同一 id，已有密钥无需重新填写。
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def valid_model_endpoint(value):
+    from urllib.parse import urlparse
+    parsed = urlparse(value)
+    if parsed.username or parsed.password or not parsed.hostname or parsed.query or parsed.fragment:
+        raise ValueError("模型地址不能包含凭据、查询参数或片段")
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")):
+        raise ValueError("远程模型必须使用 HTTPS")
+    return value
+
+
+class ModelConnection(BaseModel):
+    id: str = Field(default='', max_length=64)
+    label: str = Field(default='', max_length=80)
+    provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
+    endpoint: str = Field(default='', max_length=2048)
+    protocol: Literal['openai', 'anthropic'] = 'openai'
+    key_env: str = Field(default='AWT_LLM_API_KEY', max_length=200)
+    ccswitch_config_path: str = Field(default='', max_length=4096)
+    model: str = Field(default='', max_length=200)
+
+    @model_validator(mode='before')
+    @classmethod
+    def fold_models(cls, data):
+        # 旧数据每个连接带 models 列表；现在一个 Key 只对应一个模型，保留第一个。
+        if isinstance(data, dict) and 'models' in data and 'model' not in data:
+            data = dict(data)
+            models = data.pop('models') or []
+            data['model'] = models[0] if models else ''
+        return data
+
+    @field_validator('model')
+    @classmethod
+    def clean_model(cls, value):
+        text = value.strip()
+        if len(text) > 200 or any(ord(c) < 32 for c in text):
+            raise ValueError('模型名称无效或过长')
+        return text
+
+    @model_validator(mode='after')
+    def valid_remote(self):
+        if self.provider != 'ccswitch':
+            if not self.endpoint.strip():
+                raise ValueError('请填写模型接口地址')
+            valid_model_endpoint(self.endpoint)
+        if self.provider == 'custom' and not self.model:
+            raise ValueError('请填写模型名称')
+        return self
 
 
 def _antigravity_source():
@@ -328,6 +385,11 @@ class Settings(BaseModel):
     llm_key_env: str = "AWT_LLM_API_KEY"
     llm_provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
     llm_protocol: Literal['openai', 'anthropic'] = 'openai'
+    # 多个供应商/Key 连接；llm_* 字段始终镜像当前启用的连接与模型，
+    # 这样旧配置、定时任务和 CLI 无需感知连接列表。
+    llm_connections: list[ModelConnection] = Field(default_factory=list, max_length=20)
+    llm_active_connection: str = Field(default='', max_length=64)
+    llm_active_model: str = Field(default='', max_length=200)
     ccswitch_config_path: str = ''
     # 默认只生成候选，用户在“分析结果”中确认后再写入今日工作清单。
     auto_import_analysis: bool = False
@@ -383,6 +445,57 @@ class Settings(BaseModel):
             data['analysis_sources'] = list(dict.fromkeys(mapped))
         return data
 
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_legacy_connections(cls, data):
+        # 旧客户端只改 llm_* 字段；以旧字段为准，避免被已保存的连接列表覆盖。
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        raw = data.get('llm_connections')
+        if not isinstance(raw, list) or not raw:
+            return data
+        connections = [dict(item) for item in raw if isinstance(item, dict)]
+        active_id = data.get('llm_active_connection') or ''
+        index = next((i for i, item in enumerate(connections) if item.get('id') == active_id), None)
+        if index is None:
+            return data
+        active = connections[index]
+        legacy = ('llm_provider', 'llm_endpoint', 'llm_protocol', 'llm_model', 'llm_key_env', 'ccswitch_config_path')
+        if not any(key in data for key in legacy):
+            return data
+        provider = data.get('llm_provider', active.get('provider'))
+        endpoint = data.get('llm_endpoint', active.get('endpoint'))
+        protocol = data.get('llm_protocol', active.get('protocol'))
+        model = (data.get('llm_model') or '').strip()
+        drift = provider != active.get('provider') or endpoint != active.get('endpoint') or protocol != active.get('protocol')
+        if not drift:
+            if model and model != active.get('model'):
+                connections[index] = {**active, 'model': model}
+                data['llm_connections'] = connections
+            if model:
+                data['llm_active_model'] = model
+            return data
+        new_id = _stable_id(provider, endpoint)
+        target = next((i for i, item in enumerate(connections) if item.get('id') == new_id), None)
+        if target is None:
+            connections.append({
+                'id': new_id,
+                'label': '',
+                'provider': provider,
+                'endpoint': endpoint,
+                'protocol': protocol,
+                'key_env': data.get('llm_key_env', active.get('key_env') or 'AWT_LLM_API_KEY'),
+                'ccswitch_config_path': data.get('ccswitch_config_path') or active.get('ccswitch_config_path') or '',
+                'model': model,
+            })
+        elif model:
+            connections[target] = {**connections[target], 'model': model}
+        data['llm_connections'] = connections
+        data['llm_active_connection'] = new_id
+        data['llm_active_model'] = model
+        return data
+
     @field_validator('git_author_overrides')
     @classmethod
     def valid_git_overrides(cls,values):
@@ -433,13 +546,39 @@ class Settings(BaseModel):
     @field_validator("llm_endpoint")
     @classmethod
     def valid_endpoint(cls, value):
-        from urllib.parse import urlparse
-        parsed = urlparse(value)
-        if parsed.username or parsed.password or not parsed.hostname or parsed.query or parsed.fragment:
-            raise ValueError("模型地址不能包含凭据、查询参数或片段")
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")):
-            raise ValueError("远程模型必须使用 HTTPS")
-        return value
+        return valid_model_endpoint(value)
+
+    @model_validator(mode='after')
+    def sync_active_model(self):
+        if not self.llm_connections and (self.llm_model.strip() or self.llm_provider == 'ccswitch'):
+            self.llm_connections = [ModelConnection(
+                id=_stable_id(self.llm_provider, self.llm_endpoint),
+                provider=self.llm_provider,
+                endpoint=self.llm_endpoint,
+                protocol=self.llm_protocol,
+                key_env=self.llm_key_env,
+                ccswitch_config_path=self.ccswitch_config_path,
+                model=self.llm_model.strip(),
+            )]
+            self.llm_active_connection = self.llm_connections[0].id
+            self.llm_active_model = self.llm_model
+        conn = next((item for item in self.llm_connections if item.id == self.llm_active_connection), None)
+        if conn is None:
+            conn = next((item for item in self.llm_connections if item.model), None)
+        if conn is None:
+            self.llm_active_connection = ''
+            self.llm_active_model = ''
+            return self
+        self.llm_active_connection = conn.id
+        self.llm_active_model = conn.model
+        self.llm_provider = conn.provider
+        self.llm_endpoint = conn.endpoint or self.llm_endpoint
+        self.llm_protocol = conn.protocol
+        self.llm_key_env = conn.key_env
+        self.llm_model = conn.model
+        if conn.provider == 'ccswitch':
+            self.ccswitch_config_path = conn.ccswitch_config_path
+        return self
 
 
 class TaskInput(BaseModel):
@@ -532,6 +671,41 @@ class SplitInput(BaseModel):
 
 class ModelKeyInput(BaseModel):
     api_key: SecretStr = Field(min_length=1, max_length=8192)
+
+
+class ModelConnectionInput(BaseModel):
+    id: str = Field(default='', max_length=64)
+    label: str = Field(default='', max_length=80)
+    provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
+    endpoint: str = Field(default='', max_length=2048)
+    protocol: Literal['openai', 'anthropic'] = 'openai'
+    key_env: str = Field(default='AWT_LLM_API_KEY', max_length=200)
+    ccswitch_config_path: str = Field(default='', max_length=4096)
+    model: str = Field(default='', max_length=200)
+    api_key: SecretStr | None = None
+    activate: bool = True
+
+    @field_validator('model')
+    @classmethod
+    def clean_model(cls, value):
+        text = value.strip()
+        if len(text) > 200 or any(ord(c) < 32 for c in text):
+            raise ValueError('模型名称无效或过长')
+        return text
+
+    @model_validator(mode='after')
+    def valid_remote(self):
+        if self.provider != 'ccswitch':
+            if not self.endpoint.strip():
+                raise ValueError('请填写模型接口地址')
+            valid_model_endpoint(self.endpoint)
+            if not self.model:
+                raise ValueError('请选择或填写模型名称')
+        return self
+
+
+class ModelActiveInput(BaseModel):
+    connection_id: str = Field(min_length=1, max_length=64)
 
 
 class ModelProbeInput(BaseModel):

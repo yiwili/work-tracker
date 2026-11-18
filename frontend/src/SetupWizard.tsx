@@ -12,7 +12,6 @@ import {
   ExternalLink,
   FolderGit2,
   GitBranch,
-  KeyRound,
   LoaderCircle,
   ScanLine,
   SkipForward,
@@ -23,7 +22,7 @@ import type { GiteeProgram, Settings } from "./types";
 import { api } from "./api";
 import { enterpriseApi } from "./EnterpriseSettings";
 import { GitSettings } from "./GitSettings";
-import { ModelSelect, presets } from "./ModelSettings";
+import { ModelConnections } from "./ModelConnections";
 import { SourcePicker, sourceKeys, sourceLabels } from "./SourcePicker";
 import { SourceIcon } from "./SourceIcon";
 
@@ -63,7 +62,6 @@ export function SetupWizard({
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
   const [s, setS] = useState(settings);
-  const [apiKey, setApiKey] = useState("");
   const [detectedSources, setDetectedSources] = useState<string[]>([]);
   const [giteeToken, setGiteeToken] = useState("");
   const [entToken, setEntToken] = useState("");
@@ -297,28 +295,20 @@ export function SetupWizard({
     });
   const saveModel = () =>
     run("正在保存并测试模型连接", async () => {
-      if (
-        s.llm_provider !== "ccswitch" &&
-        (!s.llm_endpoint.trim() || !s.llm_model.trim())
-      )
-        throw new Error("请先填写接口地址和模型名称");
+      const status = await loadStatus();
+      if (!status.model.configured)
+        throw new Error(status.model.error || "请先添加并保存一个模型连接");
       // 先测后存：测试失败时一个字节都不写，避免把原本可用的连接改坏或悄悄关掉模型分析。
       const result = await api<{ ok: boolean; message?: string }>(
         "/model/test",
         "POST",
-        {
-          settings: { ...s, llm_enabled: true },
-          api_key: apiKey.trim() || undefined,
-        },
+        {},
       );
       if (!result.ok)
         throw new Error(result.message || "模型未返回连接成功结果");
       const next = { ...s, llm_enabled: true };
       await api("/settings", "PUT", next);
-      if (apiKey.trim())
-        await api("/model/key", "POST", { api_key: apiKey.trim() });
       setS(next);
-      setApiKey("");
       await onSaved();
       await loadStatus();
       go(2);
@@ -443,158 +433,14 @@ export function SetupWizard({
             <h3>
               <Bot size={18} /> 第 2 步 · 接通 AI 模型
             </h3>
-            <label>
-              AI 分析供应商
-              <select
-                value={s.llm_provider}
-                onChange={(e) => {
-                  const provider = e.target
-                    .value as Settings["llm_provider"];
-                  setS({
-                    ...s,
-                    llm_provider: provider,
-                    llm_endpoint: presets[provider].endpoint || s.llm_endpoint,
-                    llm_model: presets[provider].model,
-                    llm_protocol: presets[provider].protocol,
-                  });
-                  setApiKey("");
-                }}
-              >
-                <option value="deepseek">DeepSeek API</option>
-                <option value="glm">智谱 GLM（标准 API）</option>
-                <option value="glm-coding">智谱 GLM Coding Plan</option>
-                <option value="ccswitch">CCSwitch / Claude Code 当前接口</option>
-                <option value="custom">自定义兼容接口</option>
-              </select>
-            </label>
-            {s.llm_provider === "ccswitch" ? (
-              <>
-                <div className="setup-help">
-                  <strong>CCSwitch 不需要单独填 Key</strong>
-                  <ul>
-                    <li>直接复用 CCSwitch 写入的 Claude Code 接口地址和凭据</li>
-                    <li>如果 Claude Code 配置里没有模型名，在这里补一个</li>
-                  </ul>
-                </div>
-                <label>
-                  settings.json 路径（留空自动检测）
-                  <input
-                    value={s.ccswitch_config_path}
-                    onChange={(e) =>
-                      setS({ ...s, ccswitch_config_path: e.target.value })
-                    }
-                    placeholder="默认 ~/.claude/settings.json"
-                  />
-                </label>
-                <label>
-                  模型名称
-                  <input
-                    value={s.llm_model}
-                    onChange={(e) => setS({ ...s, llm_model: e.target.value })}
-                    placeholder="例如 claude-sonnet-4-5"
-                  />
-                </label>
-              </>
-            ) : (
-              <>
-                <div className="setup-help">
-                  <strong>去哪里获取 API Key？</strong>
-                  {s.llm_provider === "deepseek" && (
-                    <>
-                      <ul>
-                        <li>登录 DeepSeek 开放平台</li>
-                        <li>进入「API keys」页面，创建并复制 Key</li>
-                      </ul>
-                      <a
-                        href="https://platform.deepseek.com/api_keys"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        打开 DeepSeek API keys <ExternalLink size={13} />
-                      </a>
-                    </>
-                  )}
-                  {s.llm_provider === "glm" || s.llm_provider === "glm-coding" ? (
-                    <>
-                      <ul>
-                        <li>登录智谱开放平台</li>
-                        <li>进入「用户中心 → API Keys」创建并复制</li>
-                        {s.llm_provider === "glm" && (
-                          <li>
-                            付费模型需账户有可用资源包；未充值可选免费的
-                            GLM-4.5-Flash
-                          </li>
-                        )}
-                        {s.llm_provider === "glm-coding" && (
-                          <li>
-                            这里使用 Coding Plan 专用接口；填标准 API 地址会提示“余额不足或无可用资源包”
-                          </li>
-                        )}
-                      </ul>
-                      <a
-                        href="https://open.bigmodel.cn/usercenter/apikeys"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        打开智谱 API Keys <ExternalLink size={13} />
-                      </a>
-                    </>
-                  ) : null}
-                  {s.llm_provider === "custom" && (
-                    <ul>
-                      <li>填写兼容 OpenAI Chat Completions 的完整地址</li>
-                      <li>远程地址必须使用 HTTPS；本机代理可用 127.0.0.1</li>
-                    </ul>
-                  )}
-                </div>
-                <label>
-                  完整 API 接口 URL
-                  <input
-                    type="url"
-                    value={s.llm_endpoint}
-                    onChange={(e) =>
-                      setS({ ...s, llm_endpoint: e.target.value })
-                    }
-                  />
-                </label>
-                <div className="form-grid">
-                  <ModelSelect
-                    key={s.llm_provider}
-                    provider={s.llm_provider}
-                    value={s.llm_model}
-                    onChange={(model) => setS({ ...s, llm_model: model })}
-                  />
-                  <label>
-                    接口格式
-                    <select
-                      value={s.llm_protocol}
-                      onChange={(e) =>
-                        setS({
-                          ...s,
-                          llm_protocol: e.target
-                            .value as Settings["llm_protocol"],
-                        })
-                      }
-                    >
-                      <option value="openai">Chat Completions</option>
-                      <option value="anthropic">Anthropic Messages</option>
-                    </select>
-                  </label>
-                </div>
-                <label>
-                  <span className="setup-key-label">
-                    <KeyRound size={14} /> API Key（本机加密保存）
-                  </span>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="粘贴 API Key；留空表示沿用已保存的密钥"
-                  />
-                </label>
-              </>
-            )}
+            <ModelConnections
+              settings={s}
+              onSettings={setS}
+              onChanged={async () => {
+                await loadStatus();
+              }}
+              busy={!!busy}
+            />
             <label className="check-label">
               <input
                 type="checkbox"

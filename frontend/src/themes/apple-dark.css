@@ -154,10 +154,26 @@
 }
 
 :root[data-theme='apple-dark'] .outline,
-:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main):not(.todo-drop):not(.auto-gen-chip):not(.auto-gen-time-remove):not(.auto-gen-header-pill) {
+:root[data-theme='apple-dark'] button:not(.primary):not(.nav-item):not(.apple-segmented-btn):not(.preset-pill):not(.source-quick-btn):not(.task-title):not(.todo-item-main):not(.todo-drop):not(.auto-gen-chip):not(.auto-gen-time-remove):not(.auto-gen-header-pill):not(.model-switch-btn):not(.model-toast-close) {
   background: var(--apple-control-bg);
   border-color: var(--apple-border-strong);
   color: var(--apple-text-primary);
+}
+
+:root[data-theme='apple-dark'] .model-switch-btn {
+  background: linear-gradient(180deg, #2997ff 0%, #0071e3 100%);
+  border-color: rgba(41, 151, 255, 0.4);
+  color: #ffffff;
+}
+
+:root[data-theme='apple-dark'] .model-switch-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #40a2ff 0%, #0077ed 100%);
+}
+
+:root[data-theme='apple-dark'] .model-switch-btn.current {
+  background: var(--apple-blue-tint);
+  border-color: var(--apple-blue-border);
+  color: var(--apple-blue);
 }
 
 :root[data-theme='apple-dark'] .outline:hover:not(:disabled) {

@@ -3081,7 +3081,6 @@ function SettingsForm({
     test: boolean,
   ) => Promise<{ ok: boolean; saved: boolean; message: string }>;
 }) {
-  const [apiKey, setApiKey] = useState("");
   const [feedback, setFeedback] = useState<{
     state: "running" | "success" | "error";
     message: string;
@@ -3123,15 +3122,10 @@ function SettingsForm({
       onSubmit={async (e) => {
         e.preventDefault();
         if (busy) return;
-        const test =
-          (e.nativeEvent as SubmitEvent).submitter?.getAttribute("name") ===
-          "test_connection";
         setFeedback({
           state: "running",
-          message: test
-            ? "正在保存并测试模型连接，请稍候；本次不发送工作对话。"
-            : "正在保存设置…",
-          test,
+          message: "正在保存设置…",
+          test: false,
         });
         try {
           const result = await onSave(
@@ -3184,10 +3178,9 @@ function SettingsForm({
                 paths: lines(s.cursor.paths.join("\n")),
               },
             },
-            apiKey,
-            test,
+            "",
+            false,
           );
-          if (result.saved) setApiKey("");
           setFeedback({
             state: result.ok ? "success" : "error",
             message: result.message,
@@ -3195,7 +3188,7 @@ function SettingsForm({
         } catch (e) {
           setFeedback({
             state: "error",
-            message: "尚未完成保存或测试：" + (e as Error).message,
+            message: "尚未完成保存：" + (e as Error).message,
           });
         }
       }}
@@ -3372,14 +3365,9 @@ function SettingsForm({
                     setS(next);
                     setFeedback(null);
                   }}
-                  apiKey={apiKey}
-                  onKeyChange={(value) => {
-                    setApiKey(value);
-                    setFeedback(null);
-                  }}
                   busy={busy}
-                  saved={initial}
                   feedback={feedback}
+                  onFeedbackClose={() => setFeedback(null)}
                 />
               </section>
             )}

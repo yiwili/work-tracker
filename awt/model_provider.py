@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import re
+import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from time import monotonic
 from pathlib import Path
 
@@ -15,7 +17,7 @@ import httpx
 from . import db
 from . import usage as usage_ledger
 from .collectors import stable
-from .models import Settings
+from .models import ModelConnection, Settings
 from .analysis_progress import begin_stream, current, emit, stream_delta, stream_usage
 
 GLM_MODELS = [
@@ -37,11 +39,11 @@ PRESETS = {
     'deepseek': {
         'label': 'DeepSeek',
         'endpoint': 'https://api.deepseek.com/chat/completions',
-        'model': 'deepseek-chat',
+        'model': 'deepseek-flash',
         'protocol': 'openai',
         'models': [
-            {'id': 'deepseek-chat', 'label': 'DeepSeek Chat'},
-            {'id': 'deepseek-reasoner', 'label': 'DeepSeek Reasoner'},
+            {'id': 'deepseek-flash', 'label': 'DeepSeek Flash（V4.1）'},
+            {'id': 'deepseek-v4-pro', 'label': 'DeepSeek V4 Pro'},
         ],
     },
     'glm': {
@@ -238,8 +240,205 @@ def official_model(provider, model):
 
 
 def normalize(settings):
+    conn = active_connection(settings)
+    if conn is not None:
+        canonical = official_model(conn.provider, conn.model or settings.llm_model)
+        conn.model = canonical
+        settings.llm_model = settings.llm_active_model = canonical
+        return settings
     settings.llm_model = official_model(settings.llm_provider, settings.llm_model)
     return settings
+
+
+def active_connection(settings):
+    return next((item for item in settings.llm_connections if item.id == settings.llm_active_connection), None)
+
+
+def connection_settings(settings, conn):
+    """构建只指向指定连接、且不修改已保存设置的一份设置副本。"""
+    data = settings.model_dump(mode='json')
+    data['llm_active_connection'] = conn.id
+    _mirror_legacy(data, conn.model_dump(mode='json'), conn.model)
+    return Settings.model_validate(data)
+
+
+def _model_label(provider, model):
+    for item in PRESETS.get(provider, {}).get('models', []):
+        if item['id'].lower() == model.lower():
+            return item['label']
+    return model
+
+
+def _vault_ids():
+    try:
+        _, data = _vault()
+    except ModelError:
+        return set()
+    return set(data)
+
+
+def _key_configured(conn, vault_ids=None):
+    if conn.provider == 'ccswitch':
+        return True
+    vault_ids = _vault_ids() if vault_ids is None else vault_ids
+    return conn.id in vault_ids or bool(conn.key_env and os.environ.get(conn.key_env))
+
+
+def _status_path():
+    return db.data_dir() / 'model-status.json'
+
+
+def _status_store():
+    path = _status_path()
+    if not path.exists():
+        return path, {}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return path, data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return path, {}
+
+
+def record_status(connection_id, kind, ok, message=''):
+    """记录最近一次测试或实际调用结果；失败不阻断模型主流程。"""
+    if not connection_id:
+        return
+    try:
+        path, data = _status_store()
+        entry = data.get(connection_id) if isinstance(data.get(connection_id), dict) else {}
+        entry[kind] = {
+            'ok': bool(ok),
+            'message': (message or '').strip()[:300],
+            'at': datetime.now(timezone.utc).isoformat(),
+        }
+        data[connection_id] = entry
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(data), encoding='utf-8')
+        temporary.replace(path)
+    except OSError:
+        logging.getLogger('awt.model').warning('模型可用状态写入失败', exc_info=True)
+
+
+def remove_status(connection_id):
+    try:
+        path, data = _status_store()
+        if data.pop(connection_id, None) is not None and path.exists():
+            path.write_text(json.dumps(data), encoding='utf-8')
+    except OSError:
+        logging.getLogger('awt.model').warning('模型可用状态清理失败', exc_info=True)
+
+
+def connection_status(connection_id):
+    _, data = _status_store()
+    entry = data.get(connection_id) if isinstance(data.get(connection_id), dict) else {}
+    last_test = entry.get('test') if isinstance(entry.get('test'), dict) else None
+    last_use = entry.get('use') if isinstance(entry.get('use'), dict) else None
+    latest = None
+    for candidate in (last_test, last_use):
+        if candidate is not None and (latest is None or str(candidate.get('at', '')) > str(latest.get('at', ''))):
+            latest = candidate
+    return {
+        'state': 'unknown' if latest is None else ('ok' if latest.get('ok') else 'error'),
+        'message': (latest or {}).get('message', ''),
+        'last_test': last_test,
+        'last_use': last_use,
+    }
+
+
+def catalog(settings):
+    vault_ids = _vault_ids()
+    connections = []
+    options = []
+    for conn in settings.llm_connections:
+        provider_label = PRESETS.get(conn.provider, {}).get('label', conn.provider)
+        entry = {
+            'id': conn.id,
+            'label': conn.label or provider_label,
+            'provider': conn.provider,
+            'provider_label': provider_label,
+            'endpoint': conn.endpoint,
+            'protocol': conn.protocol,
+            'key_env': conn.key_env,
+            'ccswitch_config_path': conn.ccswitch_config_path,
+            'key_configured': _key_configured(conn, vault_ids),
+            'model': conn.model,
+            'model_label': _model_label(conn.provider, conn.model),
+            'status': connection_status(conn.id),
+        }
+        connections.append(entry)
+        if conn.model:
+            options.append({
+                'connection_id': conn.id,
+                'provider': conn.provider,
+                'provider_label': provider_label,
+                'model': conn.model,
+                'label': _model_label(conn.provider, conn.model),
+            })
+    return {
+        'connections': connections,
+        'options': options,
+        'active': {'connection_id': settings.llm_active_connection, 'model': settings.llm_active_model},
+    }
+
+
+def _mirror_legacy(data, connection, model):
+    data['llm_provider'] = connection['provider']
+    data['llm_endpoint'] = connection['endpoint'] or data.get('llm_endpoint') or 'https://api.anthropic.com/v1/messages'
+    data['llm_protocol'] = connection['protocol']
+    data['llm_key_env'] = connection['key_env']
+    data['ccswitch_config_path'] = connection.get('ccswitch_config_path', '')
+    data['llm_model'] = model
+    data['llm_active_model'] = model
+
+
+def upsert_connection(settings, payload):
+    data = settings.model_dump(mode='json')
+    connection_id = payload.id or uuid.uuid4().hex[:12]
+    record = ModelConnection(
+        id=connection_id,
+        label=payload.label,
+        provider=payload.provider,
+        endpoint=payload.endpoint.strip(),
+        protocol=payload.protocol,
+        key_env=payload.key_env.strip(),
+        ccswitch_config_path=payload.ccswitch_config_path.strip(),
+        model=payload.model.strip(),
+    )
+    connections = [item for item in data.get('llm_connections') or [] if item.get('id') != connection_id]
+    connections.append(record.model_dump(mode='json'))
+    data['llm_connections'] = connections
+    if payload.activate or not data.get('llm_active_connection'):
+        data['llm_active_connection'] = connection_id
+        _mirror_legacy(data, record.model_dump(mode='json'), record.model)
+    return Settings.model_validate(data), connection_id
+
+
+def delete_connection(settings, connection_id):
+    data = settings.model_dump(mode='json')
+    data['llm_connections'] = [item for item in data.get('llm_connections') or [] if item.get('id') != connection_id]
+    remove_status(connection_id)
+    if data.get('llm_active_connection') == connection_id:
+        fallback = next((item for item in data['llm_connections'] if item.get('model')), None)
+        data['llm_active_connection'] = ''
+        data['llm_active_model'] = ''
+        data['llm_model'] = ''
+        if fallback is not None:
+            data['llm_active_connection'] = fallback['id']
+            _mirror_legacy(data, fallback, fallback.get('model') or '')
+    return Settings.model_validate(data)
+
+
+def set_active_connection(settings, connection_id):
+    conn = next((item for item in settings.llm_connections if item.id == connection_id), None)
+    if conn is None:
+        raise ModelError('模型连接不存在，可能已被删除')
+    if conn.provider != 'ccswitch' and not conn.model:
+        raise ModelError('该模型连接还没有配置模型名称')
+    data = settings.model_dump(mode='json')
+    data['llm_active_connection'] = connection_id
+    _mirror_legacy(data, conn.model_dump(mode='json'), conn.model)
+    return Settings.model_validate(data)
 
 
 def _crypt(data: bytes, decrypt=False):
@@ -266,6 +465,9 @@ def _crypt(data: bytes, decrypt=False):
 
 
 def _key_id(settings):
+    conn = active_connection(settings)
+    if conn is not None:
+        return conn.id
     return stable(settings.llm_provider, settings.llm_endpoint)
 
 
@@ -279,23 +481,40 @@ def _vault():
         raise ModelError('本机密钥存储不可读，请检查数据目录')
 
 
-def save_key(settings, key):
+def _store_key(connection_id, key):
     path, data = _vault()
-    if settings.llm_provider == 'ccswitch':
-        raise ModelError('CCSwitch 从当前 Claude Code 配置读取凭据，无需另存 API Key')
-    if not key.strip():
-        raise ModelError('API Key 不能为空')
-    data[_key_id(settings)] = base64.b64encode(_crypt(key.strip().encode())).decode()
+    data[connection_id] = base64.b64encode(_crypt(key.strip().encode())).decode()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(data), encoding='utf-8')
     temporary.replace(path)
 
 
+def save_key(settings, key):
+    if settings.llm_provider == 'ccswitch':
+        raise ModelError('CCSwitch 从当前 Claude Code 配置读取凭据，无需另存 API Key')
+    if not key.strip():
+        raise ModelError('API Key 不能为空')
+    _store_key(_key_id(settings), key)
+
+
+def save_key_for(connection_id, key):
+    if not key.strip():
+        raise ModelError('API Key 不能为空')
+    if not connection_id:
+        raise ModelError('模型连接尚未保存，无法保存 API Key')
+    _store_key(connection_id, key)
+
+
 def remove_key(settings):
+    remove_key_for(_key_id(settings))
+
+
+def remove_key_for(connection_id):
+    if not connection_id:
+        return
     path, data = _vault()
-    data.pop(_key_id(settings), None)
-    if path.exists():
+    if data.pop(connection_id, None) is not None and path.exists():
         path.write_text(json.dumps(data), encoding='utf-8')
 
 
@@ -349,9 +568,11 @@ def connection(settings, key=None):
 def status(settings, key=None):
     try:
         c = connection(settings, key)
-        return {'configured': True, 'provider': settings.llm_provider, 'endpoint': c['endpoint'], 'model': c['model'], 'protocol': c['protocol'], 'error': ''}
+        result = {'configured': True, 'provider': settings.llm_provider, 'endpoint': c['endpoint'], 'model': c['model'], 'protocol': c['protocol'], 'error': ''}
     except ModelError as exc:
-        return {'configured': False, 'provider': settings.llm_provider, 'endpoint': settings.llm_endpoint if settings.llm_provider != 'ccswitch' else '', 'model': settings.llm_model, 'error': str(exc)}
+        result = {'configured': False, 'provider': settings.llm_provider, 'endpoint': settings.llm_endpoint if settings.llm_provider != 'ccswitch' else '', 'model': settings.llm_model, 'protocol': settings.llm_protocol, 'error': str(exc)}
+    result.update(catalog(settings))
+    return result
 
 
 _ERROR_KINDS = {
@@ -690,6 +911,16 @@ def _decode_response(result):
 
 
 def complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
+    try:
+        answer = _complete(settings, system, text, max_tokens=max_tokens, purpose=purpose, require_text=require_text, key=key)
+    except ModelError as exc:
+        record_status(_key_id(settings), 'use', False, str(exc))
+        raise
+    record_status(_key_id(settings), 'use', True, '最近一次模型调用成功')
+    return answer
+
+
+def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
     c = connection(settings) if key is None else connection(settings, key)
     max_tokens=output_budget(c['model'],max_tokens,purpose)
     headers = {'Content-Type': 'application/json'}
@@ -767,5 +998,18 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
 
 
 def test_connection(settings, key=None):
-    complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=128, require_text=False, key=key)
+    _complete(settings, 'Reply with OK only. Do not use tools.', 'Connection test. Reply OK.', max_tokens=128, require_text=False, key=key)
     return {**status(settings, key), 'ok': True, 'message': '已完成真实模型请求，连接成功；未发送工作对话。'}
+
+
+def test_saved_connection(settings, connection_id):
+    conn = next((item for item in settings.llm_connections if item.id == connection_id), None)
+    if conn is None:
+        raise ModelError('模型连接不存在，可能已被删除')
+    try:
+        result = test_connection(connection_settings(settings, conn))
+    except ModelError as exc:
+        record_status(connection_id, 'test', False, str(exc))
+        raise
+    record_status(connection_id, 'test', True, result['message'])
+    return result

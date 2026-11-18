@@ -21,6 +21,7 @@ from . import auto_schedule, usage, cloud_sync, history_upload
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
+from .models import ModelConnectionInput, ModelActiveInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
@@ -333,12 +334,57 @@ def create_app(engine=None):
             model_provider.remove_key(settings)
             return model_provider.status(settings)
 
+    @app.get('/api/model/connections')
+    def model_connections():
+        with engine.connect() as conn:
+            return model_provider.catalog(service.get_settings(conn))
+
+    @app.post('/api/model/connections')
+    def save_model_connection(payload: ModelConnectionInput):
+        with transaction() as conn:
+            settings = service.get_settings(conn)
+            updated, connection_id = model_provider.upsert_connection(settings, payload)
+            if payload.api_key and payload.provider != 'ccswitch':
+                model_provider.save_key_for(connection_id, payload.api_key.get_secret_value())
+            saved = service.save_settings(conn, model_provider.normalize(updated))
+            return {'settings': saved, 'status': model_provider.status(saved), 'connection_id': connection_id}
+
+    @app.delete('/api/model/connections/{connection_id}')
+    def delete_model_connection(connection_id: str):
+        with transaction() as conn:
+            settings = service.get_settings(conn)
+            model_provider.remove_key_for(connection_id)
+            saved = service.save_settings(conn, model_provider.delete_connection(settings, connection_id))
+            return {'settings': saved, 'status': model_provider.status(saved)}
+
+    @app.post('/api/model/connections/{connection_id}/test')
+    def test_model_connection(connection_id: str):
+        with engine.connect() as conn:
+            settings = service.get_settings(conn)
+            result = model_provider.test_saved_connection(settings, connection_id)
+            return {**result, 'status': model_provider.status(settings)}
+
+    @app.post('/api/model/active')
+    def set_model_active(payload: ModelActiveInput):
+        with transaction() as conn:
+            settings = service.get_settings(conn)
+            saved = service.save_settings(conn, model_provider.set_active_connection(settings, payload.connection_id))
+            return {'settings': saved, 'status': model_provider.status(saved)}
+
     @app.post('/api/model/test')
     def test_model(payload:ModelProbeInput|None=None):
         with engine.connect() as conn:
             # A wizard probe may test an unsaved candidate; nothing is persisted here.
             candidate = payload.settings if payload and payload.settings else service.get_settings(conn)
             key = payload.api_key.get_secret_value() if payload and payload.api_key else None
+            if payload is None or payload.settings is None:
+                try:
+                    result = model_provider.test_connection(candidate, key)
+                except model_provider.ModelError as exc:
+                    model_provider.record_status(model_provider._key_id(candidate), 'test', False, str(exc))
+                    raise
+                model_provider.record_status(model_provider._key_id(candidate), 'test', True, result['message'])
+                return result
             return model_provider.test_connection(candidate, key)
 
     @app.get('/api/agents')
