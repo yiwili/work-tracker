@@ -66,6 +66,23 @@ Index(
     analysis_exclusions.c.target_key,
     unique=True,
 )
+compressed_memories = Table(
+    'compressed_memories',
+    metadata,
+    Column('id', String, primary_key=True),
+    Column('source', String, nullable=False, index=True),
+    Column('session_id', String, nullable=False, index=True),
+    Column('date_key', String, nullable=False, index=True),
+    Column('content_hash', String, nullable=False, index=True),
+    Column('model', String, nullable=False, server_default=''),
+    Column('raw_chars', Integer, nullable=False, server_default='0'),
+    Column('compressed_chars', Integer, nullable=False, server_default='0'),
+    Column('raw_events_count', Integer, nullable=False, server_default='0'),
+    Column('segments_json', JSON, nullable=False),
+    Column('summary_text', Text, nullable=False, server_default=''),
+    Column('created_at', String, nullable=False),
+    Column('updated_at', String, nullable=False),
+)
 
 
 def _default_frozen_data_dir() -> Path:

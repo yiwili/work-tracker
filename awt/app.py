@@ -17,11 +17,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import db, service, daily_analysis, model_provider, prompts, style_reference, time_allocation, matching, similarity, multiday, exclusions
-from . import auto_schedule, usage, cloud_sync, history_upload
+from . import auto_schedule, usage, cloud_sync, history_upload, memory_compression
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput
+from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput, CompressionProbeInput, CompressionRunInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
@@ -408,6 +408,57 @@ def create_app(engine=None):
                 model_provider.record_status(model_provider._key_id(candidate), 'test', True, result['message'])
                 return result
             return model_provider.test_connection(candidate, key)
+
+    @app.get('/api/memory-compression/status')
+    def memory_compression_status():
+        with engine.connect() as conn:
+            return memory_compression.status(service.get_settings(conn), conn=conn)
+
+    @app.post('/api/memory-compression/test')
+    def test_memory_compression(payload: CompressionProbeInput | None = None):
+        with engine.connect() as conn:
+            settings = service.get_settings(conn)
+            override_cfg = payload.memory_compression if payload else None
+            override_conns = payload.connections if payload else None
+            key = payload.api_key.get_secret_value() if payload and payload.api_key else None
+            result = memory_compression.test_compression_model(
+                settings,
+                override_cfg=override_cfg,
+                override_key=key,
+                override_connections=override_conns,
+            )
+            return {**result, 'status': memory_compression.status(settings, conn=conn)}
+
+    @app.post('/api/memory-compression/key')
+    def save_memory_compression_key(payload: ModelKeyInput):
+        model_provider.save_key_for(memory_compression.COMPRESSION_KEY_ID, payload.api_key.get_secret_value())
+        with engine.connect() as conn:
+            return memory_compression.status(service.get_settings(conn), conn=conn)
+
+    @app.delete('/api/memory-compression/key')
+    def delete_memory_compression_key():
+        model_provider.remove_key_for(memory_compression.COMPRESSION_KEY_ID)
+        with engine.connect() as conn:
+            return memory_compression.status(service.get_settings(conn), conn=conn)
+
+    @app.post('/api/memory-compression/compress')
+    def run_memory_compression(payload: CompressionRunInput):
+        with engine.connect() as conn:
+            result = memory_compression.compress_day(
+                conn,
+                payload.date,
+                start_day=payload.start_date,
+                end_day=payload.end_date,
+                force=payload.force,
+            )
+            conn.commit()
+            return result
+
+    @app.delete('/api/memory-compression/cache')
+    def clear_memory_compression_cache(date_key: str | None = None, source: str | None = None):
+        with transaction() as conn:
+            deleted = memory_compression.clear_cache(conn, date_key=date_key, source=source)
+            return {'deleted': deleted, 'storage': memory_compression.local_stats(conn)}
 
     @app.get('/api/agents')
     def agents():

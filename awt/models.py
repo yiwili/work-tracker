@@ -381,6 +381,67 @@ class ManualTemplate(BaseModel):
     time_locked: bool = False
 
 
+class MemoryCompressionConfig(BaseModel):
+    """本地或低额度语义压缩模型配置：压缩对话记忆并本地存储，再传给工时分析 Agent。"""
+    enabled: bool = False
+    mode: Literal['connection', 'custom'] = 'custom'
+    connection_id: str = Field(default='', max_length=64)
+    connection_model: str = Field(default='', max_length=200)
+    fallback_connection_ids: list[str] = Field(default_factory=list, max_length=10)
+    provider: ModelProvider = 'local'
+    endpoint: str = Field(default='http://127.0.0.1:11434/v1/chat/completions', max_length=2048)
+    protocol: Literal['openai', 'anthropic'] = 'openai'
+    key_env: str = Field(default='AWT_COMPRESSION_API_KEY', max_length=200)
+    ccswitch_config_path: str = Field(default='', max_length=4096)
+    model: str = Field(default='', max_length=200)
+    # 按每个对话 Agent 细化是否开启压缩；默认全选所有对话来源。
+    sources: list[str] = Field(default_factory=lambda: list(CONVERSATION_SOURCES))
+
+    @field_validator('model', 'connection_model')
+    @classmethod
+    def clean_model(cls, value):
+        text = value.strip()
+        if len(text) > 200 or any(ord(c) < 32 for c in text):
+            raise ValueError('压缩模型名称无效或过长')
+        return text
+
+    @field_validator('fallback_connection_ids')
+    @classmethod
+    def clean_fallbacks(cls, values):
+        cleaned, seen = [], set()
+        for raw in values or []:
+            if not isinstance(raw, str):
+                continue
+            item = raw.strip()
+            if item and item not in seen:
+                seen.add(item)
+                cleaned.append(item)
+        return cleaned
+
+    @field_validator('sources')
+    @classmethod
+    def clean_sources(cls, values):
+        allowed = set(CONVERSATION_SOURCES)
+        mapped = []
+        seen = set()
+        for raw in values or []:
+            if not isinstance(raw, str):
+                continue
+            item = raw.strip()
+            candidates = SOURCE_FAMILIES[item] if item in SOURCE_FAMILIES else (item,)
+            for c in candidates:
+                if c in allowed and c not in seen:
+                    seen.add(c)
+                    mapped.append(c)
+        return mapped
+
+    @model_validator(mode='after')
+    def valid_remote(self):
+        if self.provider != 'ccswitch' and self.endpoint.strip():
+            valid_model_endpoint(self.endpoint)
+        return self
+
+
 class Settings(BaseModel):
     timezone: str = "Asia/Shanghai"
     target_minutes: int = Field(default=480, ge=1, le=1440)
@@ -422,6 +483,7 @@ class Settings(BaseModel):
     auto_apply_allocation: bool = True
     # 定时自动生成工作项默认关闭，用户开启后在后台按计划采集并归纳当天工作。
     auto_generate: AutoGenerateConfig = Field(default_factory=AutoGenerateConfig)
+    memory_compression: MemoryCompressionConfig = Field(default_factory=MemoryCompressionConfig)
     task_details_mode: Literal['standard', 'concise', 'none'] = 'standard'
     theme_id: str = Field(default='apple-hig', max_length=64)
     analysis_sources: list[Literal['codex', 'claude_code', 'antigravity', 'gemini', 'doubao', 'workbuddy_cn', 'workbuddy_intl', 'deepseek_harness', 'qoder_cn', 'qoder_intl', 'trae_cn', 'trae_intl', 'cursor', 'git']] = Field(default_factory=lambda: ['codex'])
@@ -445,6 +507,8 @@ class Settings(BaseModel):
         data = dict(data)
         if data.get('auto_generate') is None:
             data.pop('auto_generate', None)
+        if data.get('memory_compression') is None:
+            data.pop('memory_compression', None)
         for legacy, (cn_key, intl_key) in SOURCE_FAMILIES.items():
             if legacy not in data:
                 continue
@@ -531,7 +595,7 @@ class Settings(BaseModel):
     @field_validator('agent_prompts')
     @classmethod
     def valid_prompts(cls, values):
-        if any(k not in ('scope_filter','task_writer','time_estimator','manual_writer','style_template') or len(v)>16000 for k,v in values.items()):
+        if any(k not in ('scope_filter','task_writer','time_estimator','manual_writer','style_template','memory_compressor') or len(v)>16000 for k,v in values.items()):
             raise ValueError('提示词角色无效，或超过16000字符')
         return values
 
@@ -774,6 +838,20 @@ class ModelProbeInput(BaseModel):
     """Optional unsaved candidate, so a failed test writes nothing to the store."""
     settings: Settings | None = None
     api_key: SecretStr | None = None
+
+
+class CompressionProbeInput(BaseModel):
+    """Optional unsaved compression candidate for connection testing without persisting."""
+    memory_compression: MemoryCompressionConfig | None = None
+    connections: list[ModelConnection] | None = None
+    api_key: SecretStr | None = None
+
+
+class CompressionRunInput(BaseModel):
+    date: Date
+    start_date: Date | None = None
+    end_date: Date | None = None
+    force: bool = False
 
 
 class StyleImportInput(BaseModel):

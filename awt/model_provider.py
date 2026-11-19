@@ -95,7 +95,7 @@ def _safe_error(text):
     return error
 
 
-STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名'}
+STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名','memory_compressor':'对话记忆压缩'}
 STREAM_PURPOSES=('scope_filter','task_writer','time_estimator','manual_writer')
 _usage_calls=contextvars.ContextVar('awt_usage_calls',default=None)
 
@@ -272,11 +272,16 @@ def active_connection(settings):
     return next((item for item in settings.llm_connections if item.id == settings.llm_active_connection), None)
 
 
-def connection_settings(settings, conn):
+def connection_settings(settings, conn, model_override=''):
     """构建只指向指定连接、且不修改已保存设置的一份设置副本。"""
     data = settings.model_dump(mode='json')
+    chosen = official_model(conn.provider, model_override) if (model_override or '').strip() else conn.model
+    conn_dict = {**conn.model_dump(mode='json'), 'model': chosen}
+    connections = [item for item in data.get('llm_connections') or [] if item.get('id') != conn.id]
+    connections.append(conn_dict)
+    data['llm_connections'] = connections
     data['llm_active_connection'] = conn.id
-    _mirror_legacy(data, conn.model_dump(mode='json'), conn.model)
+    _mirror_legacy(data, conn_dict, chosen)
     return Settings.model_validate(data)
 
 

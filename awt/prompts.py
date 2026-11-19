@@ -6,6 +6,7 @@ ROLES = {
     'time_estimator': '难度与工时估算',
     'manual_writer': '人工事项命名',
     'style_template': '历史命名风格提炼',
+    'memory_compressor': '对话记忆压缩',
 }
 
 

@@ -229,7 +229,13 @@ def overview(conn, day, settings, end_day=None, report_day=None):
 
 
 def input_hash(rows, settings):
-    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, getattr(settings, 'task_details_mode', 'standard'), settings.activity_gap_minutes, settings.redact_patterns, settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()}, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
+    mc = getattr(settings, 'memory_compression', None)
+    mc_key = (
+        (mc.enabled, mc.mode, mc.connection_id, mc.connection_model, mc.provider, mc.model, sorted(mc.sources))
+        if (mc and mc.enabled)
+        else False
+    )
+    return stable(POLICY_VERSION,settings.timezone, sorted(settings.analysis_sources), settings.agent_prompts, settings.title_examples, settings.style_template, getattr(settings, 'task_details_mode', 'standard'), settings.activity_gap_minutes, settings.redact_patterns, settings.git_author.model_dump() if settings.git_author else None,{k:v.model_dump() for k,v in settings.git_author_overrides.items()}, mc_key, sorted(e['id'] for e in rows if e['kind'] != 'session_end'))
 
 
 def transcript(rows, settings):
@@ -733,6 +739,13 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
             msg = f'所选来源在 {s_day} 至 {e_day} 期间没有可分析的对话。' if str(s_day) != str(e_day) else '所选来源在当天没有可分析的对话。'
         return {'created': 0, 'updated': 0, 'archived': 0, 'pending': 0, 'pending_tasks': [], 'auto_imported': False, 'warnings': [msg], 'conversations': summary, 'merge_suggestions': [], 'binding': binding}
     records, refs, segments = transcript(rows, settings)
+    compression_stats = None
+    if getattr(getattr(settings, 'memory_compression', None), 'enabled', False):
+        from . import memory_compression
+        date_key = analysis_day if str(s_day) == str(e_day) else f"{s_day}..{e_day}"
+        records, segments, compression_stats = memory_compression.compress_transcript(
+            conn, records, refs, segments, settings, date_key=date_key
+        )
     active_tasks = list_tasks_in_range(conn, s_day, e_day)
     ent_id = getattr(getattr(settings, 'gitee_enterprise', None), 'enterprise_id', 0) or 0
     links_by_task = _active_gitee_links_by_task(conn, [t['id'] for t in active_tasks], ent_id)
@@ -764,7 +777,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
         result, requests = infer_day(records, refs, settings, reviewed, date_label, project_hints=project_hints)
     else:
         result, requests = {'summary':'所选日期范围内没有可自动计入的实际工作；私人、无关及不足时长的知识梳理已排除。','tasks':[]},0
-    requests+=filter_requests
+    requests += filter_requests + (compression_stats.get('model_requests', 0) if compression_stats else 0)
     # Model latency must never hold the database's writer lock. Re-read human edits atomically
     # after inference, and refuse stale input if collection/source selection changed meanwhile.
     conn.commit()
@@ -933,7 +946,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
                 'start_date': str(s_day), 'end_date': str(e_day), 'target_day': analysis_day, 'target_minutes': effective_target,
                 'model': model_provider.status(settings)['model'], 'summary': redact(result.get('summary', ''), settings.redact_patterns),
                 'session_count': summary['session_count'], 'user_messages': summary['user_messages'], 'assistant_messages': summary['assistant_messages'],
-                'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings}
+                'sources': settings.analysis_sources, 'tasks': len(generated), 'model_requests': requests, 'warnings': warnings, 'compression': compression_stats}
     upsert(conn, db.analyses, {'date': analysis_day, 'snapshot': snapshot}, 'date')
     if str(s_day) != str(e_day):
         if not binding:
@@ -949,7 +962,7 @@ def _analyze(conn, day, usage_calls, start_day=None, end_day=None, target_minute
     sim_check = similarity.check_day_similarity(conn, analysis_day, settings=settings, force=False)
     return {'created': len(imported), 'updated': 0, 'archived': archived, 'date': analysis_day, 'binding': binding,
             'pending': len(pending_tasks), 'pending_tasks': pending_tasks, 'auto_imported': settings.auto_import_analysis,
-            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=analysis_day), 'merge_suggestions': [],
+            'warnings': warnings, 'summary': snapshot['summary'], 'model_requests': requests, 'usage': usage, 'compression': compression_stats, 'conversations': overview(conn, s_day, settings, end_day=e_day, report_day=analysis_day), 'merge_suggestions': [],
             'similarity_check': sim_check}
 
 
