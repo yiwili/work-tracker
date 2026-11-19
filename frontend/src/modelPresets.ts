@@ -50,6 +50,12 @@ export const presets: Record<LlmProvider, ModelPreset> = {
     protocol: "anthropic",
     models: [],
   },
+  local: {
+    endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+    model: "",
+    protocol: "openai",
+    models: [],
+  },
   custom: {
     endpoint: "",
     model: "",
@@ -63,6 +69,7 @@ export const providerLabels: Record<LlmProvider, string> = {
   glm: "智谱 GLM（标准 API）",
   "glm-coding": "智谱 GLM Coding Plan",
   ccswitch: "CCSwitch / Claude Code 当前接口",
+  local: "本地模型（Ollama / LM Studio / vLLM）",
   custom: "自定义兼容接口",
 };
 

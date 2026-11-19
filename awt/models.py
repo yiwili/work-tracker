@@ -46,24 +46,44 @@ def valid_model_endpoint(value):
     return value
 
 
+ModelProvider = Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'local', 'custom']
+
+
+def _clean_model_list(values):
+    cleaned = []
+    seen = set()
+    for raw in values or []:
+        if not isinstance(raw, str):
+            continue
+        item = raw.strip()
+        if not item or len(item) > 200 or any(ord(c) < 32 for c in item) or item in seen:
+            continue
+        seen.add(item)
+        cleaned.append(item)
+    return cleaned
+
+
 class ModelConnection(BaseModel):
     id: str = Field(default='', max_length=64)
     label: str = Field(default='', max_length=80)
-    provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
+    provider: ModelProvider = 'custom'
     endpoint: str = Field(default='', max_length=2048)
     protocol: Literal['openai', 'anthropic'] = 'openai'
     key_env: str = Field(default='AWT_LLM_API_KEY', max_length=200)
     ccswitch_config_path: str = Field(default='', max_length=4096)
     model: str = Field(default='', max_length=200)
+    available_models: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode='before')
     @classmethod
     def fold_models(cls, data):
-        # 旧数据每个连接带 models 列表；现在一个 Key 只对应一个模型，保留第一个。
+        # 旧数据每个连接带 models 列表；现在一个 Key 只对应一个激活模型，保留第一个并迁移到 available_models。
         if isinstance(data, dict) and 'models' in data and 'model' not in data:
             data = dict(data)
             models = data.pop('models') or []
             data['model'] = models[0] if models else ''
+            if 'available_models' not in data and models:
+                data['available_models'] = models
         return data
 
     @field_validator('model')
@@ -74,13 +94,18 @@ class ModelConnection(BaseModel):
             raise ValueError('模型名称无效或过长')
         return text
 
+    @field_validator('available_models')
+    @classmethod
+    def clean_available_models(cls, values):
+        return _clean_model_list(values)
+
     @model_validator(mode='after')
     def valid_remote(self):
         if self.provider != 'ccswitch':
             if not self.endpoint.strip():
                 raise ValueError('请填写模型接口地址')
             valid_model_endpoint(self.endpoint)
-        if self.provider == 'custom' and not self.model:
+        if self.provider in ('custom', 'local') and not self.model:
             raise ValueError('请填写模型名称')
         return self
 
@@ -383,11 +408,11 @@ class Settings(BaseModel):
     llm_endpoint: str = "https://api.openai.com/v1/chat/completions"
     llm_model: str = ""
     llm_key_env: str = "AWT_LLM_API_KEY"
-    llm_provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
+    llm_provider: ModelProvider = 'custom'
     llm_protocol: Literal['openai', 'anthropic'] = 'openai'
     # 多个供应商/Key 连接；llm_* 字段始终镜像当前启用的连接与模型，
     # 这样旧配置、定时任务和 CLI 无需感知连接列表。
-    llm_connections: list[ModelConnection] = Field(default_factory=list, max_length=20)
+    llm_connections: list[ModelConnection] = Field(default_factory=list, max_length=50)
     llm_active_connection: str = Field(default='', max_length=64)
     llm_active_model: str = Field(default='', max_length=200)
     ccswitch_config_path: str = ''
@@ -676,12 +701,13 @@ class ModelKeyInput(BaseModel):
 class ModelConnectionInput(BaseModel):
     id: str = Field(default='', max_length=64)
     label: str = Field(default='', max_length=80)
-    provider: Literal['deepseek', 'glm', 'glm-coding', 'ccswitch', 'custom'] = 'custom'
+    provider: ModelProvider = 'custom'
     endpoint: str = Field(default='', max_length=2048)
     protocol: Literal['openai', 'anthropic'] = 'openai'
     key_env: str = Field(default='AWT_LLM_API_KEY', max_length=200)
     ccswitch_config_path: str = Field(default='', max_length=4096)
     model: str = Field(default='', max_length=200)
+    available_models: list[str] = Field(default_factory=list, max_length=500)
     api_key: SecretStr | None = None
     activate: bool = True
 
@@ -692,6 +718,11 @@ class ModelConnectionInput(BaseModel):
         if len(text) > 200 or any(ord(c) < 32 for c in text):
             raise ValueError('模型名称无效或过长')
         return text
+
+    @field_validator('available_models')
+    @classmethod
+    def clean_available_models(cls, values):
+        return _clean_model_list(values)
 
     @model_validator(mode='after')
     def valid_remote(self):
@@ -706,6 +737,37 @@ class ModelConnectionInput(BaseModel):
 
 class ModelActiveInput(BaseModel):
     connection_id: str = Field(min_length=1, max_length=64)
+    model: str = Field(default='', max_length=200)
+
+    @field_validator('model')
+    @classmethod
+    def clean_model(cls, value):
+        text = value.strip()
+        if len(text) > 200 or any(ord(c) < 32 for c in text):
+            raise ValueError('模型名称无效或过长')
+        return text
+
+
+class ModelDiscoverInput(BaseModel):
+    """Fetch available models from an existing connection or an unsaved API endpoint."""
+    connection_id: str = Field(default='', max_length=64)
+    provider: ModelProvider = 'custom'
+    endpoint: str = Field(default='', max_length=2048)
+    protocol: Literal['openai', 'anthropic'] = 'openai'
+    key_env: str = Field(default='AWT_LLM_API_KEY', max_length=200)
+    ccswitch_config_path: str = Field(default='', max_length=4096)
+    api_key: SecretStr | None = None
+    save_to_connection: bool = False
+
+    @model_validator(mode='after')
+    def valid_target(self):
+        if not self.connection_id and self.provider != 'ccswitch':
+            if not self.endpoint.strip():
+                raise ValueError('请填写模型接口地址')
+            valid_model_endpoint(self.endpoint)
+        elif self.endpoint.strip() and self.provider != 'ccswitch':
+            valid_model_endpoint(self.endpoint)
+        return self
 
 
 class ModelProbeInput(BaseModel):

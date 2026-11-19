@@ -21,7 +21,7 @@ from . import auto_schedule, usage, cloud_sync, history_upload
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import ModelConnectionInput, ModelActiveInput
+from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
@@ -364,11 +364,33 @@ def create_app(engine=None):
             result = model_provider.test_saved_connection(settings, connection_id)
             return {**result, 'status': model_provider.status(settings)}
 
+    @app.get('/api/model/connections/{connection_id}/models')
+    def connection_models(connection_id: str):
+        with engine.connect() as conn:
+            settings = service.get_settings(conn)
+            return model_provider.discover_connection_models(settings, connection_id)
+
+    @app.post('/api/model/models/discover')
+    def discover_models(payload: ModelDiscoverInput):
+        with engine.connect() as conn:
+            settings = service.get_settings(conn)
+        result = model_provider.discover_models_for_input(settings, payload)
+        if payload.save_to_connection and payload.connection_id:
+            with transaction() as conn:
+                current = service.get_settings(conn)
+                for item in current.llm_connections:
+                    if item.id == payload.connection_id:
+                        merged = list(dict.fromkeys([*( [item.model] if item.model else [] ), *result['models']]))
+                        item.available_models = merged[:500]
+                        service.save_settings(conn, current)
+                        break
+        return result
+
     @app.post('/api/model/active')
     def set_model_active(payload: ModelActiveInput):
         with transaction() as conn:
             settings = service.get_settings(conn)
-            saved = service.save_settings(conn, model_provider.set_active_connection(settings, payload.connection_id))
+            saved = service.save_settings(conn, model_provider.set_active_connection(settings, payload.connection_id, model=payload.model))
             return {'settings': saved, 'status': model_provider.status(saved)}
 
     @app.post('/api/model/test')

@@ -285,7 +285,7 @@ export type GitIdentity = {
   selected: GitAuthor & { source: string };
   authors: (GitAuthor & { commits: number })[];
 };
-export type LlmProvider = "deepseek" | "glm" | "glm-coding" | "ccswitch" | "custom";
+export type LlmProvider = "deepseek" | "glm" | "glm-coding" | "ccswitch" | "local" | "custom";
 export type LlmProtocol = "openai" | "anthropic";
 
 export type ModelConnection = {
@@ -297,6 +297,7 @@ export type ModelConnection = {
   key_env: string;
   ccswitch_config_path: string;
   model: string;
+  available_models?: string[];
 };
 
 export type ModelCheck = {
@@ -324,6 +325,7 @@ export type ModelConnectionStatus = {
   key_configured: boolean;
   model: string;
   model_label: string;
+  available_models?: string[];
   status: ModelConnectionState;
 };
 

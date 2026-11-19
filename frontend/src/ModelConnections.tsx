@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
+  RefreshCw,
   Trash2,
   X,
   Zap,
@@ -31,6 +32,7 @@ type Draft = {
   key_env: string;
   ccswitch_config_path: string;
   model: string;
+  available_models: string[];
 };
 
 type Feedback = { state: "success" | "error"; message: string } | null;
@@ -44,6 +46,7 @@ const blankDraft = (): Draft => ({
   key_env: "AWT_LLM_API_KEY",
   ccswitch_config_path: "",
   model: "",
+  available_models: [],
 });
 
 const draftFrom = (conn: ModelConnection): Draft => ({
@@ -55,6 +58,7 @@ const draftFrom = (conn: ModelConnection): Draft => ({
   key_env: conn.key_env,
   ccswitch_config_path: conn.ccswitch_config_path,
   model: conn.model,
+  available_models: conn.available_models ?? [],
 });
 
 const formatTime = (value?: string) => {
@@ -162,6 +166,9 @@ export function ModelConnections({
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState("");
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [manualModel, setManualModel] = useState(false);
+  const [cardPickerId, setCardPickerId] = useState("");
+  const [cardModels, setCardModels] = useState<Record<string, string[]>>({});
   const connections = settings.llm_connections ?? [];
   const disabled = busy || !!pending;
   const draftPreset = draft?.provider ? presets[draft.provider] : null;
@@ -206,15 +213,85 @@ export function ModelConnections({
     }
   };
 
-  const switchTo = (conn: ModelConnection) => {
-    if (settings.llm_active_connection === conn.id) return;
+  const switchTo = (conn: ModelConnection, nextModel?: string) => {
+    const model = (nextModel ?? "").trim();
+    if (!model && settings.llm_active_connection === conn.id) return;
+    if (model && settings.llm_active_connection === conn.id && conn.model === model) return;
     void apply(
       `switch:${conn.id}`,
       "/model/active",
       "POST",
-      { connection_id: conn.id },
-      `已切换到「${conn.label || providerLabels[conn.provider]}」，之后的 AI 分析都会使用这个模型。`,
+      { connection_id: conn.id, ...(model ? { model } : {}) },
+      `已切换到「${conn.label || providerLabels[conn.provider]}」${model ? `（${model}）` : ""}，之后的 AI 分析都会使用这个模型。`,
     );
+  };
+
+  const discoverConnectionModels = async (conn: ModelConnection) => {
+    setPending(`models:${conn.id}`);
+    setFeedback(null);
+    try {
+      const result = await api<{
+        models: string[];
+        source: string;
+        warning?: string;
+      }>("/model/models/discover", "POST", {
+        connection_id: conn.id,
+        provider: conn.provider,
+        save_to_connection: true,
+      });
+      setCardModels((prev) => ({ ...prev, [conn.id]: result.models }));
+      setCardPickerId(conn.id);
+      setFeedback({
+        state: "success",
+        message:
+          result.warning ||
+          `已从接口获取 ${result.models.length} 个可用模型，可直接选择切换。`,
+      });
+    } catch (e) {
+      setFeedback({ state: "error", message: (e as Error).message });
+    } finally {
+      setPending("");
+    }
+  };
+
+  const discoverDraftModels = async () => {
+    if (!draft || !draft.provider) return;
+    setPending("discover-draft");
+    setFeedback(null);
+    try {
+      const result = await api<{
+        models: string[];
+        source: string;
+        warning?: string;
+      }>("/model/models/discover", "POST", {
+        connection_id: draft.id,
+        provider: draft.provider,
+        endpoint: draft.provider === "ccswitch" ? "" : draft.endpoint.trim(),
+        protocol: draft.protocol,
+        key_env: draft.key_env.trim() || "AWT_LLM_API_KEY",
+        ccswitch_config_path: draft.ccswitch_config_path.trim(),
+        api_key: draft.provider === "ccswitch" ? undefined : apiKey.trim() || undefined,
+      });
+      setDraft((prev) => {
+        if (!prev) return prev;
+        const nextModel = prev.model.trim() || result.models[0] || "";
+        return {
+          ...prev,
+          available_models: result.models,
+          model: nextModel,
+        };
+      });
+      setManualModel(false);
+      setFeedback({
+        state: "success",
+        message:
+          result.warning || `已获取 ${result.models.length} 个模型，请在下方选择。`,
+      });
+    } catch (e) {
+      setFeedback({ state: "error", message: (e as Error).message });
+    } finally {
+      setPending("");
+    }
   };
 
   const deleteConnection = (conn: ModelConnection) => {
@@ -326,6 +403,7 @@ export function ModelConnections({
           key_env: draft.key_env.trim() || "AWT_LLM_API_KEY",
           ccswitch_config_path: draft.ccswitch_config_path.trim(),
           model,
+          available_models: draft.available_models,
           api_key:
             provider === "ccswitch" ? undefined : apiKey.trim() || undefined,
           activate: true,
@@ -359,6 +437,7 @@ export function ModelConnections({
           disabled={disabled || !!draft}
           onClick={() => {
             setDraft(blankDraft());
+            setManualModel(false);
             setApiKey("");
             setFeedback(null);
           }}
@@ -430,6 +509,20 @@ export function ModelConnections({
                       type="button"
                       className="source-quick-btn"
                       disabled={disabled}
+                      onClick={() => void discoverConnectionModels(conn)}
+                      title="从该接口拉取可用模型列表，并快速切换所选模型"
+                    >
+                      {pending === `models:${conn.id}` ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <RefreshCw size={13} />
+                      )}
+                      选模型
+                    </button>
+                    <button
+                      type="button"
+                      className="source-quick-btn"
+                      disabled={disabled}
                       onClick={() => void testSaved(conn)}
                       title="用该连接发送一条测试请求，不会发送工作对话；结果会记录为可用状态"
                     >
@@ -446,6 +539,7 @@ export function ModelConnections({
                       disabled={disabled}
                       onClick={() => {
                         setDraft(draftFrom(conn));
+                        setManualModel(false);
                         setApiKey("");
                         setFeedback(null);
                       }}
@@ -485,6 +579,39 @@ export function ModelConnections({
                     </button>
                   )}
                 </div>
+                {cardPickerId === conn.id && (
+                  <div className="model-inline-picker">
+                    <label>
+                      <span>从接口选取模型：</span>
+                      <select
+                        value={conn.model}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const selected = e.target.value;
+                          if (selected) switchTo(conn, selected);
+                        }}
+                      >
+                        {Array.from(
+                          new Set([
+                            ...(conn.model ? [conn.model] : []),
+                            ...(cardModels[conn.id] ?? conn.available_models ?? []),
+                          ]),
+                        ).map((id) => (
+                          <option key={id} value={id}>
+                            {modelLabel(conn.provider, id)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="source-quick-btn"
+                      onClick={() => setCardPickerId("")}
+                    >
+                      收起
+                    </button>
+                  </div>
+                )}
               </article>
             );
           })}
@@ -553,7 +680,9 @@ export function ModelConnections({
                       model: preset?.model ?? "",
                       key_env: "AWT_LLM_API_KEY",
                       ccswitch_config_path: "",
+                      available_models: [],
                     });
+                    setManualModel(false);
                     setApiKey("");
                   }}
                 >
@@ -619,17 +748,57 @@ export function ModelConnections({
                 </label>
                 <div className="form-grid">
                   <label>
-                    模型
-                    {draftPreset.models.length ? (
+                    <span className="model-field-head">
+                      <span>模型</span>
+                      <span className="model-field-tools">
+                        <button
+                          type="button"
+                          className="source-quick-btn"
+                          disabled={disabled || !draft.endpoint.trim()}
+                          onClick={() => void discoverDraftModels()}
+                          title="请求接口的 /models 列表并自动填充选项"
+                        >
+                          {pending === "discover-draft" ? (
+                            <LoaderCircle size={12} className="spin" />
+                          ) : (
+                            <RefreshCw size={12} />
+                          )}
+                          获取模型列表
+                        </button>
+                        {(draft.available_models.length > 0 || draftPreset.models.length > 0) && (
+                          <button
+                            type="button"
+                            className="source-quick-btn"
+                            onClick={() => setManualModel((v) => !v)}
+                          >
+                            {manualModel ? "列表选择" : "手动输入"}
+                          </button>
+                        )}
+                      </span>
+                    </span>
+                    {!manualModel &&
+                    (draft.available_models.length > 0 ||
+                      draftPreset.models.length > 0) ? (
                       <select
                         value={draft.model}
                         onChange={(e) =>
                           setDraft({ ...draft, model: e.target.value })
                         }
                       >
-                        {draftPreset.models.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.label}
+                        {!draft.model && (
+                          <option value="" disabled>
+                            请选择模型
+                          </option>
+                        )}
+                        {Array.from(
+                          new Set([
+                            ...(draft.model ? [draft.model] : []),
+                            ...draft.available_models,
+                            ...draftPreset.models.map((item) => item.id),
+                          ]),
+                        ).map((id) => (
+                          <option key={id} value={id}>
+                            {modelLabel(draft.provider as LlmProvider, id)}
                           </option>
                         ))}
                       </select>
@@ -639,7 +808,11 @@ export function ModelConnections({
                         onChange={(e) =>
                           setDraft({ ...draft, model: e.target.value })
                         }
-                        placeholder="例如 vendor-model-large"
+                        placeholder={
+                          draft.provider === "local"
+                            ? "例如 qwen2.5:7b"
+                            : "例如 vendor-model-large"
+                        }
                       />
                     )}
                   </label>
@@ -669,13 +842,17 @@ export function ModelConnections({
                   />
                 </label>
                 <label>
-                  API Key（留空保留已保存的密钥）
+                  API Key（{draft.provider === "local" ? "本地接口可留空" : "留空保留已保存的密钥"}）
                   <input
                     type="password"
                     autoComplete="new-password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="粘贴 API Key；本机加密保存"
+                    placeholder={
+                      draft.provider === "local"
+                        ? "本地 Ollama / LM Studio 通常无需 API Key"
+                        : "粘贴 API Key；本机加密保存"
+                    }
                   />
                 </label>
               </>

@@ -61,8 +61,26 @@ PRESETS = {
         'models': [item for item in GLM_MODELS if item['id'] != 'glm-4.5-flash'],
     },
     'ccswitch': {'label': 'CCSwitch / Claude Code 当前接口', 'endpoint': '', 'model': '', 'protocol': 'anthropic', 'models': []},
+    'local': {
+        'label': '本地模型（Ollama / LM Studio / vLLM）',
+        'endpoint': 'http://127.0.0.1:11434/v1/chat/completions',
+        'model': '',
+        'protocol': 'openai',
+        'models': [],
+    },
     'custom': {'label': '自定义兼容接口', 'endpoint': '', 'model': '', 'protocol': 'openai', 'models': []},
 }
+
+
+def is_local_endpoint(endpoint: str) -> bool:
+    if not endpoint:
+        return False
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(endpoint.strip())
+    except ValueError:
+        return False
+    return parsed.scheme in ('http', 'https') and parsed.hostname in ('localhost', '127.0.0.1', '::1')
 
 
 class ModelError(ValueError):
@@ -278,7 +296,7 @@ def _vault_ids():
 
 
 def _key_configured(conn, vault_ids=None):
-    if conn.provider == 'ccswitch':
+    if conn.provider == 'ccswitch' or is_local_endpoint(conn.endpoint):
         return True
     vault_ids = _vault_ids() if vault_ids is None else vault_ids
     return conn.id in vault_ids or bool(conn.key_env and os.environ.get(conn.key_env))
@@ -364,6 +382,7 @@ def catalog(settings):
             'key_configured': _key_configured(conn, vault_ids),
             'model': conn.model,
             'model_label': _model_label(conn.provider, conn.model),
+            'available_models': list(conn.available_models or []),
             'status': connection_status(conn.id),
         }
         connections.append(entry)
@@ -395,6 +414,10 @@ def _mirror_legacy(data, connection, model):
 def upsert_connection(settings, payload):
     data = settings.model_dump(mode='json')
     connection_id = payload.id or uuid.uuid4().hex[:12]
+    existing = next((item for item in data.get('llm_connections') or [] if item.get('id') == connection_id), None)
+    available_models = list(getattr(payload, 'available_models', None) or (existing.get('available_models') if existing else []) or [])
+    if payload.model.strip() and payload.model.strip() not in available_models:
+        available_models = [payload.model.strip(), *available_models]
     record = ModelConnection(
         id=connection_id,
         label=payload.label,
@@ -404,6 +427,7 @@ def upsert_connection(settings, payload):
         key_env=payload.key_env.strip(),
         ccswitch_config_path=payload.ccswitch_config_path.strip(),
         model=payload.model.strip(),
+        available_models=available_models,
     )
     connections = [item for item in data.get('llm_connections') or [] if item.get('id') != connection_id]
     connections.append(record.model_dump(mode='json'))
@@ -429,15 +453,25 @@ def delete_connection(settings, connection_id):
     return Settings.model_validate(data)
 
 
-def set_active_connection(settings, connection_id):
+def set_active_connection(settings, connection_id, model=''):
     conn = next((item for item in settings.llm_connections if item.id == connection_id), None)
     if conn is None:
         raise ModelError('模型连接不存在，可能已被删除')
-    if conn.provider != 'ccswitch' and not conn.model:
+    chosen_model = official_model(conn.provider, model) if model.strip() else conn.model
+    if conn.provider != 'ccswitch' and not chosen_model:
         raise ModelError('该模型连接还没有配置模型名称')
     data = settings.model_dump(mode='json')
+    if chosen_model and chosen_model != conn.model:
+        for item in data.get('llm_connections') or []:
+            if item.get('id') == connection_id:
+                item['model'] = chosen_model
+                avail = list(item.get('available_models') or [])
+                if chosen_model not in avail:
+                    item['available_models'] = [chosen_model, *avail]
+                break
+    conn_dict = {**conn.model_dump(mode='json'), 'model': chosen_model}
     data['llm_active_connection'] = connection_id
-    _mirror_legacy(data, conn.model_dump(mode='json'), conn.model)
+    _mirror_legacy(data, conn_dict, chosen_model)
     return Settings.model_validate(data)
 
 
@@ -557,12 +591,176 @@ def connection(settings, key=None):
     if settings.llm_provider == 'ccswitch':
         return claude_connection(settings)
     key = key or _saved_key(settings) or os.environ.get(settings.llm_key_env, '')
-    if not key:
+    if not key and not is_local_endpoint(settings.llm_endpoint):
         raise ModelError('请先保存 API Key，或配置对应的服务端环境变量')
     model = official_model(settings.llm_provider, settings.llm_model)
     if not model:
         raise ModelError('请填写模型名称')
     return {'endpoint': settings.llm_endpoint, 'model': model, 'key': key, 'protocol': settings.llm_protocol, 'auth': 'api_key'}
+
+
+def _candidate_model_urls(endpoint: str) -> list[tuple[str, str]]:
+    """Build candidate (url, kind) endpoints for listing models from an API URL."""
+    from urllib.parse import urlparse, urlunparse
+    raw = (endpoint or '').strip()
+    if not raw:
+        return []
+    parsed = urlparse(raw)
+    path = parsed.path.rstrip('/')
+    candidates: list[tuple[str, str]] = []
+
+    def add(new_path: str, kind: str):
+        url = urlunparse((parsed.scheme, parsed.netloc, new_path, '', '', ''))
+        if (url, kind) not in candidates:
+            candidates.append((url, kind))
+
+    for suffix in ('/chat/completions', '/completions', '/messages'):
+        if path.endswith(suffix):
+            prefix = path[: -len(suffix)]
+            add(f'{prefix}/models', 'models')
+            if not prefix.endswith('/v1') and '/v1/' not in prefix and not prefix.endswith('/v4'):
+                add(f'{prefix}/v1/models', 'models')
+            break
+    else:
+        if path.endswith('/models') or path.endswith('/api/tags'):
+            add(path, 'ollama_tags' if path.endswith('/api/tags') else 'models')
+        elif path.endswith('/v1') or path.endswith('/v4'):
+            add(f'{path}/models', 'models')
+        else:
+            add(f'{path}/v1/models' if path else '/v1/models', 'models')
+            add(f'{path}/models' if path else '/models', 'models')
+    if is_local_endpoint(raw):
+        add('/api/tags', 'ollama_tags')
+    return candidates
+
+
+def _extract_model_ids(payload, kind: str) -> list[str]:
+    if not isinstance(payload, dict):
+        if isinstance(payload, list):
+            items = payload
+        else:
+            return []
+    elif kind == 'ollama_tags':
+        items = payload.get('models') or []
+    else:
+        items = payload.get('data') or payload.get('models') or []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, str):
+            mid = item.strip()
+        elif isinstance(item, dict):
+            mid = str(item.get('id') or item.get('name') or item.get('model') or '').strip()
+        else:
+            mid = ''
+        if mid and mid not in seen:
+            seen.add(mid)
+            result.append(mid)
+    return result
+
+
+def discover_models(endpoint: str, protocol: str = 'openai', provider: str = 'custom', key: str = '', auth: str = 'api_key') -> dict:
+    """Query the upstream API's model-listing endpoint and return available model IDs."""
+    if not endpoint:
+        raise ModelError('请先填写模型接口地址')
+    if not key and not is_local_endpoint(endpoint):
+        raise ModelError('请先填写或保存 API Key，再获取模型列表')
+    urls = _candidate_model_urls(endpoint)
+    if not urls:
+        raise ModelError('无法解析模型接口地址')
+    headers = {'Accept': 'application/json'}
+    if key:
+        if protocol == 'anthropic':
+            headers['anthropic-version'] = '2023-06-01'
+            headers['Authorization' if auth == 'bearer' else 'x-api-key'] = ('Bearer ' if auth == 'bearer' else '') + key
+        else:
+            headers['Authorization'] = 'Bearer ' + key
+    last_error: ModelError | None = None
+    try:
+        with httpx.Client(timeout=httpx.Timeout(15, connect=8), follow_redirects=False, trust_env=False) as client:
+            for url, kind in urls:
+                try:
+                    resp = client.get(url, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    models = _extract_model_ids(data, kind)
+                    if models:
+                        return {'models': models, 'source': 'api', 'endpoint_used': url, 'warning': ''}
+                except httpx.HTTPStatusError as exc:
+                    status_code = exc.response.status_code
+                    if status_code in (404, 405):
+                        last_error = _provider_error_from_response(exc.response)
+                        continue
+                    raise _provider_error_from_response(exc.response) from None
+                except (ValueError, TypeError):
+                    continue
+    except httpx.TimeoutException:
+        raise _safe_error('获取模型列表超时，请检查本地服务或网络连接') from None
+    except httpx.HTTPError:
+        raise _safe_error('无法连接模型接口，请确认服务已启动或网络可用') from None
+    preset_models = [item['id'] for item in PRESETS.get(provider, {}).get('models', [])]
+    if preset_models:
+        return {
+            'models': preset_models,
+            'source': 'preset',
+            'endpoint_used': '',
+            'warning': '该接口未返回模型列表，已回退到内置预设模型列表',
+        }
+    if last_error is not None:
+        raise last_error
+    raise _safe_error('该接口未返回可用模型列表，请手动填写模型名称')
+
+
+def _resolve_discover_params(settings, *, connection_id: str = '', provider: str = 'custom', endpoint: str = '',
+                            protocol: str = 'openai', key_env: str = 'AWT_LLM_API_KEY',
+                            ccswitch_config_path: str = '', raw_key: str = ''):
+    conn = next((c for c in settings.llm_connections if c.id == connection_id), None) if connection_id else None
+    if connection_id and conn is None:
+        raise ModelError('模型连接不存在，可能已被删除')
+    eff_provider = conn.provider if (conn and not endpoint.strip() and provider == 'custom') else (conn.provider if conn and provider == conn.provider else provider)
+    if conn is not None and not endpoint.strip() and eff_provider != 'ccswitch':
+        endpoint = conn.endpoint
+        protocol = conn.protocol
+        key_env = conn.key_env
+        ccswitch_config_path = conn.ccswitch_config_path
+    if eff_provider == 'ccswitch':
+        temp_settings = settings.model_copy(update={'ccswitch_config_path': ccswitch_config_path or (conn.ccswitch_config_path if conn else settings.ccswitch_config_path)})
+        c = claude_connection(temp_settings)
+        return c['endpoint'], c['protocol'], 'ccswitch', c['key'], c['auth'], conn
+    eff_endpoint = endpoint.strip() or (conn.endpoint if conn else '')
+    eff_protocol = protocol or (conn.protocol if conn else 'openai')
+    eff_key_env = key_env.strip() or (conn.key_env if conn else 'AWT_LLM_API_KEY')
+    key = raw_key.strip()
+    if not key and conn is not None:
+        _, data = _vault()
+        encrypted = data.get(conn.id)
+        if encrypted:
+            key = _crypt(base64.b64decode(encrypted), decrypt=True).decode()
+    if not key and eff_key_env:
+        key = os.environ.get(eff_key_env, '')
+    return eff_endpoint, eff_protocol, eff_provider, key, 'api_key', conn
+
+
+def discover_connection_models(settings, connection_id: str) -> dict:
+    endpoint, protocol, provider, key, auth, _ = _resolve_discover_params(settings, connection_id=connection_id)
+    res = discover_models(endpoint, protocol=protocol, provider=provider, key=key, auth=auth)
+    return {**res, 'connection_id': connection_id}
+
+
+def discover_models_for_input(settings, payload) -> dict:
+    raw_key = payload.api_key.get_secret_value() if payload.api_key else ''
+    endpoint, protocol, provider, key, auth, conn = _resolve_discover_params(
+        settings,
+        connection_id=payload.connection_id,
+        provider=payload.provider,
+        endpoint=payload.endpoint,
+        protocol=payload.protocol,
+        key_env=payload.key_env,
+        ccswitch_config_path=payload.ccswitch_config_path,
+        raw_key=raw_key,
+    )
+    res = discover_models(endpoint, protocol=protocol, provider=provider, key=key, auth=auth)
+    return {**res, 'connection_id': conn.id if conn else payload.connection_id}
 
 
 def status(settings, key=None):
@@ -926,10 +1124,12 @@ def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_t
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'
-        headers['Authorization' if c['auth'] == 'bearer' else 'x-api-key'] = ('Bearer ' if c['auth'] == 'bearer' else '') + c['key']
+        if c['key']:
+            headers['Authorization' if c['auth'] == 'bearer' else 'x-api-key'] = ('Bearer ' if c['auth'] == 'bearer' else '') + c['key']
         body = {'model': c['model'], 'system': system, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': text}], 'stream': False}
     else:
-        headers['Authorization'] = 'Bearer ' + c['key']
+        if c['key']:
+            headers['Authorization'] = 'Bearer ' + c['key']
         body = {'model': c['model'], 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}], 'max_tokens': max_tokens, 'stream': False}
     if daily_reasoning_model(c['model'],purpose):
         # GLM and DeepSeek default to heavy reasoning. Classification only needs

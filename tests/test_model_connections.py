@@ -141,3 +141,143 @@ def test_legacy_settings_still_synthesize_connection(client, monkeypatch):
     assert status['configured'] is True
     assert [item['model'] for item in status['options']] == ['deepseek-chat']
     assert status['connections'][0]['model'] == 'deepseek-chat'
+
+
+def test_local_endpoint_works_without_api_key_and_discovers_models(client, monkeypatch):
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    monkeypatch.delenv('AWT_LLM_API_KEY', raising=False)
+    seen_headers = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            seen_headers.append(dict(self.headers))
+            if self.path == '/v1/models':
+                body = json.dumps({'data': [{'id': 'qwen2.5:7b'}, {'id': 'deepseek-r1:8b'}]}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_POST(self):
+            length = int(self.headers.get('Content-Length', '0'))
+            self.rfile.read(length)
+            body = json.dumps({
+                'choices': [{'message': {'content': 'OK'}, 'finish_reason': 'stop'}],
+                'usage': {'prompt_tokens': 5, 'completion_tokens': 1},
+            }).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        endpoint = f'http://127.0.0.1:{port}/v1/chat/completions'
+        discovered = client.post('/api/model/models/discover', json={
+            'provider': 'local',
+            'endpoint': endpoint,
+            'protocol': 'openai',
+        })
+        discovered.raise_for_status()
+        assert discovered.json()['models'] == ['qwen2.5:7b', 'deepseek-r1:8b']
+        assert discovered.json()['source'] == 'api'
+
+        created = add(client, {
+            'label': '本地 Ollama',
+            'provider': 'local',
+            'endpoint': endpoint,
+            'protocol': 'openai',
+            'key_env': 'UNSET_LOCAL_KEY',
+            'model': 'qwen2.5:7b',
+        })
+        assert created['status']['configured'] is True
+        conn_id = created['connection_id']
+
+        conn_models = client.get(f'/api/model/connections/{conn_id}/models')
+        conn_models.raise_for_status()
+        assert conn_models.json()['models'] == ['qwen2.5:7b', 'deepseek-r1:8b']
+
+        saved_discover = client.post('/api/model/models/discover', json={
+            'connection_id': conn_id,
+            'provider': 'local',
+            'save_to_connection': True,
+        })
+        saved_discover.raise_for_status()
+        catalog = client.get('/api/model/connections').json()
+        assert 'deepseek-r1:8b' in catalog['connections'][0]['available_models']
+
+        # Pick another model from the existing API connection without re-entering URL/key
+        switched = client.post('/api/model/active', json={
+            'connection_id': conn_id,
+            'model': 'deepseek-r1:8b',
+        })
+        switched.raise_for_status()
+        assert switched.json()['settings']['llm_model'] == 'deepseek-r1:8b'
+        assert switched.json()['status']['model'] == 'deepseek-r1:8b'
+
+        tested = client.post(f'/api/model/connections/{conn_id}/test', json={})
+        tested.raise_for_status()
+        assert tested.json()['ok'] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_discover_ollama_tags_fallback_and_remote_auth(client, monkeypatch):
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == '/api/tags':
+                body = json.dumps({'models': [{'name': 'qwen3:8b'}, {'name': 'llama3.2:latest'}]}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        resp = client.post('/api/model/models/discover', json={
+            'provider': 'local',
+            'endpoint': f'http://127.0.0.1:{port}/v1/chat/completions',
+            'protocol': 'openai',
+        })
+        resp.raise_for_status()
+        assert resp.json()['models'] == ['qwen3:8b', 'llama3.2:latest']
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Remote HTTPS endpoint without API key must reject model discovery cleanly
+    monkeypatch.delenv('UNSET_REMOTE_KEY', raising=False)
+    missing = client.post('/api/model/models/discover', json={
+        'provider': 'custom',
+        'endpoint': 'https://api.example.com/v1/chat/completions',
+        'protocol': 'openai',
+        'key_env': 'UNSET_REMOTE_KEY',
+    })
+    assert missing.status_code == 400
+    assert 'API Key' in missing.json()['detail']
