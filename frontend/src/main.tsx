@@ -41,6 +41,7 @@ import { api, apiUrl } from "./api";
 import { Conversations } from "./Conversations";
 import { AnalysisLog } from "./AnalysisLog";
 import { AutoGenerateSettings, normalizeAutoGenerate } from "./AutoGenerateSettings";
+import { MemoryCompressionSettings, normalizeMemoryCompression } from "./MemoryCompressionSettings";
 import { ModelSettings } from "./ModelSettings";
 import { WorkflowSettings } from "./WorkflowSettings";
 import { AllocationModal, type AllocationRequest } from "./AllocationModal";
@@ -3087,6 +3088,7 @@ function SettingsForm({
     test?: boolean;
   } | null>(null);
   const [s, setS] = useState(initial);
+  const [compressionApiKey, setCompressionApiKey] = useState("");
   const tabsRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
   useEffect(() => {
@@ -3128,10 +3130,17 @@ function SettingsForm({
           test: false,
         });
         try {
+          if (compressionApiKey.trim()) {
+            await api("/memory-compression/key", "POST", {
+              api_key: compressionApiKey.trim(),
+            });
+            setCompressionApiKey("");
+          }
           const result = await onSave(
             {
               ...s,
               auto_generate: normalizeAutoGenerate(s.auto_generate),
+              memory_compression: normalizeMemoryCompression(s.memory_compression),
               git_roots: lines(s.git_roots.join("\n")),
               project_mappings: s.project_mappings,
               excluded_paths: lines(s.excluded_paths.join("\n")),
@@ -3370,6 +3379,18 @@ function SettingsForm({
                   onFeedbackClose={() => setFeedback(null)}
                 />
               </section>
+            )}
+            {tab === "model" && (
+              <MemoryCompressionSettings
+                settings={s}
+                onChange={(next) => {
+                  setS(next);
+                  setFeedback(null);
+                }}
+                busy={busy}
+                apiKey={compressionApiKey}
+                onApiKeyChange={setCompressionApiKey}
+              />
             )}
             {tab === "model" && (
               <section className="settings-section">

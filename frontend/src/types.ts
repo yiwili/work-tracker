@@ -340,6 +340,57 @@ export type ModelStatus = {
   active?: { connection_id: string; model: string };
 };
 
+export type MemoryCompressionConfig = {
+  enabled: boolean;
+  mode: "connection" | "custom";
+  connection_id: string;
+  connection_model: string;
+  fallback_connection_ids: string[];
+  provider: LlmProvider;
+  endpoint: string;
+  protocol: LlmProtocol;
+  key_env: string;
+  ccswitch_config_path: string;
+  model: string;
+  sources: string[];
+};
+
+export type MemoryCompressionStorageStats = {
+  total_records: number;
+  total_raw_chars: number;
+  total_compressed_chars: number;
+  saved_chars: number;
+  saved_ratio: number;
+  recent: {
+    id: string;
+    source: string;
+    session_id: string;
+    date_key: string;
+    model: string;
+    raw_chars: number;
+    compressed_chars: number;
+    raw_events_count: number;
+    summary_text: string;
+    updated_at: string;
+  }[];
+};
+
+export type MemoryCompressionStatus = {
+  enabled: boolean;
+  mode: "connection" | "custom";
+  connection_id: string;
+  connection_model: string;
+  configured: boolean;
+  provider: string;
+  endpoint: string;
+  model: string;
+  protocol: string;
+  key_configured: boolean;
+  error: string;
+  status: ModelConnectionState;
+  storage?: MemoryCompressionStorageStats;
+};
+
 export type Settings = {
   timezone: string;
   target_minutes: number;
@@ -376,6 +427,7 @@ export type Settings = {
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;
   auto_generate?: AutoGenerateConfig;
+  memory_compression?: MemoryCompressionConfig;
   task_details_mode?: "standard" | "concise" | "none";
   theme_id?: string;
   analysis_sources: string[];

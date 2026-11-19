@@ -9712,3 +9712,232 @@ body.todo-bubble-resizing {
 .model-field-tools .source-quick-btn {
   margin-top: 0;
 }
+
+.compression-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.compression-agents-box {
+  padding: 12px 14px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  background: var(--apple-card-subtle);
+  transition: opacity 0.2s var(--ease-apple);
+}
+
+.compression-agents-box.dimmed {
+  opacity: 0.72;
+}
+
+.compression-agents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compression-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--apple-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.compression-agents-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compression-agents-actions .source-quick-btn {
+  margin-top: 0;
+}
+
+.compression-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.compression-agent-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-sm);
+  background: var(--apple-card);
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.compression-agent-chip.active {
+  border-color: var(--apple-blue-border);
+  background: var(--apple-blue-tint);
+  color: var(--apple-text-primary);
+}
+
+.compression-agent-chip input {
+  margin: 0;
+}
+
+.compression-mode-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--apple-control-bg);
+  border: 1px solid var(--apple-border);
+}
+
+.compression-mode-tabs button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--apple-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.compression-mode-tabs button.active {
+  background: var(--apple-card);
+  color: var(--apple-text-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.compression-model-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  background: var(--apple-card);
+}
+
+.compression-key-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compression-key-row > label {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.compression-fallbacks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compression-fallbacks-label {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+}
+
+.compression-fallbacks-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compression-fallback-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-pill);
+  background: var(--apple-card-subtle);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.compression-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compression-actions-bar .danger {
+  color: var(--apple-red-text);
+}
+
+.compression-storage-box {
+  padding: 10px 12px;
+  border: 1px dashed var(--apple-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--apple-card-subtle);
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+}
+
+.compression-storage-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compression-storage-summary .source-quick-btn {
+  margin-top: 0;
+}
+
+.compression-recent-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compression-recent-list li {
+  padding: 8px 10px;
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-sm);
+  background: var(--apple-card);
+}
+
+.compression-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--apple-text-tertiary);
+}
+
+.compression-recent-head strong {
+  color: var(--apple-text-primary);
+}
+
+.compression-recent-list p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  color: var(--apple-text-primary);
+}
