@@ -492,6 +492,35 @@ export type DailyCollectionCount = {
   events: number;
 };
 
+export type CompressionSourcePrediction = {
+  source: string;
+  sessions: number;
+  compression_selected: boolean;
+  raw_tokens: number;
+  predicted_tokens: number;
+  simulated_tokens: number;
+  cached_sessions: number;
+};
+
+export type CompressionPrediction = {
+  date_key: string;
+  enabled: boolean;
+  raw_input_tokens: number;
+  predicted_input_tokens: number;
+  simulated_compressed_tokens: number;
+  saved_tokens: number;
+  saved_ratio: number;
+  simulated_saved_tokens: number;
+  simulated_saved_ratio: number;
+  raw_chars: number;
+  predicted_chars: number;
+  session_count: number;
+  will_compress_sessions: number;
+  cached_sessions: number;
+  per_source: CompressionSourcePrediction[];
+  note: string;
+};
+
 export type ConversationOverview = {
   running?: boolean;
   timing: Timing;
@@ -511,6 +540,7 @@ export type ConversationOverview = {
   event_count: number;
   selected_sources: string[];
   stale: boolean;
+  compression_preview?: CompressionPrediction;
   sources: {
     source: string;
     selected: boolean;

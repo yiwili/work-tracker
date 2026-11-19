@@ -10,6 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import type {
+  CompressionPrediction,
   LlmProtocol,
   LlmProvider,
   MemoryCompressionConfig,
@@ -57,17 +58,23 @@ export function MemoryCompressionSettings({
   busy = false,
   apiKey,
   onApiKeyChange,
+  predictDate,
 }: {
   settings: Settings;
   onChange: (next: Settings) => void;
   busy?: boolean;
   apiKey: string;
   onApiKeyChange: (val: string) => void;
+  predictDate?: string;
 }) {
   const cfg = normalizeMemoryCompression(settings.memory_compression);
   const connections = settings.llm_connections ?? [];
 
   const [status, setStatus] = useState<MemoryCompressionStatus | null>(null);
+  const [prediction, setPrediction] = useState<CompressionPrediction | null>(
+    null,
+  );
+  const [predicting, setPredicting] = useState(false);
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [memoriesExpanded, setMemoriesExpanded] = useState(false);
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
@@ -101,6 +108,47 @@ export function MemoryCompressionSettings({
   useEffect(() => {
     void refreshStatus();
   }, []);
+
+  const targetDate =
+    predictDate || new Date().toLocaleDateString("sv-SE");
+  const sourcesKey = cfg.sources.join(",");
+  const analysisKey = settings.analysis_sources.join(",");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setPredicting(true);
+    const timer = window.setTimeout(() => {
+      api<CompressionPrediction>("/memory-compression/predict", "POST", {
+        date: targetDate,
+        memory_compression: cfg,
+        analysis_sources: settings.analysis_sources,
+      })
+        .then((res) => {
+          if (!controller.signal.aborted) setPrediction(res);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setPrediction(null);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setPredicting(false);
+        });
+    }, 120);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    targetDate,
+    cfg.enabled,
+    cfg.mode,
+    cfg.connection_id,
+    cfg.connection_model,
+    cfg.provider,
+    cfg.model,
+    sourcesKey,
+    analysisKey,
+  ]);
 
   const selectedSources = new Set(cfg.sources);
   const allSelected = sourceKeys.every((k) => selectedSources.has(k));
@@ -781,6 +829,81 @@ export function MemoryCompressionSettings({
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+      )}
+
+      {prediction && (
+        <div className="compression-predict-box">
+          <div className="compression-predict-head">
+            <strong>
+              输入 Token 预测（{prediction.date_key}）
+              {predicting && " · 计算中…"}
+            </strong>
+            <span className="compression-predict-note">{prediction.note}</span>
+          </div>
+          {prediction.raw_input_tokens === 0 ? (
+            <p className="muted">当前日期暂无可分析的对话输入记录。</p>
+          ) : (
+            <>
+              <div className="compression-predict-metrics">
+                <span>
+                  压缩前对话输入约{" "}
+                  <strong>
+                    {prediction.raw_input_tokens.toLocaleString("zh-CN")}
+                  </strong>{" "}
+                  tokens
+                </span>
+                <span>→</span>
+                <span>
+                  {cfg.enabled ? "预测压缩后输入约 " : "若开启压缩预计输入约 "}
+                  <strong>
+                    {(cfg.enabled
+                      ? prediction.predicted_input_tokens
+                      : prediction.simulated_compressed_tokens
+                    ).toLocaleString("zh-CN")}
+                  </strong>{" "}
+                  tokens
+                </span>
+                <span className="compression-predict-saving">
+                  {(() => {
+                    const saved = cfg.enabled
+                      ? prediction.saved_tokens
+                      : prediction.simulated_saved_tokens;
+                    const ratio = cfg.enabled
+                      ? prediction.saved_ratio
+                      : prediction.simulated_saved_ratio;
+                    if (saved > 0) {
+                      return `预计节省 ${saved.toLocaleString("zh-CN")} tokens（${Math.round(ratio * 100)}%）`;
+                    }
+                    if (saved < 0) {
+                      return `当前文本较短（预计增加约 ${Math.abs(saved).toLocaleString("zh-CN")} tokens 封装开销）`;
+                    }
+                    return "预计无变化";
+                  })()}
+                </span>
+              </div>
+              {prediction.per_source.length > 0 && (
+                <div className="compression-predict-sources">
+                  {prediction.per_source.map((item) => (
+                    <span
+                      key={item.source}
+                      className={`compression-predict-pill ${item.compression_selected ? "compressed" : ""}`}
+                    >
+                      {sourceLabels[item.source as keyof typeof sourceLabels] ||
+                        (item.source === "git" ? "Git" : item.source)}
+                      ：{item.raw_tokens.toLocaleString("zh-CN")} →{" "}
+                      {(cfg.enabled
+                        ? item.predicted_tokens
+                        : item.simulated_tokens
+                      ).toLocaleString("zh-CN")}{" "}
+                      tokens
+                      {item.cached_sessions > 0 ? "（含本地缓存）" : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

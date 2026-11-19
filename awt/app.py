@@ -21,7 +21,7 @@ from . import auto_schedule, usage, cloud_sync, history_upload, memory_compressi
 from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
-from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput, CompressionProbeInput, CompressionRunInput
+from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput, CompressionProbeInput, CompressionRunInput, CompressionPredictInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
@@ -453,6 +453,23 @@ def create_app(engine=None):
             )
             conn.commit()
             return result
+
+    @app.get('/api/memory-compression/predict')
+    def get_memory_compression_predict(date: date, start_date: date | None = None, end_date: date | None = None):
+        with engine.connect() as conn:
+            return memory_compression.predict_day(conn, date, start_day=start_date, end_day=end_date)
+
+    @app.post('/api/memory-compression/predict')
+    def post_memory_compression_predict(payload: CompressionPredictInput):
+        with engine.connect() as conn:
+            return memory_compression.predict_day(
+                conn,
+                payload.date,
+                start_day=payload.start_date,
+                end_day=payload.end_date,
+                override_cfg=payload.memory_compression,
+                override_analysis_sources=payload.analysis_sources,
+            )
 
     @app.delete('/api/memory-compression/cache')
     def clear_memory_compression_cache(date_key: str | None = None, source: str | None = None):

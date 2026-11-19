@@ -224,6 +224,10 @@ def overview(conn, day, settings, end_day=None, report_day=None):
     result['timing']=activity_time.profile(selected,gap_minutes=settings.activity_gap_minutes)
     result['work_timing']=activity_time.profile([e for e in selected if e['id'] in work_ids],selected,settings.activity_gap_minutes) if snapshot and 'scope' in snapshot else None
 
+    from . import memory_compression
+    date_key = str(s_date) if s_date == e_date else f"{s_date}..{e_date}"
+    result['compression_preview'] = memory_compression.predict_from_rows(conn, selected, settings, date_key=date_key)
+
     result['stale'] = bool(snapshot and snapshot.get('input_hash') != input_hash(selected, settings))
     return result
 

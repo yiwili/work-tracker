@@ -854,6 +854,15 @@ class CompressionRunInput(BaseModel):
     force: bool = False
 
 
+class CompressionPredictInput(BaseModel):
+    """Read-only token prediction request; optionally tests unsaved compression settings."""
+    date: Date
+    start_date: Date | None = None
+    end_date: Date | None = None
+    memory_compression: MemoryCompressionConfig | None = None
+    analysis_sources: list[str] | None = None
+
+
 class StyleImportInput(BaseModel):
     path: str = ''
     filename: str = ''

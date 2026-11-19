@@ -910,6 +910,72 @@ export function Conversations({
           </button>
         </div>
       </div>
+      {activeOverview.compression_preview &&
+        activeOverview.compression_preview.raw_input_tokens > 0 && (
+          <div
+            className="compression-preview-bar"
+            title={activeOverview.compression_preview.note}
+          >
+            {activeOverview.compression_preview.enabled ? (
+              <span>
+                语义压缩输入预测：原文约{" "}
+                <strong>
+                  {formatTokens(
+                    activeOverview.compression_preview.raw_input_tokens,
+                  )}
+                </strong>{" "}
+                tokens → 预测压缩后约{" "}
+                <strong>
+                  {formatTokens(
+                    activeOverview.compression_preview.predicted_input_tokens,
+                  )}
+                </strong>{" "}
+                tokens
+                {activeOverview.compression_preview.saved_tokens > 0 && (
+                  <>
+                    （预计节省{" "}
+                    {Math.round(
+                      activeOverview.compression_preview.saved_ratio * 100,
+                    )}
+                    %
+                    {activeOverview.compression_preview.cached_sessions > 0
+                      ? ` · 已命中 ${activeOverview.compression_preview.cached_sessions} 个本地缓存会话`
+                      : ""}
+                    ）
+                  </>
+                )}
+              </span>
+            ) : (
+              <span>
+                对话输入预估：约{" "}
+                <strong>
+                  {formatTokens(
+                    activeOverview.compression_preview.raw_input_tokens,
+                  )}
+                </strong>{" "}
+                tokens
+                {activeOverview.compression_preview.simulated_saved_tokens >
+                  0 && (
+                  <>
+                    （若开启语义压缩，预计压缩后约{" "}
+                    <strong>
+                      {formatTokens(
+                        activeOverview.compression_preview
+                          .simulated_compressed_tokens,
+                      )}
+                    </strong>{" "}
+                    tokens，预计节省{" "}
+                    {Math.round(
+                      activeOverview.compression_preview.simulated_saved_ratio *
+                        100,
+                    )}
+                    %）
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+        )}
       {legacyCount > 0 && (
         <p className="conversation-hint warning">
           仍有 {legacyCount} 项旧规则草稿；AI 分析后会替换，人工事项与已审核工时保留。

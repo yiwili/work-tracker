@@ -530,6 +530,62 @@ def _compress_session_segments(
     return stored_segments, False, used_model, model_requests
 
 
+def _rebuild_session_records(
+    sess: str,
+    sess_records: list[dict],
+    stored_segments: list[dict],
+    turn_items: list[dict],
+    covered_assistant_ids: set[str],
+    refs: dict,
+    segments: dict,
+    new_segments: dict | None = None,
+) -> list[dict]:
+    event_id_to_ref = {ev['id']: ref for ref, ev in refs.items()}
+    turn_by_anchor_eid = {t['anchor_event_id']: t for t in turn_items}
+    rebuilt: list[dict] = []
+    for r in sess_records:
+        if r['kind'] == 'assistant_message' and refs[r['ref']]['id'] not in covered_assistant_ids:
+            rebuilt.append(r)
+
+    for seg in stored_segments:
+        anchor_ref = event_id_to_ref.get(seg['anchor_event_id'])
+        if not anchor_ref:
+            continue
+        covered_turns = [turn_by_anchor_eid[eid] for eid in seg.get('covered_anchor_ids', []) if eid in turn_by_anchor_eid]
+        if not covered_turns:
+            continue
+        first_anchor_rec = covered_turns[0]['anchor_record']
+        merged_activities = _merge_activities([t['anchor_record'] for t in covered_turns])
+
+        if new_segments is not None:
+            combined_events: dict[str, dict] = {}
+            for t in covered_turns:
+                t_ref = t['anchor_ref']
+                combined_events[refs[t_ref]['id']] = refs[t_ref]
+                for ev in segments.get(t_ref, []):
+                    combined_events[ev['id']] = ev
+                if t_ref != anchor_ref:
+                    new_segments.pop(t_ref, None)
+            new_segments[anchor_ref] = list(combined_events.values())
+
+        kind_label = _KIND_LABELS.get(seg.get('kind', 'work'), '工作实施')
+        text = f"[压缩记忆 · {kind_label} · 覆盖{len(covered_turns)}轮对话] {seg['summary']}"
+        comp_rec = {
+            'ref': anchor_ref,
+            'session': sess,
+            'time': seg.get('time') or first_anchor_rec['time'],
+            'project': seg.get('project') or first_anchor_rec['project'],
+            'kind': first_anchor_rec['kind'],
+            'text': text,
+            'compressed': True,
+            'raw_turns': len(covered_turns),
+        }
+        if merged_activities:
+            comp_rec['activities'] = merged_activities
+        rebuilt.append(comp_rec)
+    return rebuilt
+
+
 def compress_transcript(
     conn,
     records: list[dict],
@@ -553,7 +609,6 @@ def compress_transcript(
             'model_requests': 0,
         }
 
-    event_id_to_ref = {ev['id']: ref for ref, ev in refs.items()}
     session_buckets: dict[str, list[dict]] = {}
     session_order: list[str] = []
     for rec in records:
@@ -606,48 +661,16 @@ def compress_transcript(
         else:
             stats['compressed_sessions'] += 1
 
-        turn_by_anchor_eid = {t['anchor_event_id']: t for t in turn_items}
-        rebuilt: list[dict] = []
-        # Keep any pre-prompt orphan assistant messages unchanged
-        for r in sess_records:
-            if r['kind'] == 'assistant_message' and refs[r['ref']]['id'] not in covered_assistant_ids:
-                rebuilt.append(r)
-
-        for seg in stored_segments:
-            anchor_ref = event_id_to_ref.get(seg['anchor_event_id'])
-            if not anchor_ref:
-                continue
-            covered_turns = [turn_by_anchor_eid[eid] for eid in seg.get('covered_anchor_ids', []) if eid in turn_by_anchor_eid]
-            if not covered_turns:
-                continue
-            first_anchor_rec = covered_turns[0]['anchor_record']
-            merged_activities = _merge_activities([t['anchor_record'] for t in covered_turns])
-
-            combined_events: dict[str, dict] = {}
-            for t in covered_turns:
-                t_ref = t['anchor_ref']
-                combined_events[refs[t_ref]['id']] = refs[t_ref]
-                for ev in segments.get(t_ref, []):
-                    combined_events[ev['id']] = ev
-                if t_ref != anchor_ref:
-                    new_segments.pop(t_ref, None)
-            new_segments[anchor_ref] = list(combined_events.values())
-
-            kind_label = _KIND_LABELS.get(seg.get('kind', 'work'), '工作实施')
-            text = f"[压缩记忆 · {kind_label} · 覆盖{len(covered_turns)}轮对话] {seg['summary']}"
-            comp_rec = {
-                'ref': anchor_ref,
-                'session': sess,
-                'time': seg.get('time') or first_anchor_rec['time'],
-                'project': seg.get('project') or first_anchor_rec['project'],
-                'kind': first_anchor_rec['kind'],
-                'text': text,
-                'compressed': True,
-                'raw_turns': len(covered_turns),
-            }
-            if merged_activities:
-                comp_rec['activities'] = merged_activities
-            rebuilt.append(comp_rec)
+        rebuilt = _rebuild_session_records(
+            sess,
+            sess_records,
+            stored_segments,
+            turn_items,
+            covered_assistant_ids,
+            refs,
+            segments,
+            new_segments=new_segments,
+        )
 
         raw_session_chars = sum(len(json.dumps(r, ensure_ascii=False)) for r in sess_records)
         comp_session_chars = sum(len(json.dumps(r, ensure_ascii=False)) for r in rebuilt)
@@ -665,6 +688,282 @@ def compress_transcript(
             emitted_sessions.add(sess)
             new_records.extend(compressed_by_session[sess])
     return new_records, new_segments, stats
+
+
+def _estimate_record_tokens(records_list: list[dict]) -> tuple[int, int]:
+    total_chars = 0
+    total_tokens = 0
+    for rec in records_list:
+        serialized = json.dumps(rec, ensure_ascii=False)
+        total_chars += len(serialized)
+        total_tokens += model_provider._estimate_tokens(serialized)
+    return total_chars, total_tokens
+
+
+def _empirical_summary_tokens(conn) -> dict[str, int]:
+    """Read-only lookup of historical average summary tokens per segment by source."""
+    if conn is None:
+        return {}
+    rows = conn.execute(
+        select(
+            db.compressed_memories.c.source,
+            db.compressed_memories.c.segments_json,
+        )
+        .order_by(db.compressed_memories.c.updated_at.desc())
+        .limit(60)
+    ).mappings().all()
+    buckets: dict[str, list[int]] = {}
+    for row in rows:
+        segs = row['segments_json']
+        if not isinstance(segs, list):
+            continue
+        for seg in segs:
+            if isinstance(seg, dict) and seg.get('summary'):
+                toks = model_provider._estimate_tokens(str(seg['summary']))
+                buckets.setdefault(row['source'], []).append(toks)
+                buckets.setdefault('__all__', []).append(toks)
+    return {
+        key: max(35, min(160, sum(vals) // len(vals)))
+        for key, vals in buckets.items()
+        if vals
+    }
+
+
+def _predict_uncached_session(
+    sess_records: list[dict],
+    turn_items: list[dict],
+    covered_assistant_ids: set[str],
+    refs: dict,
+    base_summary_tokens: int,
+) -> tuple[int, int]:
+    num_turns = len(turn_items)
+    seg_count = 1 if num_turns <= 2 else max(1, min(num_turns, (num_turns + 3) // 4))
+    raw_text_tokens = sum(
+        model_provider._estimate_tokens((t.get('user') or '') + (t.get('assistant') or ''))
+        for t in turn_items
+    )
+    per_seg_summary = min(base_summary_tokens, max(20, int(raw_text_tokens * 0.75)))
+    merged_activities = _merge_activities([t['anchor_record'] for t in turn_items])
+    act_chars = 0
+    act_tokens = 0
+    if merged_activities:
+        act_json = json.dumps(merged_activities, ensure_ascii=False)
+        act_chars = len(act_json)
+        act_tokens = model_provider._estimate_tokens(act_json)
+
+    orphan_records = [
+        r for r in sess_records
+        if r['kind'] == 'assistant_message' and refs[r['ref']]['id'] not in covered_assistant_ids
+    ]
+    orphan_chars, orphan_tokens = _estimate_record_tokens(orphan_records)
+
+    # Envelope + "[压缩记忆 · 工作实施 · 覆盖N轮对话] " prefix per segment
+    envelope_tokens_per_seg = 38
+    envelope_chars_per_seg = 140
+    pred_tokens = seg_count * (envelope_tokens_per_seg + per_seg_summary) + act_tokens + orphan_tokens
+    pred_chars = seg_count * (envelope_chars_per_seg + per_seg_summary * 2) + act_chars + orphan_chars
+    return pred_chars, pred_tokens
+
+
+def predict_from_rows(
+    conn,
+    rows: list[dict],
+    settings: Settings,
+    *,
+    date_key: str,
+    override_cfg=None,
+) -> dict:
+    """Strictly read-only prediction of input tokens before vs after compression.
+
+    Never invokes any LLM and never writes to the database, so actual compression
+    output and final compressed token counts are completely unaffected.
+    """
+    from . import daily_analysis
+
+    eff_settings = settings.model_copy(update={'memory_compression': override_cfg}) if override_cfg is not None else settings
+    cfg = eff_settings.memory_compression
+    enabled = bool(cfg.enabled)
+    # Sources selected for compression (simulated even when master toggle is off so UI can preview savings)
+    configured_sources = {s for s in (cfg.sources or []) if s in CONVERSATION_SOURCES}
+    for legacy, variants in SOURCE_FAMILIES.items():
+        if all(variant in configured_sources for variant in variants):
+            configured_sources.add(legacy)
+
+    if not rows:
+        return {
+            'date_key': date_key,
+            'enabled': enabled,
+            'raw_input_tokens': 0,
+            'predicted_input_tokens': 0,
+            'simulated_compressed_tokens': 0,
+            'saved_tokens': 0,
+            'saved_ratio': 0.0,
+            'simulated_saved_tokens': 0,
+            'simulated_saved_ratio': 0.0,
+            'raw_chars': 0,
+            'predicted_chars': 0,
+            'session_count': 0,
+            'will_compress_sessions': 0,
+            'cached_sessions': 0,
+            'per_source': [],
+            'note': '仅作本地预测估算，不会触发模型调用，也不影响最终实际压缩的 token 数。',
+        }
+
+    records, refs, segments = daily_analysis.transcript(rows, eff_settings)
+    session_buckets: dict[str, list[dict]] = {}
+    session_order: list[str] = []
+    for rec in records:
+        sess = rec['session']
+        if sess not in session_buckets:
+            session_buckets[sess] = []
+            session_order.append(sess)
+        session_buckets[sess].append(rec)
+
+    system_prompt = prompts.prompt(eff_settings, 'memory_compressor')
+    primary_model = _primary_model_name(eff_settings)
+    empirical = _empirical_summary_tokens(conn)
+    global_summary_tokens = empirical.get('__all__', 90)
+
+    total_raw_chars = 0
+    total_raw_tokens = 0
+    total_pred_chars = 0
+    total_pred_tokens = 0
+    total_sim_tokens = 0
+    will_compress_sessions = 0
+    cached_sessions = 0
+    session_count = 0
+    per_source_map: dict[str, dict] = {}
+
+    for sess in session_order:
+        source, _, session_id = sess.partition(':')
+        sess_records = session_buckets[sess]
+        raw_chars, raw_tokens = _estimate_record_tokens(sess_records)
+        total_raw_chars += raw_chars
+        total_raw_tokens += raw_tokens
+
+        if source != 'git':
+            session_count += 1
+        src_bucket = per_source_map.setdefault(
+            source,
+            {
+                'source': source,
+                'sessions': 0,
+                'compression_selected': source != 'git' and source in configured_sources,
+                'raw_tokens': 0,
+                'predicted_tokens': 0,
+                'simulated_tokens': 0,
+                'cached_sessions': 0,
+            },
+        )
+        if source != 'git':
+            src_bucket['sessions'] += 1
+        src_bucket['raw_tokens'] += raw_tokens
+
+        has_text = any(r['kind'] in ('user_prompt', 'assistant_message') and (r.get('text') or '').strip() for r in sess_records)
+        turn_items, covered_assistant_ids = _build_turn_items(sess_records, refs, segments) if (source != 'git' and has_text) else ([], set())
+
+        source_selected = source != 'git' and source in configured_sources and bool(turn_items)
+        if not source_selected:
+            sim_chars, sim_tokens = raw_chars, raw_tokens
+            is_cached = False
+        else:
+            content_hash = stable(
+                COMPRESSION_POLICY_VERSION,
+                source,
+                session_id,
+                primary_model,
+                system_prompt,
+                [(t['anchor_event_id'], t['segment_event_ids'], t['user'], t['assistant']) for t in turn_items],
+            )
+            mem_id = stable(source, session_id, date_key)
+            existing = conn.execute(
+                select(db.compressed_memories).where(db.compressed_memories.c.id == mem_id)
+            ).mappings().first() if conn is not None else None
+            if existing and existing['content_hash'] == content_hash and isinstance(existing['segments_json'], list):
+                rebuilt = _rebuild_session_records(
+                    sess,
+                    sess_records,
+                    list(existing['segments_json']),
+                    turn_items,
+                    covered_assistant_ids,
+                    refs,
+                    segments,
+                    new_segments=None,
+                )
+                sim_chars, sim_tokens = _estimate_record_tokens(rebuilt)
+                is_cached = True
+                cached_sessions += 1
+                src_bucket['cached_sessions'] += 1
+            else:
+                base_tok = empirical.get(source, global_summary_tokens)
+                sim_chars, sim_tokens = _predict_uncached_session(
+                    sess_records,
+                    turn_items,
+                    covered_assistant_ids,
+                    refs,
+                    base_tok,
+                )
+                is_cached = False
+
+        if enabled and source_selected:
+            will_compress_sessions += 1
+            pred_chars, pred_tokens = sim_chars, sim_tokens
+        else:
+            pred_chars, pred_tokens = raw_chars, raw_tokens
+
+        total_pred_chars += pred_chars
+        total_pred_tokens += pred_tokens
+        total_sim_tokens += sim_tokens
+        src_bucket['predicted_tokens'] += pred_tokens
+        src_bucket['simulated_tokens'] += sim_tokens
+
+    saved_tokens = total_raw_tokens - total_pred_tokens
+    saved_ratio = round(saved_tokens / total_raw_tokens, 3) if total_raw_tokens > 0 else 0.0
+    sim_saved_tokens = total_raw_tokens - total_sim_tokens
+    sim_saved_ratio = round(sim_saved_tokens / total_raw_tokens, 3) if total_raw_tokens > 0 else 0.0
+    return {
+        'date_key': date_key,
+        'enabled': enabled,
+        'raw_input_tokens': total_raw_tokens,
+        'predicted_input_tokens': total_pred_tokens,
+        'simulated_compressed_tokens': total_sim_tokens,
+        'saved_tokens': saved_tokens,
+        'saved_ratio': saved_ratio,
+        'simulated_saved_tokens': sim_saved_tokens,
+        'simulated_saved_ratio': sim_saved_ratio,
+        'raw_chars': total_raw_chars,
+        'predicted_chars': total_pred_chars,
+        'session_count': session_count,
+        'will_compress_sessions': will_compress_sessions,
+        'cached_sessions': cached_sessions,
+        'per_source': list(per_source_map.values()),
+        'note': '仅作本地预测估算，不会触发模型调用，也不影响最终实际压缩的 token 数。',
+    }
+
+
+def predict_day(
+    conn,
+    day,
+    *,
+    start_day=None,
+    end_day=None,
+    override_cfg=None,
+    override_analysis_sources: list[str] | None = None,
+) -> dict:
+    from . import daily_analysis, multiday
+    from .service import get_settings
+
+    settings = get_settings(conn)
+    if override_analysis_sources is not None:
+        settings = settings.model_copy(update={'analysis_sources': list(dict.fromkeys(override_analysis_sources))})
+    binding = multiday.get_active_binding(conn, day) if (start_day is None and end_day is None) else None
+    s_day, e_day = multiday.normalize_range(
+        start_day or (binding['start_date'] if binding else day),
+        end_day or (binding['end_date'] if binding else day),
+    )
+    rows, _, _ = daily_analysis.analysis_rows(conn, s_day, settings, end_day=e_day)
+    date_key = str(s_day) if s_day == e_day else f'{s_day}..{e_day}'
+    return predict_from_rows(conn, rows, settings, date_key=date_key, override_cfg=override_cfg)
 
 
 def compress_day(conn, day, start_day=None, end_day=None, force: bool = False) -> dict:

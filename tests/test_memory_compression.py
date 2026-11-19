@@ -354,3 +354,129 @@ def test_compression_key_vault_and_test_endpoint(env, monkeypatch):
 
     deleted = client.delete('/api/memory-compression/key')
     deleted.raise_for_status()
+
+
+def test_predict_compressed_input_tokens_is_read_only_and_does_not_affect_actual_compression(env, monkeypatch):
+    client, engine = env
+    day = '2026-11-19'
+    _seed_events(
+        engine,
+        [
+            {
+                'id': 'pred-u1',
+                'source': 'codex',
+                'session_id': 'sess-pred-1',
+                'occurred_at': '2026-11-19T02:00:00+00:00',
+                'kind': 'user_prompt',
+                'summary': '排查并修复复杂 SQL 查询超时问题 ' + ('详细日志与表结构说明 ' * 40),
+                'cwd': '/repo/app',
+                'project': 'app',
+                'raw_ref': 'codex:1',
+                'metadata': {},
+            },
+            {
+                'id': 'pred-a1',
+                'source': 'codex',
+                'session_id': 'sess-pred-1',
+                'occurred_at': '2026-11-19T02:05:00+00:00',
+                'kind': 'assistant_message',
+                'summary': '分析执行计划并给出修复建议 ' + ('完整 SQL 与解释 ' * 60),
+                'cwd': '/repo/app',
+                'project': 'app',
+                'raw_ref': 'codex:2',
+                'metadata': {},
+            },
+            {
+                'id': 'pred-u2',
+                'source': 'claude_code',
+                'session_id': 'sess-pred-2',
+                'occurred_at': '2026-11-19T04:00:00+00:00',
+                'kind': 'user_prompt',
+                'summary': '更新接口文档说明 ' + ('字段列表 ' * 30),
+                'cwd': '/repo/app',
+                'project': 'app',
+                'raw_ref': 'claude:1',
+                'metadata': {},
+            },
+        ],
+    )
+
+    settings = client.get('/api/settings').json()
+    settings['analysis_sources'] = ['codex', 'claude_code']
+    settings['memory_compression'].update({
+        'enabled': False,
+        'mode': 'custom',
+        'provider': 'local',
+        'endpoint': 'http://127.0.0.1:11434/v1/chat/completions',
+        'model': 'qwen2.5:7b',
+        'sources': ['codex', 'claude_code'],
+    })
+    client.put('/api/settings', json=settings).raise_for_status()
+
+    # Model must NEVER be called during prediction
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError('prediction must never invoke model_provider._complete')
+
+    monkeypatch.setattr(model_provider, '_complete', fail_if_called)
+
+    # 1) GET /api/conversations includes compression_preview even when compression is disabled
+    conv = client.get(f'/api/conversations?date={day}')
+    conv.raise_for_status()
+    preview = conv.json()['compression_preview']
+    assert preview['enabled'] is False
+    assert preview['raw_input_tokens'] > 500
+    assert preview['predicted_input_tokens'] == preview['raw_input_tokens']
+    assert preview['simulated_compressed_tokens'] < preview['raw_input_tokens']
+    assert preview['simulated_saved_tokens'] > 0
+
+    # 2) POST /api/memory-compression/predict with unsaved override_cfg (enabled=True, only codex)
+    pred_codex_only = client.post('/api/memory-compression/predict', json={
+        'date': day,
+        'memory_compression': {
+            **settings['memory_compression'],
+            'enabled': True,
+            'sources': ['codex'],
+        },
+    })
+    pred_codex_only.raise_for_status()
+    p1 = pred_codex_only.json()
+    assert p1['enabled'] is True
+    assert p1['will_compress_sessions'] == 1
+    assert p1['cached_sessions'] == 0
+    assert p1['predicted_input_tokens'] < p1['raw_input_tokens']
+    codex_stat = next(s for s in p1['per_source'] if s['source'] == 'codex')
+    claude_stat = next(s for s in p1['per_source'] if s['source'] == 'claude_code')
+    assert codex_stat['compression_selected'] is True
+    assert codex_stat['predicted_tokens'] < codex_stat['raw_tokens']
+    assert claude_stat['compression_selected'] is False
+    assert claude_stat['predicted_tokens'] == claude_stat['raw_tokens']
+
+    # Verify DB compressed_memories was NOT modified by prediction
+    with engine.connect() as conn:
+        assert conn.execute(select(db.compressed_memories)).all() == []
+
+    # 3) Run actual compression and verify prediction never altered actual output token count
+    settings['memory_compression']['enabled'] = True
+    settings['memory_compression']['sources'] = ['codex']
+    client.put('/api/settings', json=settings).raise_for_status()
+
+    actual_summary = '排查并修复 SQL 查询超时问题，补充联合索引并优化执行计划。'
+    monkeypatch.setattr(
+        model_provider,
+        '_complete',
+        lambda *a, **kw: json.dumps({'memories': [{'turns': [1], 'kind': 'work', 'summary': actual_summary}]}, ensure_ascii=False),
+    )
+    compressed = client.post('/api/memory-compression/compress', json={'date': day})
+    compressed.raise_for_status()
+    with engine.connect() as conn:
+        row = conn.execute(select(db.compressed_memories)).mappings().one()
+        assert row['segments_json'][0]['summary'] == actual_summary
+        assert row['compressed_chars'] == len(actual_summary)
+
+    # 4) Once cached, prediction reports exact cached post-compression tokens with zero model calls
+    monkeypatch.setattr(model_provider, '_complete', fail_if_called)
+    after_cache = client.get(f'/api/memory-compression/predict?date={day}')
+    after_cache.raise_for_status()
+    p2 = after_cache.json()
+    assert p2['cached_sessions'] == 1
+    assert p2['predicted_input_tokens'] < p2['raw_input_tokens']
