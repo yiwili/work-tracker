@@ -96,7 +96,7 @@ def _safe_error(text):
 
 
 STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名','memory_compressor':'对话记忆压缩'}
-STREAM_PURPOSES=('scope_filter','task_writer','time_estimator','manual_writer')
+STREAM_PURPOSES=('scope_filter','task_writer','time_estimator','manual_writer','memory_compressor')
 _usage_calls=contextvars.ContextVar('awt_usage_calls',default=None)
 
 
@@ -121,9 +121,11 @@ def _record_usage(purpose, model, system, input_text, output_text, usage):
     prompt=(usage or {}).get('prompt')
     completion=(usage or {}).get('completion')
     estimated=prompt is None or completion is None
+    if completion is None:
+        completion=_estimate_tokens(output_text)+int((usage or {}).get('thinking_tokens') or 0)
     entry={'purpose':purpose or 'general','model':model,
            'prompt_tokens':prompt if prompt is not None else _estimate_tokens(system)+_estimate_tokens(input_text),
-           'completion_tokens':completion if completion is not None else _estimate_tokens(output_text),
+           'completion_tokens':completion,
            'estimated':estimated}
     calls=_usage_calls.get()
     if calls is not None:
@@ -156,11 +158,11 @@ def daily_reasoning_model(model, purpose):
 
 
 def output_budget(model, requested, purpose):
-    # Daily analysis JSON is long and thinking tokens share max_tokens on every
-    # reasoning model, so all models get GLM-5.3's headroom for these stages.
-    # Probes and other stages keep their caller's cap, and we never retry a
-    # paid call.
-    if purpose in ('scope_filter','task_writer'):
+    # Daily analysis and compression JSON are long and thinking tokens share
+    # max_tokens on every reasoning model, so all models get GLM-5.3's headroom
+    # for these stages. Probes and other stages keep their caller's cap, and we
+    # never retry a paid call.
+    if purpose in ('scope_filter','task_writer','memory_compressor'):
         return max(requested,32768)
     return requested
 
@@ -175,6 +177,7 @@ def stream_text(lines, protocol, purpose, budget):
     """Read complete SSE messages and publish thinking/output deltas for the live window."""
     parts=[];data=[];reason=None;done=False;usage={'prompt':None,'completion':None}
     thinking_chars = 0
+    thinking_cjk = 0
     output_chars = 0
     def events():
         for line in lines:
@@ -205,9 +208,12 @@ def stream_text(lines, protocol, purpose, budget):
                 output = ''
                 for choice in value.get('choices', []):
                     delta = choice.get('delta', {})
-                    thinking += delta.get('reasoning_content', '') or ''
+                    # Ollama exposes thinking as `reasoning`; most other
+                    # OpenAI-compatible vendors use `reasoning_content`.
+                    thinking += delta.get('reasoning_content') or delta.get('reasoning') or ''
                     output += delta.get('content', '') or ''
             thinking_chars += len(thinking)
+            thinking_cjk += sum(1 for char in thinking if '\u4e00'<=char<='\u9fff')
             output_chars += len(output)
             stream_delta(thinking, output)
             if protocol=='anthropic':
@@ -243,6 +249,9 @@ def stream_text(lines, protocol, purpose, budget):
             raise _safe_error('模型流式输出未完整结束；原任务已保留，请稍后重新分析')
         text=''.join(parts)
         if not text.strip():raise _safe_error('模型未返回可用文本；原任务已保留')
+        # Fallback estimate when the provider omits usage: reasoning tokens are
+        # billed as output, so they must be included with the visible answer.
+        usage['thinking_tokens']=max(0,thinking_cjk+(thinking_chars-thinking_cjk)//4)
         emit(f'模型输出完成：思考 {thinking_chars} 字符，结果 {output_chars} 字符')
         return text,usage
     except (ValueError,KeyError,TypeError,AttributeError) as exc:
@@ -1126,6 +1135,10 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
 def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
     c = connection(settings) if key is None else connection(settings, key)
     max_tokens=output_budget(c['model'],max_tokens,purpose)
+    local_openai = c['protocol'] != 'anthropic' and is_local_endpoint(c['endpoint'])
+    # Local Ollama-style servers let the model run to its own context limit when
+    # max_tokens is omitted; keep compression free of an arbitrary output cap.
+    omit_max_tokens = purpose == 'memory_compressor' and local_openai
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'
@@ -1135,7 +1148,9 @@ def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_t
     else:
         if c['key']:
             headers['Authorization'] = 'Bearer ' + c['key']
-        body = {'model': c['model'], 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}], 'max_tokens': max_tokens, 'stream': False}
+        body = {'model': c['model'], 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': text}], 'stream': False}
+        if not omit_max_tokens:
+            body['max_tokens'] = max_tokens
     if daily_reasoning_model(c['model'],purpose):
         # GLM and DeepSeek default to heavy reasoning. Classification only needs
         # light effort, and thinking tokens share max_tokens with the answer.
@@ -1143,6 +1158,8 @@ def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_t
         body['stream']=True
     if current.get() is not None and purpose in STREAM_PURPOSES:
         body['stream'] = True
+    if body['stream'] and local_openai:
+        body['stream_options'] = {'include_usage': True}
     started = monotonic()
     if body['stream'] and current.get() is not None:
         begin_stream(c['model'], _estimate_tokens(system) + _estimate_tokens(text))
@@ -1170,22 +1187,30 @@ def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_t
                     _record_usage(purpose,c['model'],system,text,answer,usage)
                     return answer
                 value = _decode_response(result)
+        thinking = ''
         if c['protocol'] == 'anthropic':
             if require_text and value.get('stop_reason') == 'max_tokens':
                 raise truncated(purpose,max_tokens)
             answer = '\n'.join(block['text'] for block in value.get('content', []) if block.get('type') == 'text')
+            thinking = '\n'.join(str(block.get('thinking') or '') for block in value.get('content', []) if block.get('type') == 'thinking')
             reported = value.get('usage') or {}
             usage = {'prompt':reported.get('input_tokens'),'completion':reported.get('output_tokens')}
         else:
             if require_text and value['choices'][0].get('finish_reason') == 'length':
                 raise truncated(purpose,max_tokens)
-            answer = value['choices'][0]['message'].get('content') or ''
+            message = value['choices'][0].get('message') or {}
+            answer = message.get('content') or ''
+            thinking = message.get('reasoning_content') or message.get('reasoning') or message.get('thinking') or ''
+            if not isinstance(thinking, str):
+                thinking = ''
             reported = value.get('usage') or {}
             usage = {'prompt':reported.get('prompt_tokens'),'completion':reported.get('completion_tokens')}
+        if thinking.strip():
+            usage['thinking_tokens']=_estimate_tokens(thinking)
         if require_text and (not isinstance(answer, str) or not answer.strip()):
             raise _safe_error('模型未返回可用文本；原任务已保留')
         if body['stream'] and current.get() is not None:
-            stream_delta(output=answer)
+            stream_delta(thinking=thinking, output=answer)
             stream_usage(prompt=usage.get('prompt'), completion=usage.get('completion'))
         emit(f'本次模型请求完成，耗时 {monotonic() - started:.1f} 秒，返回 {len(answer)} 字符')
         _record_usage(purpose,c['model'],system,text,answer,usage)

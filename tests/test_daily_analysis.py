@@ -8,7 +8,7 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import insert, select, update
 
-from awt import db, daily_analysis, model_provider, service
+from awt import analysis_progress, db, daily_analysis, model_provider, service
 from awt.app import create_app
 from awt.models import CONVERSATION_SOURCES, Settings
 
@@ -279,6 +279,7 @@ def scope_model(answer):
     ('glm-5.30','task_writer',12000,32768),
     ('deepseek-flash','scope_filter',6000,32768),
     ('deepseek-v4-pro','task_writer',12000,32768),
+    ('deepseek-flash','memory_compressor',2500,32768),
     ('deepseek-flash','time_estimator',8000,8000),
 ])
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
@@ -300,7 +301,13 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_sta
             return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
     monkeypatch.setattr(model_provider.httpx,'Client',Client)
     assert model_provider.complete(Settings(),'rules','input',max_tokens=requested,purpose=purpose)=='OK'
-    assert len(captured)==1 and captured[0]['max_tokens']==expected
+    assert len(captured)==1
+    if purpose=='memory_compressor' and protocol=='openai':
+        # Local OpenAI-compatible endpoints omit max_tokens so the model can run
+        # to its own limit; Anthropic requires the field.
+        assert 'max_tokens' not in captured[0]
+    else:
+        assert captured[0]['max_tokens']==expected
     assert 'thinking' not in captured[0]  # Forced-thinking models must not be disabled.
     reasoning = model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash','deepseek-flash','deepseek-v4-pro') and purpose in ('scope_filter','task_writer')
     if reasoning:
@@ -356,6 +363,54 @@ def test_streamed_usage_is_captured(monkeypatch,protocol):
         assert model_provider.complete(Settings(),'rules','input',purpose='task_writer')=='{"tasks":[]}'
     summary=model_provider.usage_summary(calls)
     assert summary['prompt_tokens']==150 and summary['completion_tokens']==30 and not summary['estimated']
+
+
+@pytest.mark.parametrize('protocol',['anthropic','openai'])
+def test_reasoning_tokens_are_counted_when_provider_omits_usage(monkeypatch,protocol):
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'deepseek-v4-pro','protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    thinking='排查问题原因并验证修复思路'*20
+    class Client:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def post(self,url,**kw):
+            if protocol=='anthropic':
+                value={'content':[{'type':'thinking','thinking':thinking},{'type':'text','text':'OK'}],'stop_reason':'end_turn'}
+            else:
+                value={'choices':[{'message':{'content':'OK','reasoning_content':thinking},'finish_reason':'stop'}]}
+            return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
+    monkeypatch.setattr(model_provider.httpx,'Client',Client)
+    with model_provider.usage_tracker() as calls:
+        assert model_provider.complete(Settings(),'rules','input',purpose='memory_compressor')=='OK'
+    summary=model_provider.usage_summary(calls)
+    assert summary['estimated'] is True
+    assert summary['completion_tokens']>=model_provider._estimate_tokens(thinking)
+
+
+@pytest.mark.parametrize('reasoning_field',['reasoning_content','reasoning'])
+def test_memory_compressor_streams_thinking_and_counts_its_tokens(monkeypatch,reasoning_field):
+    captured=[]
+    monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':'deepseek-v4-pro','protocol':'openai','endpoint':'http://localhost/test','auth':'api_key','key':'secret'})
+    events=[{'choices':[{'delta':{reasoning_field:'先分析会话要点'},'finish_reason':None}]},
+            {'choices':[{'delta':{'content':'{"memories":[]}'},'finish_reason':None}]},
+            {'choices':[{'delta':{},'finish_reason':'stop'}],'usage':{'prompt_tokens':120,'completion_tokens':48}}]
+    body=''.join('data: '+json.dumps(e)+'\n\n' for e in events)+'data: [DONE]\n\n'
+    def respond(req):
+        captured.append(json.loads(req.content))
+        return httpx.Response(200,text=body,headers={'content-type':'text/event-stream; charset=utf-8'})
+    base_client=httpx.Client
+    monkeypatch.setattr(model_provider.httpx,'Client',lambda **kw:base_client(transport=httpx.MockTransport(respond),**kw))
+    progress=analysis_progress.Progress()
+    with analysis_progress.track(progress), model_provider.usage_tracker() as calls:
+        assert model_provider.complete(Settings(),'rules','input',purpose='memory_compressor')=='{"memories":[]}'
+    snapshot=progress.snapshot()
+    assert captured[0]['stream'] is True
+    assert 'max_tokens' not in captured[0]
+    assert captured[0]['stream_options']=={'include_usage':True}
+    assert '先分析会话要点' in snapshot['thinking']
+    assert snapshot['tokens']['completion_tokens']==48
+    summary=model_provider.usage_summary(calls)
+    assert summary['prompt_tokens']==120 and summary['completion_tokens']==48 and not summary['estimated']
 
 
 def test_assistant_only_refs_are_linked_to_their_user_request(app_client,monkeypatch):

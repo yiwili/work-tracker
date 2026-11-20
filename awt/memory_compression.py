@@ -205,7 +205,7 @@ def test_compression_model(
     return {**res, 'model': res.get('model') or proxy.llm_model, 'provider': proxy.llm_provider}
 
 
-def complete_with_fallbacks(settings: Settings, system: str, text: str, *, max_tokens: int = 2500) -> tuple[str, str]:
+def complete_with_fallbacks(settings: Settings, system: str, text: str, *, max_tokens: int = 32768) -> tuple[str, str]:
     candidates = compression_candidates(settings)
     last_exc: model_provider.ModelError | None = None
     for idx, (status_id, proxy, key) in enumerate(candidates):
@@ -466,7 +466,7 @@ def _compress_session_segments(
             settings,
             system_prompt,
             json.dumps({'session': f'{source}:{session_id}', 'turns': batch_payload}, ensure_ascii=False),
-            max_tokens=2500,
+            max_tokens=32768,
         )
         model_requests += 1
         memories = _parse_batch_memories(answer, batch)
