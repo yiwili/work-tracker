@@ -7,7 +7,7 @@ const iconFiles: Record<string, string> = {
   workbuddy: "workbuddy.svg",
   workbuddy_cn: "workbuddy.svg",
   workbuddy_intl: "workbuddy.svg",
-  deepseek_harness: "deepseek.svg",
+  deepseek_harness: "deepseek-harness.png",
   qoder: "qoder.svg",
   qoder_cn: "qoder.svg",
   qoder_intl: "qoder.svg",
