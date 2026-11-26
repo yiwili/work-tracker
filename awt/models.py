@@ -4,7 +4,7 @@ import re
 import sys
 from datetime import date as Date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -442,15 +442,18 @@ class MemoryCompressionConfig(BaseModel):
         return self
 
 
+OutputTokenLimit = Annotated[int, Field(ge=128, le=262144)] | Literal['unlimited'] | None
+
+
 class OutputTokenBudgets(BaseModel):
-    """None preserves the stage's existing automatic budget."""
-    scope_filter: int | None = Field(default=None, ge=128, le=262144)
-    task_writer: int | None = Field(default=None, ge=128, le=262144)
-    time_estimator: int | None = Field(default=None, ge=128, le=262144)
-    manual_writer: int | None = Field(default=None, ge=128, le=262144)
-    task_merger: int | None = Field(default=None, ge=128, le=262144)
-    style_template: int | None = Field(default=None, ge=128, le=262144)
-    memory_compressor: int | None = Field(default=None, ge=128, le=262144)
+    """None keeps automatic defaults; unlimited omits the output cap."""
+    scope_filter: OutputTokenLimit = None
+    task_writer: OutputTokenLimit = None
+    time_estimator: OutputTokenLimit = None
+    manual_writer: OutputTokenLimit = None
+    task_merger: OutputTokenLimit = None
+    style_template: OutputTokenLimit = None
+    memory_compressor: OutputTokenLimit = None
 
 
 class Settings(BaseModel):

@@ -285,7 +285,7 @@ def scope_model(answer):
     ('deepseek-flash','style_template',4000,4000),
 ])
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
-@pytest.mark.parametrize('override',[None,2048,65536])
+@pytest.mark.parametrize('override',[None,2048,65536,'unlimited'])
 def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_stages(monkeypatch,model,purpose,requested,expected,protocol,override):
     captured=[]
     monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
@@ -304,9 +304,14 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_sta
             return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
     monkeypatch.setattr(model_provider.httpx,'Client',Client)
     settings = Settings(output_token_budgets={purpose: override} if purpose else {})
+    if override == 'unlimited' and purpose and protocol == 'anthropic':
+        with pytest.raises(model_provider.ModelError, match='Anthropic'):
+            model_provider.complete(settings,'rules','input',max_tokens=requested,purpose=purpose)
+        assert captured == []
+        return
     assert model_provider.complete(settings,'rules','input',max_tokens=requested,purpose=purpose)=='OK'
     assert len(captured)==1
-    if purpose=='memory_compressor' and protocol=='openai' and override is None:
+    if protocol=='openai' and ((purpose=='memory_compressor' and override is None) or (override=='unlimited' and purpose)):
         # Local OpenAI-compatible endpoints omit max_tokens so the model can run
         # to its own limit; Anthropic requires the field.
         assert 'max_tokens' not in captured[0]

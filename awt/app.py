@@ -20,7 +20,7 @@ from . import db, service, daily_analysis, model_provider, prompts, style_refere
 from . import auto_schedule, usage, cloud_sync, history_upload, memory_compression
 from . import desktop_config
 from .cloud_client import CloudClient
-from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
+from .models import OutputTokenBudgets, ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput, CompressionProbeInput, CompressionRunInput, CompressionPredictInput
 from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ReviewDismissInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
@@ -155,6 +155,15 @@ def create_app(engine=None):
     def put_settings(payload: Settings):
         with transaction() as conn:
             return service.save_settings(conn, model_provider.normalize(payload))
+
+    @app.patch('/api/settings/output-token-budgets')
+    def patch_output_token_budgets(payload: OutputTokenBudgets):
+        with transaction() as conn:
+            settings = service.get_settings(conn)
+            merged = {**settings.output_token_budgets.model_dump(), **payload.model_dump(exclude_unset=True)}
+            settings.output_token_budgets = OutputTokenBudgets.model_validate(merged)
+            saved = service.save_settings(conn, settings)
+            return saved.output_token_budgets
 
     @app.post('/api/sources/check')
     def source_check(payload: SourceCheckInput):

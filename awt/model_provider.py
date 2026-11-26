@@ -160,7 +160,7 @@ def daily_reasoning_model(model, purpose):
 def output_budget(model, requested, purpose, settings=None):
     override = getattr(getattr(settings, 'output_token_budgets', None), purpose, None)
     if override is not None:
-        return override
+        return None if override == 'unlimited' else override
     # Daily analysis and compression JSON are long and thinking tokens share
     # max_tokens on every reasoning model, so all models get GLM-5.3's headroom
     # for these stages. Probes and other stages keep their caller's cap, and we
@@ -172,7 +172,9 @@ def output_budget(model, requested, purpose, settings=None):
 
 def truncated(purpose, budget):
     stage=STAGE_LABELS.get(purpose,'模型')
-    logging.getLogger('awt.model').warning('模型输出被截断 stage=%s max_tokens=%d',purpose or 'general',budget)
+    logging.getLogger('awt.model').warning('模型输出被截断 stage=%s max_tokens=%s',purpose or 'general',budget)
+    if budget is None:
+        return _safe_error(f'{stage}输出被服务端或模型上限截断（应用未设置输出上限）；原任务已保留。请减少单次分析范围或调整服务端配置后重试，不会自动重复请求。')
     return _safe_error(f'{stage}输出被截断（本次输出预算{budget} tokens，包含模型思考）；原任务已保留。可在系统设置 → 模型分析 → 输出 Token 预算中提高该阶段上限，或减少单次分析范围后重新分析，不会自动重复请求。')
 
 
@@ -1141,8 +1143,12 @@ def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_t
     local_openai = c['protocol'] != 'anthropic' and is_local_endpoint(c['endpoint'])
     # Local Ollama-style servers let the model run to its own context limit when
     # max_tokens is omitted; keep compression free of an arbitrary output cap.
-    omit_max_tokens = (purpose == 'memory_compressor' and local_openai
+    omit_max_tokens = max_tokens is None or (purpose == 'memory_compressor' and local_openai
                        and settings.output_token_budgets.memory_compressor is None)
+    if omit_max_tokens:
+        max_tokens = None
+    if c['protocol'] == 'anthropic' and max_tokens is None:
+        raise _safe_error('Anthropic 协议要求明确的输出 Token 上限；请在输出 Token 预算中为该阶段选择自动或具体数值。')
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'

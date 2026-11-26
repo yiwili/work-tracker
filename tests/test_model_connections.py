@@ -297,3 +297,21 @@ def test_output_token_budgets_persist_reset_and_validate(client):
     settings['output_token_budgets']['task_writer'] = None
     client.put('/api/settings', json=settings).raise_for_status()
     assert client.get('/api/settings').json()['output_token_budgets']['task_writer'] is None
+
+
+def test_output_budget_patch_preserves_other_settings_and_budgets(client):
+    initial = client.get('/api/settings').json()
+    initial['target_minutes'] = 360
+    initial['output_token_budgets']['time_estimator'] = 16384
+    client.put('/api/settings', json=initial).raise_for_status()
+    result = client.patch('/api/settings/output-token-budgets', json={'task_writer': 'unlimited'})
+    result.raise_for_status()
+    assert result.json()['task_writer'] == 'unlimited'
+    saved = client.get('/api/settings').json()
+    assert saved['target_minutes'] == 360
+    assert saved['output_token_budgets']['time_estimator'] == 16384
+    assert saved['output_token_budgets']['task_writer'] == 'unlimited'
+    client.patch('/api/settings/output-token-budgets', json={'task_writer': None}).raise_for_status()
+    assert client.get('/api/settings').json()['output_token_budgets']['task_writer'] is None
+    for invalid in (0, -1, 127, 262145, 'infinite'):
+        assert client.patch('/api/settings/output-token-budgets', json={'task_writer': invalid}).status_code == 422

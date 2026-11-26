@@ -8,6 +8,7 @@ export function ModelSettings({
   busy,
   feedback,
   onFeedbackClose,
+  onBudgetsSaved,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
@@ -18,11 +19,15 @@ export function ModelSettings({
     test?: boolean;
   } | null;
   onFeedbackClose?: () => void;
+  onBudgetsSaved: (
+    budgets: NonNullable<Settings["output_token_budgets"]>,
+  ) => void;
 }) {
   return (
     <>
       <ModelConnections settings={settings} onSettings={onChange} busy={busy} />
       <OutputTokenSettings
+        onSaved={onBudgetsSaved}
         settings={settings}
         onChange={onChange}
         busy={busy}
