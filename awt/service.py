@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -644,14 +645,53 @@ def split_task(conn, task_id, parts):
     return ids
 
 
-def report(conn, day):
+def _review_item_key(kind: str, ids: list[str] | None = None, reason: str = "") -> str:
+    if ids:
+        return f"{kind}:{'|'.join(sorted(str(i) for i in ids))}"
+    digest = hashlib.sha256(str(reason).encode('utf-8')).hexdigest()[:16]
+    return f"{kind}:{digest}"
+
+
+def _get_dismissed_review_keys(conn, canonical_day: str) -> set[str]:
+    row = conn.execute(
+        select(db.integrations.c.value).where(db.integrations.c.id == f"review-dismissed:{canonical_day}")
+    ).scalar_one_or_none()
+    if isinstance(row, dict):
+        return {str(k) for k in (row.get('keys') or []) if k}
+    return set()
+
+
+def dismiss_review_items(conn, day, keys: list[str] | None = None, dismiss_all: bool = False):
     from . import multiday
+    canonical = multiday.canonical_day(conn, day)
+    existing = _get_dismissed_review_keys(conn, canonical)
+    to_add = {str(k) for k in (keys or []) if k}
+    if dismiss_all:
+        current = report(conn, day)
+        for item in current.get('review_items') or []:
+            if item.get('key'):
+                to_add.add(str(item['key']))
+    updated = sorted(existing | to_add)
+    upsert(
+        conn,
+        db.integrations,
+        {"id": f"review-dismissed:{canonical}", "value": {"keys": updated, "updated_at": now()}},
+        "id",
+    )
+    return report(conn, day)
+
+
+def report(conn, day):
+    from . import multiday, similarity
     settings = get_settings(conn)
     binding = multiday.get_active_binding(conn, day)
     canonical_day = binding['anchor_date'] if binding else str(day)
     tasks = list_tasks(conn, day)
     total = sum(t['confirmed_minutes'] for t in tasks)
     stored = conn.execute(select(db.reports).where(db.reports.c.date == canonical_day)).mappings().first()
+    dismissed_keys = _get_dismissed_review_keys(conn, canonical_day)
+    sim_state = similarity.get_similarity_state(conn, canonical_day) or {}
+    sim_dismissed = set(sim_state.get('dismissed_pairs') or [])
     warnings = []
     review_items = []
     observed = {}
@@ -668,71 +708,88 @@ def report(conn, day):
                 if max(x, z) < min(y, w)
             ]
             if overlaps:
-                ov_start, ov_end = overlaps[0]
-                ov_date = ov_start.strftime("%Y-%m-%d")
-                ov_window = f"{ov_start.strftime('%H:%M')}~{ov_end.strftime('%H:%M')}"
-                proj = a.get('project') if a.get('project') == b.get('project') else f"{a.get('project') or '未归属'} / {b.get('project') or '未归属'}"
-                msg = (
-                    f"【{ov_date} · 今日工作清单 · {proj}】"
-                    f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
-                    f"工具活动区间重叠（{ov_window}）：{a['title']} / {b['title']}。建议工时不可直接叠加，请核对实际人工投入。"
-                )
-                warnings.append(msg)
-                review_items.append({
-                    "kind": "tool_overlap",
-                    "location": "今日工作清单",
-                    "date": str(a.get('date') or day),
-                    "evidence_dates": [ov_date],
-                    "project": proj,
-                    "indices": [i + 1, j + 1],
-                    "ids": [a['id'], b['id']],
-                    "titles": [a['title'], b['title']],
-                    "detail": f"工具活动重叠时段 {ov_date} {ov_window}",
-                    "reason": msg,
-                })
+                key = _review_item_key("tool_overlap", [a['id'], b['id']])
+                if key not in dismissed_keys:
+                    ov_start, ov_end = overlaps[0]
+                    ov_date = ov_start.strftime("%Y-%m-%d")
+                    ov_window = f"{ov_start.strftime('%H:%M')}~{ov_end.strftime('%H:%M')}"
+                    proj = a.get('project') if a.get('project') == b.get('project') else f"{a.get('project') or '未归属'} / {b.get('project') or '未归属'}"
+                    msg = (
+                        f"【{ov_date} · 今日工作清单 · {proj}】"
+                        f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
+                        f"工具活动区间重叠（{ov_window}）：{a['title']} / {b['title']}。建议工时不可直接叠加，请核对实际人工投入。"
+                    )
+                    warnings.append(msg)
+                    review_items.append({
+                        "key": key,
+                        "kind": "tool_overlap",
+                        "location": "今日工作清单",
+                        "date": str(a.get('date') or day),
+                        "evidence_dates": [ov_date],
+                        "project": proj,
+                        "indices": [i + 1, j + 1],
+                        "ids": [a['id'], b['id']],
+                        "titles": [a['title'], b['title']],
+                        "detail": f"工具活动重叠时段 {ov_date} {ov_window}",
+                        "reason": msg,
+                    })
         if a['started_at'] and a['ended_at']:
             for j, b in enumerate(tasks[i+1:], start=i+1):
                 if b['started_at'] and b['ended_at']:
                     ov_s = max(datetime.fromisoformat(a['started_at']), datetime.fromisoformat(b['started_at']))
                     ov_e = min(datetime.fromisoformat(a['ended_at']), datetime.fromisoformat(b['ended_at']))
                     if ov_s < ov_e:
-                        ov_date = str(a.get('date') or day)
-                        ov_window = f"{ov_s.strftime('%H:%M')}~{ov_e.strftime('%H:%M')}"
-                        proj = a.get('project') or '未归属项目'
-                        msg = (
-                            f"【{ov_date} · 今日工作清单 · {proj}】"
-                            f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
-                            f"时间重叠（{ov_window}）：{a['title']} / {b['title']}"
-                        )
-                        warnings.append(msg)
-                        review_items.append({
-                            "kind": "time_overlap",
-                            "location": "今日工作清单",
-                            "date": ov_date,
-                            "evidence_dates": [ov_s.strftime("%Y-%m-%d")],
-                            "project": proj,
-                            "indices": [i + 1, j + 1],
-                            "ids": [a['id'], b['id']],
-                            "titles": [a['title'], b['title']],
-                            "detail": f"起止时间重叠 {ov_window}",
-                            "reason": msg,
-                        })
+                        key = _review_item_key("time_overlap", [a['id'], b['id']])
+                        if key not in dismissed_keys:
+                            ov_date = str(a.get('date') or day)
+                            ov_window = f"{ov_s.strftime('%H:%M')}~{ov_e.strftime('%H:%M')}"
+                            proj = a.get('project') or '未归属项目'
+                            msg = (
+                                f"【{ov_date} · 今日工作清单 · {proj}】"
+                                f"第 #{i + 1} 条「{a['title']}」与第 #{j + 1} 条「{b['title']}」"
+                                f"时间重叠（{ov_window}）：{a['title']} / {b['title']}"
+                            )
+                            warnings.append(msg)
+                            review_items.append({
+                                "key": key,
+                                "kind": "time_overlap",
+                                "location": "今日工作清单",
+                                "date": ov_date,
+                                "evidence_dates": [ov_s.strftime("%Y-%m-%d")],
+                                "project": proj,
+                                "indices": [i + 1, j + 1],
+                                "ids": [a['id'], b['id']],
+                                "titles": [a['title'], b['title']],
+                                "detail": f"起止时间重叠 {ov_window}",
+                                "reason": msg,
+                            })
     suggestions = merge_suggestions(tasks)
+    filtered_suggestions = []
     for suggestion in suggestions:
+        s_ids = suggestion.get("ids") or []
+        key = _review_item_key("similarity", s_ids)
+        pair_dismissed = len(s_ids) == 2 and (
+            f"{s_ids[0]}_{s_ids[1]}" in sim_dismissed or f"{s_ids[1]}_{s_ids[0]}" in sim_dismissed
+        )
+        if key in dismissed_keys or pair_dismissed:
+            continue
+        filtered_suggestions.append(suggestion)
         warnings.append(suggestion['reason'])
         review_items.append({
+            "key": key,
             "kind": "similarity",
             "location": suggestion.get("location", "今日工作清单"),
             "date": suggestion.get("date", str(day)),
             "evidence_dates": suggestion.get("evidence_dates", []),
             "project": suggestion.get("project", ""),
             "indices": suggestion.get("indices", []),
-            "ids": suggestion.get("ids", []),
+            "ids": s_ids,
             "titles": suggestion.get("titles", []),
             "similarity": suggestion.get("similarity"),
             "detail": f"同项目标题相似度 {int(round((suggestion.get('similarity') or 0) * 100))}%",
             "reason": suggestion["reason"],
         })
+    suggestions = filtered_suggestions
     from .daily_analysis import overview
     conversations = (
         overview(conn, binding['start_date'], settings, end_day=binding['end_date'], report_day=canonical_day)
@@ -743,9 +800,13 @@ def report(conn, day):
     s_day = analysis_snap.get('start_date') or (binding['start_date'] if binding else day)
     e_day = analysis_snap.get('end_date') or (binding['end_date'] if binding else day)
     for aw in (analysis_snap.get('warnings') or []):
+        key = _review_item_key("analysis_warning", reason=aw)
+        if key in dismissed_keys:
+            continue
         if aw not in warnings:
             warnings.append(aw)
         review_items.append({
+            "key": key,
             "kind": "analysis_warning",
             "location": "AI 分析候选",
             "date": f"{s_day} ~ {e_day}" if str(s_day) != str(e_day) else str(day),

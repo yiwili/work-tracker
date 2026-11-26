@@ -22,7 +22,7 @@ from . import desktop_config
 from .cloud_client import CloudClient
 from .models import ManualTemplate, MergeInput, Settings, SplitInput, TaskInput, TaskPatch, ModelKeyInput, StyleImportInput, ModelProbeInput
 from .models import ModelConnectionInput, ModelActiveInput, ModelDiscoverInput, CompressionProbeInput, CompressionRunInput, CompressionPredictInput
-from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ConversationSessionInput
+from .models import AllocationInput, GiteeConfig, GitIdentityQuery, GitVerifyQuery, GitScanInput, SourceCheckInput, CONVERSATION_SOURCES, TaskFromEventsInput, AnalysisImportInput, ReportTargetInput, MultiDayBindInput, MultiDayUnbindInput, CloudBindInput, CloudModeInput, CloudResolveInput, HistoryCloudUploadInput, SimilarityCheckInput, SimilarityResolveInput, ReviewDismissInput, ConversationSessionInput
 from .git_tools import identity_options, global_author, verify_author, scan_repositories
 from . import gitee
 from . import analysis_progress
@@ -1000,6 +1000,16 @@ def create_app(engine=None):
     def confirm(day: date):
         with transaction() as conn:
             return service.confirm(conn, day)
+
+    @app.post('/api/reports/{day}/dismiss-review')
+    def dismiss_review_day(day: date, payload: ReviewDismissInput = ReviewDismissInput()):
+        with transaction() as conn:
+            return service.dismiss_review_items(
+                conn,
+                day,
+                keys=payload.keys,
+                dismiss_all=payload.dismiss_all,
+            )
 
     @app.post('/api/reports/{day}/clear-ai')
     def clear_ai_tasks(day: date):

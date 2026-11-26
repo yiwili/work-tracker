@@ -68,6 +68,7 @@ export type AllocationSnapshot = {
   }[];
 };
 export type ReviewAlertItem = {
+  key?: string;
   kind: "similarity" | "tool_overlap" | "time_overlap" | "analysis_warning";
   location: string;
   date: string;

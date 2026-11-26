@@ -931,6 +931,11 @@ class SimilarityResolveInput(BaseModel):
     resolutions: list[SimilarityResolutionItem] = Field(default_factory=list, max_length=100)
 
 
+class ReviewDismissInput(BaseModel):
+    keys: list[str] = Field(default_factory=list, max_length=200)
+    dismiss_all: bool = False
+
+
 class ReportTargetInput(BaseModel):
     target_minutes: int = Field(..., ge=1, le=1440 * 30)
 

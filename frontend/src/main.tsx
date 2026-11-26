@@ -2197,6 +2197,45 @@ function App() {
             setReviewAlert(null);
             void runManualSimilarityCheck();
           }}
+          onDismissItem={async (key) => {
+            try {
+              const updated = await api<Report>(
+                `/reports/${day}/dismiss-review`,
+                "POST",
+                { keys: [key] },
+              );
+              setReport(updated);
+              const nextWarnings = [...new Set(updated.warnings || [])];
+              const nextItems = updated.review_items || [];
+              if (nextWarnings.length === 0 && nextItems.length === 0) {
+                setReviewAlert(null);
+                setNotice("已确认无误，待审核提示已通过。");
+              } else {
+                setReviewAlert({
+                  day,
+                  warnings: nextWarnings,
+                  items: nextItems,
+                });
+                setNotice("已确认该条提示无误。");
+              }
+            } catch (e) {
+              setError((e as Error).message);
+            }
+          }}
+          onDismissAll={async () => {
+            try {
+              const updated = await api<Report>(
+                `/reports/${day}/dismiss-review`,
+                "POST",
+                { dismiss_all: true },
+              );
+              setReport(updated);
+              setReviewAlert(null);
+              setNotice("已全部确认无误，待审核提示已通过。");
+            } catch (e) {
+              setError((e as Error).message);
+            }
+          }}
         />
       )}
       {toast && (
@@ -2213,6 +2252,8 @@ function ReviewAlertModal({
   onLocateAndSelect,
   onQuickMerge,
   onRunSimilarityCheck,
+  onDismissItem,
+  onDismissAll,
 }: {
   alert: { day: string; warnings: string[]; items?: ReviewAlertItem[] };
   tasks: Task[];
@@ -2220,8 +2261,12 @@ function ReviewAlertModal({
   onLocateAndSelect: (ids: string[]) => void;
   onQuickMerge: (ids: string[]) => Promise<void>;
   onRunSimilarityCheck: () => void;
+  onDismissItem: (key: string) => Promise<void>;
+  onDismissAll: () => Promise<void>;
 }) {
   const [mergingKey, setMergingKey] = useState<string | null>(null);
+  const [dismissingKey, setDismissingKey] = useState<string | null>(null);
+  const [dismissingAll, setDismissingAll] = useState(false);
   const taskMap = new Map(tasks.map((t, idx) => [t.id, { task: t, index: idx + 1 }]));
   const structuredItems = alert.items && alert.items.length > 0 ? alert.items : null;
 
@@ -2319,20 +2364,22 @@ function ReviewAlertModal({
                     </div>
                   )}
 
-                  {item.ids.length > 0 && (
+                  {(item.ids.length > 0 || item.key) && (
                     <div className="alert-structured-actions">
-                      <button
-                        type="button"
-                        className="outline sm-btn"
-                        onClick={() => onLocateAndSelect(item.ids)}
-                      >
-                        在清单中定位并勾选（#{item.indices.join("、#")}）
-                      </button>
+                      {item.ids.length > 0 && (
+                        <button
+                          type="button"
+                          className="outline sm-btn"
+                          onClick={() => onLocateAndSelect(item.ids)}
+                        >
+                          在清单中定位并勾选（#{item.indices.join("、#")}）
+                        </button>
+                      )}
                       {canMerge && (
                         <button
                           type="button"
                           className="primary sm-btn"
-                          disabled={mergingKey === key}
+                          disabled={mergingKey === key || dismissingKey === item.key || dismissingAll}
                           onClick={async () => {
                             setMergingKey(key);
                             try {
@@ -2344,6 +2391,24 @@ function ReviewAlertModal({
                         >
                           <GitMerge size={13} />
                           {mergingKey === key ? "合并中…" : "直接合并这 2 条"}
+                        </button>
+                      )}
+                      {item.key && (
+                        <button
+                          type="button"
+                          className="outline sm-btn"
+                          disabled={dismissingKey === item.key || mergingKey === key || dismissingAll}
+                          onClick={async () => {
+                            setDismissingKey(item.key!);
+                            try {
+                              await onDismissItem(item.key!);
+                            } finally {
+                              setDismissingKey(null);
+                            }
+                          }}
+                        >
+                          <Check size={13} />
+                          {dismissingKey === item.key ? "处理中…" : "确认无误 / 通过"}
                         </button>
                       )}
                     </div>
@@ -2366,13 +2431,35 @@ function ReviewAlertModal({
           <button
             className="outline"
             type="button"
+            disabled={dismissingAll}
             onClick={onRunSimilarityCheck}
           >
             <GitCompare size={15} />
             打开 AI 相似度检测
           </button>
-          <button className="primary" type="button" onClick={onClose}>
-            我知道了
+          <button
+            className="outline"
+            type="button"
+            disabled={dismissingAll}
+            onClick={onClose}
+          >
+            暂不处理
+          </button>
+          <button
+            className="primary"
+            type="button"
+            disabled={dismissingAll}
+            onClick={async () => {
+              setDismissingAll(true);
+              try {
+                await onDismissAll();
+              } finally {
+                setDismissingAll(false);
+              }
+            }}
+          >
+            <CheckCheck size={15} />
+            {dismissingAll ? "处理中…" : "全部确认无误（通过审核）"}
           </button>
         </div>
       </div>

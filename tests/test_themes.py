@@ -109,4 +109,56 @@ def test_report_review_items_specify_date_location_and_indices(tmp_path, monkeyp
         assert item["indices"] == [1, 2]
         assert set(item["ids"]) == {t1, t2}
         assert item["ids"] == [t["id"] for t in rep["tasks"]]
+        assert item["key"].startswith("similarity:")
+    engine.dispose()
+
+
+def test_dismiss_review_items_clears_warnings(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWT_DATA_DIR", str(tmp_path))
+    engine = db.make_engine(tmp_path / "dismiss_review.db")
+    with TestClient(create_app(engine)) as client:
+        client.post(
+            "/api/tasks",
+            json={
+                "date": "2026-11-11",
+                "title": "【项目A】实现用户登录接口鉴权与令牌校验",
+                "details": "",
+                "project": "项目A",
+                "category": "任务",
+                "status": "delivered",
+                "confirmed_minutes": 60,
+                "time_locked": True,
+            },
+        )
+        client.post(
+            "/api/tasks",
+            json={
+                "date": "2026-11-11",
+                "title": "【项目A】实现用户登录接口鉴权与令牌刷新",
+                "details": "",
+                "project": "项目A",
+                "category": "任务",
+                "status": "delivered",
+                "confirmed_minutes": 60,
+                "time_locked": True,
+            },
+        )
+
+        rep = client.get("/api/reports/2026-11-11").json()
+        assert len(rep["review_items"]) == 1
+        assert len(rep["warnings"]) == 1
+        key = rep["review_items"][0]["key"]
+
+        dismissed = client.post(
+            "/api/reports/2026-11-11/dismiss-review",
+            json={"keys": [key]},
+        )
+        assert dismissed.status_code == 200
+        body = dismissed.json()
+        assert body["review_items"] == []
+        assert body["warnings"] == []
+
+        rep_after = client.get("/api/reports/2026-11-11").json()
+        assert rep_after["review_items"] == []
+        assert rep_after["warnings"] == []
     engine.dispose()
