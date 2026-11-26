@@ -281,3 +281,19 @@ def test_discover_ollama_tags_fallback_and_remote_auth(client, monkeypatch):
     })
     assert missing.status_code == 400
     assert 'API Key' in missing.json()['detail']
+
+
+def test_output_token_budgets_persist_reset_and_validate(client):
+    settings = client.get('/api/settings').json()
+    assert settings['output_token_budgets']['task_writer'] is None
+    budgets = {stage: 65536 for stage in settings['output_token_budgets']}
+    settings['output_token_budgets'] = budgets
+    client.put('/api/settings', json=settings).raise_for_status()
+    assert client.get('/api/settings').json()['output_token_budgets'] == budgets
+    for invalid in (127, 262145, 4096.5):
+        settings['output_token_budgets']['task_writer'] = invalid
+        assert client.put('/api/settings', json=settings).status_code == 422
+        assert client.get('/api/settings').json()['output_token_budgets']['task_writer'] == 65536
+    settings['output_token_budgets']['task_writer'] = None
+    client.put('/api/settings', json=settings).raise_for_status()
+    assert client.get('/api/settings').json()['output_token_budgets']['task_writer'] is None

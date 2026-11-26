@@ -168,7 +168,7 @@ def generate_template(conn, force=False):
     if not settings.llm_enabled:
         return {'generated':False,'message':'历史记录已保存；开启AI后可生成风格模板','template':settings.style_template}
     baseline=stable(settings.style_template,settings.title_examples,settings.agent_prompts)
-    text=model_provider.complete(settings,prompts.prompt(settings,'style_template'),json.dumps({'titles':settings.title_examples},ensure_ascii=False),max_tokens=4000)
+    text=model_provider.complete(settings,prompts.prompt(settings,'style_template'),json.dumps({'titles':settings.title_examples},ensure_ascii=False),max_tokens=4000,purpose='style_template')
     try:
         value=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',text.strip()))['template']
         if not isinstance(value,str) or not 1<=len(value.strip())<=12000:

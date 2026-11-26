@@ -423,6 +423,7 @@ export type Settings = {
   llm_connections?: ModelConnection[];
   llm_active_connection?: string;
   llm_active_model?: string;
+  output_token_budgets?: Partial<Record<"scope_filter" | "task_writer" | "time_estimator" | "manual_writer" | "task_merger" | "style_template" | "memory_compressor", number | null>>;
   ccswitch_config_path: string;
   auto_import_analysis: boolean;
   auto_apply_allocation: boolean;

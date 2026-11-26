@@ -95,7 +95,7 @@ def _safe_error(text):
     return error
 
 
-STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名','memory_compressor':'对话记忆压缩'}
+STAGE_LABELS={'scope_filter':'工作相关性筛选','task_writer':'工作项归并','time_estimator':'工时估算','manual_writer':'人工事项命名','memory_compressor':'对话记忆压缩','task_merger':'相似工作项合并','style_template':'风格模板生成'}
 STREAM_PURPOSES=('scope_filter','task_writer','time_estimator','manual_writer','memory_compressor')
 _usage_calls=contextvars.ContextVar('awt_usage_calls',default=None)
 
@@ -157,7 +157,10 @@ def daily_reasoning_model(model, purpose):
         re.match(r'^(?:glm-5\.3|deepseek-(?:flash|v4(?:-pro)?))(?:$|[-\[])',name))
 
 
-def output_budget(model, requested, purpose):
+def output_budget(model, requested, purpose, settings=None):
+    override = getattr(getattr(settings, 'output_token_budgets', None), purpose, None)
+    if override is not None:
+        return override
     # Daily analysis and compression JSON are long and thinking tokens share
     # max_tokens on every reasoning model, so all models get GLM-5.3's headroom
     # for these stages. Probes and other stages keep their caller's cap, and we
@@ -170,7 +173,7 @@ def output_budget(model, requested, purpose):
 def truncated(purpose, budget):
     stage=STAGE_LABELS.get(purpose,'模型')
     logging.getLogger('awt.model').warning('模型输出被截断 stage=%s max_tokens=%d',purpose or 'general',budget)
-    return _safe_error(f'{stage}输出被截断（本次输出预算{budget} tokens，包含模型思考）；原任务已保留。可减少单次分析范围后重新分析，不会自动重复请求。')
+    return _safe_error(f'{stage}输出被截断（本次输出预算{budget} tokens，包含模型思考）；原任务已保留。可在系统设置 → 模型分析 → 输出 Token 预算中提高该阶段上限，或减少单次分析范围后重新分析，不会自动重复请求。')
 
 
 def stream_text(lines, protocol, purpose, budget):
@@ -1134,11 +1137,12 @@ def complete(settings, system, text, *, max_tokens=12000, purpose='', require_te
 
 def _complete(settings, system, text, *, max_tokens=12000, purpose='', require_text=True, key=None):
     c = connection(settings) if key is None else connection(settings, key)
-    max_tokens=output_budget(c['model'],max_tokens,purpose)
+    max_tokens=output_budget(c['model'],max_tokens,purpose,settings)
     local_openai = c['protocol'] != 'anthropic' and is_local_endpoint(c['endpoint'])
     # Local Ollama-style servers let the model run to its own context limit when
     # max_tokens is omitted; keep compression free of an arbitrary output cap.
-    omit_max_tokens = purpose == 'memory_compressor' and local_openai
+    omit_max_tokens = (purpose == 'memory_compressor' and local_openai
+                       and settings.output_token_budgets.memory_compressor is None)
     headers = {'Content-Type': 'application/json'}
     if c['protocol'] == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'

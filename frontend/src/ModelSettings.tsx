@@ -1,3 +1,4 @@
+import { OutputTokenSettings } from "./OutputTokenSettings";
 import type { Settings } from "./types";
 import { ModelConnections, ModelToast } from "./ModelConnections";
 
@@ -20,9 +21,10 @@ export function ModelSettings({
 }) {
   return (
     <>
-      <ModelConnections
+      <ModelConnections settings={settings} onSettings={onChange} busy={busy} />
+      <OutputTokenSettings
         settings={settings}
-        onSettings={onChange}
+        onChange={onChange}
         busy={busy}
       />
       {feedback && (

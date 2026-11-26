@@ -442,6 +442,17 @@ class MemoryCompressionConfig(BaseModel):
         return self
 
 
+class OutputTokenBudgets(BaseModel):
+    """None preserves the stage's existing automatic budget."""
+    scope_filter: int | None = Field(default=None, ge=128, le=262144)
+    task_writer: int | None = Field(default=None, ge=128, le=262144)
+    time_estimator: int | None = Field(default=None, ge=128, le=262144)
+    manual_writer: int | None = Field(default=None, ge=128, le=262144)
+    task_merger: int | None = Field(default=None, ge=128, le=262144)
+    style_template: int | None = Field(default=None, ge=128, le=262144)
+    memory_compressor: int | None = Field(default=None, ge=128, le=262144)
+
+
 class Settings(BaseModel):
     timezone: str = "Asia/Shanghai"
     target_minutes: int = Field(default=480, ge=1, le=1440)
@@ -476,6 +487,7 @@ class Settings(BaseModel):
     llm_connections: list[ModelConnection] = Field(default_factory=list, max_length=50)
     llm_active_connection: str = Field(default='', max_length=64)
     llm_active_model: str = Field(default='', max_length=200)
+    output_token_budgets: OutputTokenBudgets = Field(default_factory=OutputTokenBudgets)
     ccswitch_config_path: str = ''
     # 默认只生成候选，用户在“分析结果”中确认后再写入今日工作清单。
     auto_import_analysis: bool = False

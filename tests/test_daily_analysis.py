@@ -281,9 +281,12 @@ def scope_model(answer):
     ('deepseek-v4-pro','task_writer',12000,32768),
     ('deepseek-flash','memory_compressor',2500,32768),
     ('deepseek-flash','time_estimator',8000,8000),
+    ('deepseek-flash','task_merger',1000,1000),
+    ('deepseek-flash','style_template',4000,4000),
 ])
 @pytest.mark.parametrize('protocol',['anthropic','openai'])
-def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_stages(monkeypatch,model,purpose,requested,expected,protocol):
+@pytest.mark.parametrize('override',[None,2048,65536])
+def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_stages(monkeypatch,model,purpose,requested,expected,protocol,override):
     captured=[]
     monkeypatch.setattr(model_provider,'connection',lambda s,*_a:{'model':model,'protocol':protocol,'endpoint':'http://localhost/test','auth':'api_key','key':'fixture-token'})
     class Client:
@@ -300,14 +303,15 @@ def test_reasoning_reserve_reaches_transport_without_changing_probe_or_other_sta
             value={'content':[{'type':'text','text':'OK'}],'stop_reason':'end_turn'} if protocol=='anthropic' else {'choices':[{'message':{'content':'OK'},'finish_reason':'stop'}]}
             return type('Response',(),{'headers':{},'raise_for_status':lambda _:None,'json':lambda _:value})()
     monkeypatch.setattr(model_provider.httpx,'Client',Client)
-    assert model_provider.complete(Settings(),'rules','input',max_tokens=requested,purpose=purpose)=='OK'
+    settings = Settings(output_token_budgets={purpose: override} if purpose else {})
+    assert model_provider.complete(settings,'rules','input',max_tokens=requested,purpose=purpose)=='OK'
     assert len(captured)==1
-    if purpose=='memory_compressor' and protocol=='openai':
+    if purpose=='memory_compressor' and protocol=='openai' and override is None:
         # Local OpenAI-compatible endpoints omit max_tokens so the model can run
         # to its own limit; Anthropic requires the field.
         assert 'max_tokens' not in captured[0]
     else:
-        assert captured[0]['max_tokens']==expected
+        assert captured[0]['max_tokens']==(override if override is not None and purpose else expected)
     assert 'thinking' not in captured[0]  # Forced-thinking models must not be disabled.
     reasoning = model.lower().split('/')[-1] in ('glm-5.3','glm-5.3-flash','deepseek-flash','deepseek-v4-pro') and purpose in ('scope_filter','task_writer')
     if reasoning:
